@@ -53,12 +53,34 @@ AGENTS.md            user-level instructions applied across working directories
 APPEND_SYSTEM.md     additions to pi's system prompt
 permissions.json     allow / ask / deny rules for the permissions extension
 hooks.json           shell hooks bound to lifecycle events
+hooks.example.json   worked hook examples to copy from
 agents/              subagent definitions, one Markdown file each
 extensions/          TypeScript extensions
 prompts/             slash-command templates
 skills/              on-demand instruction packages
 docs/                parity notes
 ```
+
+## What it adds
+
+Tools, on top of pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`:
+
+| Tool | Claude Code equivalent |
+|---|---|
+| `todo_write` | `TodoWrite` |
+| `task` | `Task` — runs a subagent from `agents/` in its own process |
+| `web_fetch`, `web_search` | `WebFetch`, `WebSearch` |
+| `ask_user` | `AskUserQuestion` |
+| `exit_plan_mode` | `ExitPlanMode` |
+| `bash_background`, `bash_output`, `bash_kill` | background `Bash`, `BashOutput`, `KillShell` |
+
+Commands: `/plan`, `/permissions`, `/agents`, `/todos`, `/jobs`, plus `/init`, `/review`,
+`/commit`, `/pr`, `/security-review` from `prompts/`.
+
+Behavior: tool calls pass through `permissions.json` before running, lifecycle events fire
+the shell hooks in `hooks.json`, and the footer carries context usage and the git branch.
+
+`web_search` needs a provider key in the environment — `BRAVE_API_KEY` or `TAVILY_API_KEY`.
 
 ## Using it
 

@@ -15,7 +15,7 @@ What this configuration provides, what pi already had, and what configuration ca
 | `TodoWrite` | `todo_write` | `extensions/todo.ts` |
 | `Task` | `task` | `extensions/task.ts` |
 | `WebFetch` | `web_fetch` | `extensions/web.ts` |
-| `WebSearch` | `web_search` | `extensions/web.ts`; needs `BRAVE_API_KEY` or `TAVILY_API_KEY` |
+| `WebSearch` | `web_search` | `extensions/web.ts`; optional, registered only when a key is set |
 | `AskUserQuestion` | `ask_user` | `extensions/ask.ts`; single question, no multi-select |
 | `ExitPlanMode` | `exit_plan_mode` | `extensions/plan-mode.ts` |
 | `Bash(run_in_background)` | `bash_background` | `extensions/background-bash.ts` |
@@ -68,6 +68,12 @@ through a CLI the agent calls with `bash`.
 extension gating tool calls inside the process, not an OS boundary. A blocked rule stops the
 agent, not a process the agent already started. For a real boundary, run pi in a container —
 pi documents Docker, a Gondolin micro-VM, and OpenShell patterns.
+
+**Keyless web search.** There is no search backend that works without a credential.
+DuckDuckGo's HTML endpoint answers a few queries and then returns an anti-bot challenge, its
+official API returns nothing for ordinary queries, and the independent engines require
+JavaScript to pass a challenge. `web_search` is therefore registered only when a provider key
+is configured; `web_fetch` covers reading known pages without one.
 
 **Notebooks.** No structured notebook editing.
 

@@ -1,8 +1,17 @@
 /**
- * Web - fetch a page and search the web.
+ * Web - read pages, and search when a search provider is configured.
  *
- * `web_fetch` retrieves a URL and returns readable text. `web_search` needs a provider
- * key: set BRAVE_API_KEY or TAVILY_API_KEY, whichever you have.
+ * `web_fetch` needs no credentials and is always available.
+ *
+ * `web_search` is registered only when a provider key is present. There is no keyless
+ * backend worth shipping: DuckDuckGo's HTML endpoint answers a handful of queries and then
+ * serves an anti-bot challenge, its official API returns nothing for ordinary queries, and
+ * the independent engines gate automated queries behind a JavaScript challenge. A tool that
+ * fails most of the time is worse than one the model can see is absent, so when no key is
+ * configured the tool simply is not there and the model reaches for `web_fetch` instead.
+ *
+ * Set `BRAVE_API_KEY` or `TAVILY_API_KEY` and run `/reload` to enable it. Both have free
+ * tiers. Nothing else in this configuration needs a credential.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -19,16 +28,24 @@ const ENTITIES: Record<string, string> = {
 	"&gt;": ">",
 	"&quot;": '"',
 	"&#39;": "'",
+	"&apos;": "'",
 };
 
+function decodeEntities(text: string): string {
+	return text
+		.replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+		.replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number(code)))
+		.replace(/&[a-z]+;/gi, (entity) => ENTITIES[entity.toLowerCase()] ?? " ");
+}
+
 function htmlToText(html: string): string {
-	return html
+	const stripped = html
 		.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, " ")
 		.replace(/<!--[\s\S]*?-->/g, " ")
 		.replace(/<\/(p|div|li|tr|h[1-6]|section|article|br)>/gi, "\n")
-		.replace(/<[^>]+>/g, " ")
-		.replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)))
-		.replace(/&[a-z#0-9]+;/gi, (entity) => ENTITIES[entity.toLowerCase()] ?? " ")
+		.replace(/<[^>]+>/g, " ");
+
+	return decodeEntities(stripped)
 		.replace(/[ \t]+/g, " ")
 		.replace(/\n\s*\n\s*\n+/g, "\n\n")
 		.trim();
@@ -56,29 +73,51 @@ interface SearchResult {
 	snippet: string;
 }
 
-async function braveSearch(query: string, key: string, signal: AbortSignal | undefined): Promise<SearchResult[]> {
-	const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`;
-	const response = await request(url, { headers: { accept: "application/json", "x-subscription-token": key } }, signal);
-	const body = (await response.json()) as { web?: { results?: { title: string; url: string; description: string }[] } };
-	return (body.web?.results ?? []).map((result) => ({
-		title: result.title,
-		url: result.url,
-		snippet: htmlToText(result.description ?? ""),
-	}));
+type Search = (query: string, signal: AbortSignal | undefined) => Promise<SearchResult[]>;
+
+function braveSearch(key: string): Search {
+	return async (query, signal) => {
+		const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`;
+		const response = await request(
+			url,
+			{ headers: { accept: "application/json", "x-subscription-token": key } },
+			signal,
+		);
+		const body = (await response.json()) as {
+			web?: { results?: { title: string; url: string; description: string }[] };
+		};
+		return (body.web?.results ?? []).map((result) => ({
+			title: result.title,
+			url: result.url,
+			snippet: htmlToText(result.description ?? ""),
+		}));
+	};
 }
 
-async function tavilySearch(query: string, key: string, signal: AbortSignal | undefined): Promise<SearchResult[]> {
-	const response = await request(
-		"https://api.tavily.com/search",
-		{
-			method: "POST",
-			headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-			body: JSON.stringify({ query, max_results: 10 }),
-		},
-		signal,
-	);
-	const body = (await response.json()) as { results?: { title: string; url: string; content: string }[] };
-	return (body.results ?? []).map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
+function tavilySearch(key: string): Search {
+	return async (query, signal) => {
+		const response = await request(
+			"https://api.tavily.com/search",
+			{
+				method: "POST",
+				headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+				body: JSON.stringify({ query, max_results: 10 }),
+			},
+			signal,
+		);
+		const body = (await response.json()) as { results?: { title: string; url: string; content: string }[] };
+		return (body.results ?? []).map((result) => ({ title: result.title, url: result.url, snippet: result.content }));
+	};
+}
+
+function resolveSearch(): { search: Search; provider: string } | undefined {
+	const brave = process.env.BRAVE_API_KEY;
+	if (brave) return { search: braveSearch(brave), provider: "Brave" };
+
+	const tavily = process.env.TAVILY_API_KEY;
+	if (tavily) return { search: tavilySearch(tavily), provider: "Tavily" };
+
+	return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -87,7 +126,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Fetch",
 		description: [
 			"Fetch a URL and return its readable text content.",
-			"Use it to read documentation, issues, or any page whose contents you need verbatim.",
+			"Use it to read documentation, issues, release notes, or any page whose contents you need.",
+			"When you know where an answer lives, go straight to it rather than searching for it.",
 			"Prefer an authenticated CLI such as `gh` for private resources; this tool sends no credentials.",
 		].join("\n"),
 		promptSnippet: "web_fetch: read a web page as text",
@@ -111,6 +151,9 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	const configured = resolveSearch();
+	if (!configured) return;
+
 	pi.registerTool({
 		name: "web_search",
 		label: "Search",
@@ -125,16 +168,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, signal) {
-			const brave = process.env.BRAVE_API_KEY;
-			const tavily = process.env.TAVILY_API_KEY;
-			if (!brave && !tavily) {
-				throw new Error("Web search needs a provider key. Set BRAVE_API_KEY or TAVILY_API_KEY.");
-			}
-
-			const results = brave
-				? await braveSearch(params.query, brave, signal)
-				: await tavilySearch(params.query, tavily as string, signal);
-
+			const results = await configured.search(params.query, signal);
 			if (results.length === 0) {
 				return { content: [{ type: "text", text: `No results for "${params.query}"` }], details: { results } };
 			}

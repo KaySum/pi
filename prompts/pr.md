@@ -20,3 +20,6 @@ Keep it proportional. A one-file fix does not need five sections.
 $ARGUMENTS
 
 Show me the title and body, and ask before creating the PR.
+
+If `gh` is missing or not authenticated, do not try to set it up. Print the title and body for
+me to paste, along with the compare URL for the branch.

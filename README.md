@@ -73,7 +73,8 @@ Tools, on top of pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, 
 |---|---|
 | `todo_write` | `TodoWrite` |
 | `task` | `Task` — runs a subagent from `agents/` in its own process |
-| `web_fetch`, `web_search` | `WebFetch`, `WebSearch` |
+| `web_fetch` | `WebFetch` |
+| `web_search` | `WebSearch` — optional, see below |
 | `ask_user` | `AskUserQuestion` |
 | `exit_plan_mode` | `ExitPlanMode` |
 | `bash_background`, `bash_output`, `bash_kill` | background `Bash`, `BashOutput`, `KillShell` |
@@ -93,7 +94,22 @@ Interface: tool calls render as `⏺ Read(file.ts)` with an indented `⎿` resul
 carries Claude's palette in light and dark, `shift+tab` toggles plan mode, `ctrl+r` expands
 tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md).
 
-`web_search` needs a provider key in the environment — `BRAVE_API_KEY` or `TAVILY_API_KEY`.
+## Credentials
+
+Nothing here requires an API key, a login, or a network account. Clone it, point pi at it, and
+everything works — beyond the model provider pi itself is already configured with.
+
+The single exception is `web_search`, and it is opt-in rather than required. Every free search
+engine now gates automated queries behind a JavaScript challenge or a hard rate limit, so there
+is no keyless backend worth shipping. Rather than ship one that fails intermittently, the tool
+is **registered only when a key is present**: without one it simply is not there, and the model
+uses `web_fetch` — which needs no credentials — to read pages directly.
+
+To enable it, set `BRAVE_API_KEY` or `TAVILY_API_KEY` (both have free tiers) and run `/reload`.
+
+The only external programs anything here calls are `git` (checkpoints and the status line, which
+report and carry on if it is missing) and `pi` itself (subagents). `hooks.json` ships empty;
+`hooks.example.json` is reference material and runs nothing until you copy from it.
 
 ## Using it
 

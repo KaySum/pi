@@ -30,6 +30,14 @@ interface Rule {
 
 const CONFIG_NAME = "permissions.json";
 
+/**
+ * Tools that run a shell command under another name. Without this, `bash_background` would
+ * slip past every `bash(...)` rule and run exactly what those rules exist to stop.
+ */
+const SHELL_ALIASES: Record<string, string> = {
+	bash_background: "bash",
+};
+
 function globToRegExp(pattern: string): RegExp {
 	// `foo:*` is Claude Code's prefix form: anything after the prefix is allowed.
 	const isPrefix = pattern.endsWith(":*");
@@ -98,8 +106,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		const tool = event.toolName.toLowerCase();
+		const names = [tool, SHELL_ALIASES[tool]].filter(Boolean);
 		const target = targetOf(event, ctx.cwd);
-		const matches = (mode: Mode) => rules[mode].some((rule) => rule.tool === tool && rule.match(target));
+		const matches = (mode: Mode) => rules[mode].some((rule) => names.includes(rule.tool) && rule.match(target));
 
 		if (matches("deny")) {
 			return { block: true, reason: `Blocked by a deny rule in ${CONFIG_NAME}: ${tool}(${target})` };

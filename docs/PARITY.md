@@ -79,6 +79,7 @@ a JSON event stream, an RPC protocol, and a TypeScript SDK.
 
 - Bash permission rules match the whole command string, so `cd app && git push` does not match
   `bash(git push:*)`. Compound commands can slip past a prefix rule.
+- `bash_background` is checked against the `bash(...)` rules, since it runs the same shell.
 - `task` shells out to `pi` on `PATH`. If pi is installed elsewhere, the tool fails at spawn.
 - `web_fetch` strips HTML with regular expressions. It is fine for documentation and issues,
   and poor on heavily scripted pages.

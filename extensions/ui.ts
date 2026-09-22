@@ -240,13 +240,13 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		// Search tools: the summary is a match count, since their output is already a list.
-		const searches: [ReturnType<typeof createGrepTool>, string, string][] = [
-			[createGrepTool(cwd), "Search", "pattern"],
-			[createFindTool(cwd), "Glob", "pattern"],
-			[createLsTool(cwd), "List", "path"],
-		];
-
-		for (const [base, label, key] of searches) {
+		// The three factories return different tool types, so the parameter stays loose.
+		const registerSearch = (
+			// biome-ignore lint/suspicious/noExplicitAny: one body for three distinct tool schemas
+			base: any,
+			label: string,
+			key: string,
+		) => {
 			pi.registerTool({
 				...base,
 				execute: (id, params, signal, onUpdate, ctx) => base.execute(id, params, signal, onUpdate, ctx),
@@ -268,7 +268,11 @@ export default function (pi: ExtensionAPI) {
 					);
 				},
 			});
-		}
+		};
+
+		registerSearch(createGrepTool(cwd), "Search", "pattern");
+		registerSearch(createFindTool(cwd), "Glob", "pattern");
+		registerSearch(createLsTool(cwd), "List", "path");
 	}
 
 	if (config.header) {

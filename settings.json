@@ -1,6 +1,15 @@
 {
+  "theme": "claude-light/claude",
   "defaultThinkingLevel": "medium",
-  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
+  "defaultTools": [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls"
+  ],
   "enableSkillCommands": true,
   "steeringMode": "all",
   "followUpMode": "all",

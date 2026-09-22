@@ -53,6 +53,9 @@ AGENTS.md            user-level instructions applied across working directories
 APPEND_SYSTEM.md     additions to pi's system prompt
 permissions.json     allow / ask / deny rules for the permissions extension
 checkpoints.json     working-tree snapshot and restore settings
+ui.json              transcript layout, header, and spinner toggles
+keybindings.json     key assignments
+themes/              Claude palette, light and dark
 hooks.json           shell hooks bound to lifecycle events
 hooks.example.json   worked hook examples to copy from
 agents/              subagent definitions, one Markdown file each
@@ -85,6 +88,10 @@ The working tree is checkpointed as you go and restored when you move around pi'
 tree — backwards, forwards, or onto a sibling branch. Snapshots are commits in a shadow git
 repository that never touches the project's own `.git`. See
 [`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md).
+
+Interface: tool calls render as `⏺ Read(file.ts)` with an indented `⎿` result, the theme
+carries Claude's palette in light and dark, `shift+tab` toggles plan mode, `ctrl+r` expands
+tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md).
 
 `web_search` needs a provider key in the environment — `BRAVE_API_KEY` or `TAVILY_API_KEY`.
 

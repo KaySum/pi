@@ -39,7 +39,10 @@ What this configuration provides, what pi already had, and what configuration ca
 | Slash commands | `prompts/` | Native prompt templates |
 | Checkpoint / restore | `checkpoints.json` | `extensions/checkpoints.ts`; see [CHECKPOINTS.md](CHECKPOINTS.md) |
 | Status line | `extensions/statusline.ts` | Built-in text, or an executable `statusline` in the agent dir |
-| Keybindings | `keybindings.json` | Native |
+| Transcript layout | `extensions/ui.ts` | Bullet/branch tool rendering; see [UX.md](UX.md) |
+| Theme | `themes/claude*.json` | Claude palette, light and dark |
+| Keybindings | `keybindings.json` | `ctrl+r` expand, `shift+tab` plan mode |
+| `#` memory shortcut | `extensions/memory.ts` | Appends a note to AGENTS.md |
 | Themes | `themes/` | Native |
 | Plugins / marketplace | pi packages | `pi install npm:…` or `git:…`; different ecosystem |
 | MCP servers | — | pi has no MCP client. See below |
@@ -80,5 +83,8 @@ a JSON event stream, an RPC protocol, and a TypeScript SDK.
 - `web_fetch` strips HTML with regular expressions. It is fine for documentation and issues,
   and poor on heavily scripted pages.
 - Plan mode's read-only bash allowlist is conservative; expect to approve things it rejects.
+- `extensions/ui.ts` re-registers pi's built-in tools to restyle them. It preserves their
+  definitions and delegates execution, but it is the riskiest piece here; set
+  `toolRendering: false` in `ui.json` to fall back to pi's own rendering.
 - Checkpoints cover the working directory only. A restore cannot undo a migration that already
   ran, a request already sent, or a file written outside the project.

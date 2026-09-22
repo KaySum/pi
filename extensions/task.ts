@@ -13,7 +13,8 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type ExtensionAPI, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, parseFrontmatter, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 interface Agent {
@@ -165,6 +166,35 @@ export default function (pi: ExtensionAPI) {
 			} finally {
 				ctx.ui.setWorkingMessage();
 			}
+		},
+
+		renderShell: "self",
+
+		renderCall: (args, theme: Theme) =>
+			new Text(
+				`${theme.fg("accent", "⏺")} ${theme.fg("toolTitle", theme.bold("Task"))}${theme.fg("dim", "(")}${theme.fg(
+					"toolOutput",
+					`${args.agent}: ${args.description ?? "working"}`,
+				)}${theme.fg("dim", ")")}`,
+				0,
+				0,
+			),
+
+		renderResult: (value, options, theme: Theme) => {
+			if (options.isPartial) return new Text(`  ${theme.fg("dim", "⎿")}  ${theme.fg("dim", "Running…")}`, 0, 0);
+
+			const report = (value.details as TaskDetails | undefined)?.output ?? "";
+			const lines = report.split("\n").filter(Boolean);
+			const shown = options.expanded ? lines.slice(0, 80) : [];
+			const summary = theme.fg("dim", `Done (${lines.length} line${lines.length === 1 ? "" : "s"})`);
+
+			return new Text(
+				[`  ${theme.fg("dim", "⎿")}  ${summary}`, ...shown.map((line) => `     ${theme.fg("toolOutput", line)}`)].join(
+					"\n",
+				),
+				0,
+				0,
+			);
 		},
 	});
 }

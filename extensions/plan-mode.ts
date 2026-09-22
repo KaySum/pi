@@ -45,6 +45,16 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// Claude Code cycles modes with shift+tab. keybindings.json frees the key by moving
+	// pi's thinking-level cycle to alt+t.
+	pi.registerShortcut("shift+tab", {
+		description: "Toggle plan mode",
+		handler: (ctx) => {
+			setActive(!active, ctx);
+			ctx.ui.notify(active ? "Plan mode on." : "Plan mode off.", "info");
+		},
+	});
+
 	pi.on("before_agent_start", () => {
 		if (!active) return undefined;
 		return { message: { customType: "plan-mode", content: REMINDER, display: "plan mode" } };

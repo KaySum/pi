@@ -1,0 +1,7 @@
+{
+  "app.tools.expand": ["ctrl+o", "ctrl+r"],
+  "app.thinking.cycle": "alt+t",
+  "app.session.tree": "ctrl+shift+t",
+  "app.session.new": "ctrl+shift+n",
+  "app.session.resume": "ctrl+shift+r"
+}

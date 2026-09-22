@@ -8,7 +8,8 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 type Status = "pending" | "in_progress" | "completed";
@@ -91,6 +92,24 @@ export default function (pi: ExtensionAPI) {
 				content: [{ type: "text", text: todos.length ? render(todos) : "The todo list is empty" }],
 				details: { todos: [...todos] },
 			};
+		},
+
+		renderShell: "self",
+
+		renderCall: (_args, theme: Theme) =>
+			new Text(`${theme.fg("accent", "⏺")} ${theme.fg("toolTitle", theme.bold("Update Todos"))}`, 0, 0),
+
+		renderResult: (value, _options, theme: Theme) => {
+			const list = (value.details as { todos?: Todo[] } | undefined)?.todos ?? [];
+			if (list.length === 0) return new Text(`  ${theme.fg("dim", "⎿")}  ${theme.fg("dim", "No todos")}`, 0, 0);
+
+			const rows = list.map((todo) => {
+				if (todo.status === "completed") return `${theme.fg("success", "☒")} ${theme.fg("dim", todo.content)}`;
+				if (todo.status === "in_progress") return `${theme.fg("accent", "☐")} ${theme.fg("text", todo.content)}`;
+				return `${theme.fg("dim", "☐")} ${theme.fg("muted", todo.content)}`;
+			});
+
+			return new Text([`  ${theme.fg("dim", "⎿")}  ${rows[0]}`, ...rows.slice(1).map((row) => `     ${row}`)].join("\n"), 0, 0);
 		},
 	});
 

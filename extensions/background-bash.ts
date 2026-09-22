@@ -19,6 +19,17 @@ interface Job {
 }
 
 const MAX_BUFFER = 200_000;
+/** How much of the buffer reaches the model. The rest is kept for the next read. */
+const MODEL_OUTPUT_CAP = 16_000;
+
+/** Keep the end of a long stream: for a build or a test run, the newest output is the point. */
+function tail(text: string, cap: number): string {
+	if (text.length <= cap) return text;
+	const kept = text.slice(-cap);
+	const dropped = text.length - kept.length;
+	// Drop the leading partial line so the first line shown is a whole one.
+	return `[${dropped} earlier characters omitted]\n${kept.slice(kept.indexOf("\n") + 1)}`;
+}
 
 export default function (pi: ExtensionAPI) {
 	const jobs = new Map<string, Job>();
@@ -101,7 +112,9 @@ export default function (pi: ExtensionAPI) {
 			if (job.exitCode !== undefined) jobs.delete(params.id);
 
 			return {
-				content: [{ type: "text", text: `${job.id} (${describe(job)})\n\n${output || "(no new output)"}` }],
+				content: [
+					{ type: "text", text: `${job.id} (${describe(job)})\n\n${tail(output, MODEL_OUTPUT_CAP) || "(no new output)"}` },
+				],
 				details: { id: job.id, exitCode: job.exitCode, output },
 			};
 		},

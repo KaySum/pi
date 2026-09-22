@@ -42,8 +42,9 @@ slash commands, hooks, and skills.
 pi already covers a good part of that natively — context files, sessions and forking,
 compaction, skills, prompt templates. The rest is supplied here as extensions.
 
-See [`docs/PARITY.md`](docs/PARITY.md) for the feature-by-feature mapping, including the gaps
-that configuration cannot close.
+See [`docs/PARITY.md`](docs/PARITY.md) for the feature-by-feature mapping and the gaps
+configuration cannot close, and [`docs/TOKENS.md`](docs/TOKENS.md) for how context is kept
+small.
 
 ## Layout
 

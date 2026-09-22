@@ -14,6 +14,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const MAX_CHARS = 60_000;
+/** Snippets are for deciding what to fetch, not for reading. Providers can return paragraphs. */
+const SNIPPET_CAP = 300;
 const TIMEOUT_MS = 30_000;
 const USER_AGENT = "pi-agent";
 
@@ -68,6 +70,8 @@ function truncate(text: string, source: string): string {
 	if (text.length <= MAX_CHARS) return text;
 	return `${text.slice(0, MAX_CHARS)}\n\n[truncated at ${MAX_CHARS} characters; fetch ${source} directly for the rest]`;
 }
+
+const clip = (text: string, limit: number) => (text.length > limit ? `${text.slice(0, limit - 1)}…` : text);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -293,7 +297,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const text = results
-				.map((result, index) => `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.snippet}`)
+				.map((result, index) => `${index + 1}. ${result.title}\n   ${result.url}\n   ${clip(result.snippet, SNIPPET_CAP)}`)
 				.join("\n\n");
 
 			return { content: [{ type: "text", text }], details: { query: params.query, results } };

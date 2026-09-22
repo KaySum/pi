@@ -32,8 +32,11 @@ function isReadOnly(command: string): boolean {
 export default function (pi: ExtensionAPI) {
 	let active = false;
 
+	let reminded = false;
+
 	const setActive = (value: boolean, ctx: ExtensionContext) => {
 		active = value;
+		reminded = false;
 		ctx.ui.setStatus("plan", active ? "plan mode" : undefined);
 	};
 
@@ -55,8 +58,11 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// Once per activation, not once per request: the reminder stays in context, and
+	// re-sending it every turn would pile up copies of itself for no added effect.
 	pi.on("before_agent_start", () => {
-		if (!active) return undefined;
+		if (!active || reminded) return undefined;
+		reminded = true;
 		return { message: { customType: "plan-mode", content: REMINDER, display: "plan mode" } };
 	});
 

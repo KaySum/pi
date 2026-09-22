@@ -31,6 +31,30 @@ plainly what you left out and why.
 Prefer editing an existing file to creating a new one. Do not create documentation files unless
 asked for them.
 
+## Context discipline
+
+The context window is the scarce resource. Spend it on what you need to reason about, not on
+material you merely passed through.
+
+Search before you read. Use `grep` and `find` to locate the relevant lines, then read that
+region with `offset` and `limit`. Reading a whole file to find one function wastes most of what
+you loaded, and a second read of the same file wastes it again.
+
+Do not re-read a file to confirm a write or an edit landed — the tool would have reported an
+error if it had not.
+
+Keep command output small. Pipe to `head`, `tail`, `grep`, or `wc` rather than printing whole
+logs, build output, or files; ask for the failing tests rather than the full run. Use `read`
+with a limit instead of `cat` on a large file.
+
+Issue independent tool calls together in one turn rather than one per turn.
+
+Delegate broad, open-ended search to a subagent with `task`. Its exploration stays in its own
+context and only the conclusion comes back to this one.
+
+Prefer `edit` over `write` on a file that already exists: sending one changed region costs far
+less than sending the whole file back.
+
 ## Planning and delegation
 
 Use the `todo` tool for work with three or more distinct steps, or when the user provides a list

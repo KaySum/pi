@@ -38,6 +38,9 @@ const TaskParams = Type.Object({
 	description: Type.Optional(Type.String({ description: "Short label for the task, 3-5 words" })),
 });
 
+/** A subagent reports a conclusion, not a transcript; this is a backstop against a runaway one. */
+const REPORT_CAP = 30_000;
+
 /** Set for child processes so a subagent cannot spawn subagents of its own. */
 const SUBAGENT_ENV = "PI_SUBAGENT";
 
@@ -158,7 +161,11 @@ export default function (pi: ExtensionAPI) {
 				const { code, stdout, stderr } = await runSubagent(agent, params.prompt, ctx.cwd, signal);
 				if (code !== 0) throw new Error(`Subagent "${agent.name}" failed: ${stderr.trim() || `exit ${code}`}`);
 
-				const output = stdout.trim() || "(the subagent produced no output)";
+				const report = stdout.trim() || "(the subagent produced no output)";
+				const output =
+					report.length > REPORT_CAP
+						? `${report.slice(0, REPORT_CAP)}\n\n[report truncated at ${REPORT_CAP} characters]`
+						: report;
 				return {
 					content: [{ type: "text", text: output }],
 					details: { agent: agent.name, prompt: params.prompt, output, exitCode: code } as TaskDetails,

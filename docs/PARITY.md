@@ -47,6 +47,12 @@ What this configuration provides, what pi already had, and what configuration ca
 | Plugins / marketplace | pi packages | `pi install npm:…` or `git:…`; different ecosystem |
 | MCP servers | — | pi has no MCP client. See below |
 
+## Token efficiency
+
+Progressive disclosure for skills and subagents, context isolation through `task`, capped tool
+output, a byte-stable system prompt for caching, and automatic compaction. See
+[TOKENS.md](TOKENS.md) for the mechanism-by-mechanism mapping.
+
 ## Sessions
 
 | Claude Code | Here | Notes |

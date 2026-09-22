@@ -1,0 +1,23 @@
+{
+  "defaultMode": "ask",
+  "deny": [
+    "read(**/.env)",
+    "read(**/.env.*)",
+    "read(**/.ssh/**)",
+    "read(**/id_rsa*)",
+    "read(**/*.pem)"
+  ],
+  "allow": [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "todo_write",
+    "task",
+    "ask_user",
+    "exit_plan_mode",
+    "web_fetch",
+    "web_search",
+    "bash_output"
+  ]
+}

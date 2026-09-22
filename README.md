@@ -73,8 +73,7 @@ Tools, on top of pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, 
 |---|---|
 | `todo_write` | `TodoWrite` |
 | `task` | `Task` — runs a subagent from `agents/` in its own process |
-| `web_fetch` | `WebFetch` |
-| `web_search` | `WebSearch` — optional, see below |
+| `web_fetch`, `web_search` | `WebFetch`, `WebSearch` |
 | `ask_user` | `AskUserQuestion` |
 | `exit_plan_mode` | `ExitPlanMode` |
 | `bash_background`, `bash_output`, `bash_kill` | background `Bash`, `BashOutput`, `KillShell` |
@@ -99,13 +98,13 @@ tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md)
 Nothing here requires an API key, a login, or a network account. Clone it, point pi at it, and
 everything works — beyond the model provider pi itself is already configured with.
 
-The single exception is `web_search`, and it is opt-in rather than required. Every free search
-engine now gates automated queries behind a JavaScript challenge or a hard rate limit, so there
-is no keyless backend worth shipping. Rather than ship one that fails intermittently, the tool
-is **registered only when a key is present**: without one it simply is not there, and the model
-uses `web_fetch` — which needs no credentials — to read pages directly.
+That includes `web_search`, which goes through DuckDuckGo's lite endpoint. That endpoint
+rate-limits by IP and answers a burst of rapid queries with an anti-bot challenge instead of
+results, so searches are serialized and spaced apart, and a challenge is retried once before
+being reported. A handful of searches across a session stays well inside the limit.
 
-To enable it, set `BRAVE_API_KEY` or `TAVILY_API_KEY` (both have free tiers) and run `/reload`.
+Setting `BRAVE_API_KEY` or `TAVILY_API_KEY` switches to that provider and sidesteps the rate
+limit. It is an upgrade, never a requirement.
 
 The only external programs anything here calls are `git` (checkpoints and the status line, which
 report and carry on if it is missing) and `pi` itself (subagents). `hooks.json` ships empty;

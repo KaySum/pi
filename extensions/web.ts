@@ -1,17 +1,13 @@
 /**
- * Web - read pages, and search when a search provider is configured.
+ * Web - read pages and search the web, without credentials.
  *
- * `web_fetch` needs no credentials and is always available.
+ * `web_search` uses DuckDuckGo's lite endpoint, which needs no key. That endpoint rate-limits
+ * by IP and answers a burst of rapid queries with an anti-bot challenge instead of results, so
+ * requests here are serialized and spaced out, and a challenge is retried once before it is
+ * reported. Ordinary use - a handful of searches across a session - stays well inside it.
  *
- * `web_search` is registered only when a provider key is present. There is no keyless
- * backend worth shipping: DuckDuckGo's HTML endpoint answers a handful of queries and then
- * serves an anti-bot challenge, its official API returns nothing for ordinary queries, and
- * the independent engines gate automated queries behind a JavaScript challenge. A tool that
- * fails most of the time is worse than one the model can see is absent, so when no key is
- * configured the tool simply is not there and the model reaches for `web_fetch` instead.
- *
- * Set `BRAVE_API_KEY` or `TAVILY_API_KEY` and run `/reload` to enable it. Both have free
- * tiers. Nothing else in this configuration needs a credential.
+ * Setting `BRAVE_API_KEY` or `TAVILY_API_KEY` switches to that provider and sidesteps the rate
+ * limit entirely. It is an upgrade, never a requirement.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -20,6 +16,12 @@ import { Type } from "typebox";
 const MAX_CHARS = 60_000;
 const TIMEOUT_MS = 30_000;
 const USER_AGENT = "pi-agent";
+
+const DUCKDUCKGO = "https://lite.duckduckgo.com/lite/";
+/** DuckDuckGo serves its plain markup to a browser user agent. */
+const SEARCH_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)";
+const MIN_SEARCH_INTERVAL_MS = 1_500;
+const CHALLENGE_BACKOFF_MS = 3_000;
 
 const ENTITIES: Record<string, string> = {
 	"&nbsp;": " ",
@@ -38,17 +40,28 @@ function decodeEntities(text: string): string {
 		.replace(/&[a-z]+;/gi, (entity) => ENTITIES[entity.toLowerCase()] ?? " ");
 }
 
-function htmlToText(html: string): string {
-	const stripped = html
+function stripTags(html: string): string {
+	return html
 		.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, " ")
 		.replace(/<!--[\s\S]*?-->/g, " ")
-		.replace(/<\/(p|div|li|tr|h[1-6]|section|article|br)>/gi, "\n")
 		.replace(/<[^>]+>/g, " ");
+}
 
-	return decodeEntities(stripped)
+function htmlToText(html: string): string {
+	const broken = html
+		.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, " ")
+		.replace(/<!--[\s\S]*?-->/g, " ")
+		.replace(/<\/(p|div|li|tr|h[1-6]|section|article|br)>/gi, "\n");
+
+	return decodeEntities(stripTags(broken))
 		.replace(/[ \t]+/g, " ")
 		.replace(/\n\s*\n\s*\n+/g, "\n\n")
 		.trim();
+}
+
+/** Tags out, entities in, whitespace collapsed to one line. */
+function inline(html: string): string {
+	return decodeEntities(stripTags(html)).replace(/\s+/g, " ").trim();
 }
 
 function truncate(text: string, source: string): string {
@@ -56,12 +69,18 @@ function truncate(text: string, source: string): string {
 	return `${text.slice(0, MAX_CHARS)}\n\n[truncated at ${MAX_CHARS} characters; fetch ${source} directly for the rest]`;
 }
 
-async function request(url: string, init: RequestInit, signal: AbortSignal | undefined): Promise<Response> {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function timeoutSignal(signal: AbortSignal | undefined): AbortSignal {
 	const timeout = AbortSignal.timeout(TIMEOUT_MS);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+async function request(url: string, init: RequestInit, signal: AbortSignal | undefined): Promise<Response> {
 	const response = await fetch(url, {
 		...init,
 		headers: { "user-agent": USER_AGENT, ...init.headers },
-		signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+		signal: timeoutSignal(signal),
 	});
 	if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
 	return response;
@@ -74,6 +93,84 @@ interface SearchResult {
 }
 
 type Search = (query: string, signal: AbortSignal | undefined) => Promise<SearchResult[]>;
+
+// ---------------------------------------------------------------------------
+// DuckDuckGo
+// ---------------------------------------------------------------------------
+
+const RESULT_LINK = /<a[^>]+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/gi;
+const RESULT_SNIPPET = /<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/i;
+
+/** Results carry a redirect wrapper: //duckduckgo.com/l/?uddg=<encoded target>&rut=... */
+function resultUrl(href: string): string {
+	const decoded = decodeEntities(href);
+	const redirect = /[?&]uddg=([^&]+)/.exec(decoded);
+	if (redirect) {
+		try {
+			return decodeURIComponent(redirect[1]);
+		} catch {
+			return "";
+		}
+	}
+	return decoded.startsWith("//") ? `https:${decoded}` : decoded;
+}
+
+function parseResults(html: string): SearchResult[] {
+	const links = [...html.matchAll(RESULT_LINK)];
+
+	return links
+		.map((link, index) => {
+			// A result's snippet is the next one in the document, before the following result.
+			const from = (link.index ?? 0) + link[0].length;
+			const to = index + 1 < links.length ? (links[index + 1].index ?? html.length) : html.length;
+			const snippet = RESULT_SNIPPET.exec(html.slice(from, to));
+
+			return { title: inline(link[2]), url: resultUrl(link[1]), snippet: snippet ? inline(snippet[1]) : "" };
+		})
+		.filter((result) => result.title !== "" && result.url.startsWith("http"));
+}
+
+/** The anti-bot page is a 2xx with no results, so it has to be recognised by content. */
+const looksLikeChallenge = (html: string) => /challenge|anomaly|captcha/i.test(html);
+
+const duckDuckGo: Search = async (query, signal) => {
+	const fetchOnce = async () => {
+		const response = await fetch(DUCKDUCKGO, {
+			method: "POST",
+			headers: {
+				"content-type": "application/x-www-form-urlencoded",
+				"user-agent": SEARCH_USER_AGENT,
+				referer: "https://lite.duckduckgo.com/",
+			},
+			body: new URLSearchParams({ q: query }).toString(),
+			signal: timeoutSignal(signal),
+		});
+		return response.text();
+	};
+
+	let html = await fetchOnce();
+	let results = parseResults(html);
+
+	// An empty page with challenge markers means rate limiting, not "no matches".
+	if (results.length === 0 && looksLikeChallenge(html)) {
+		await sleep(CHALLENGE_BACKOFF_MS);
+		html = await fetchOnce();
+		results = parseResults(html);
+
+		if (results.length === 0 && looksLikeChallenge(html)) {
+			throw new Error(
+				"DuckDuckGo is rate-limiting this address. Wait a minute before searching again, " +
+					"read a known page with web_fetch instead, or set BRAVE_API_KEY or TAVILY_API_KEY to use a provider.",
+			);
+		}
+	}
+
+	return results;
+};
+
+// ---------------------------------------------------------------------------
+// Optional providers
+// ---------------------------------------------------------------------------
 
 function braveSearch(key: string): Search {
 	return async (query, signal) => {
@@ -89,7 +186,7 @@ function braveSearch(key: string): Search {
 		return (body.web?.results ?? []).map((result) => ({
 			title: result.title,
 			url: result.url,
-			snippet: htmlToText(result.description ?? ""),
+			snippet: inline(result.description ?? ""),
 		}));
 	};
 }
@@ -110,24 +207,48 @@ function tavilySearch(key: string): Search {
 	};
 }
 
-function resolveSearch(): { search: Search; provider: string } | undefined {
+function resolveSearch(): Search {
 	const brave = process.env.BRAVE_API_KEY;
-	if (brave) return { search: braveSearch(brave), provider: "Brave" };
+	if (brave) return braveSearch(brave);
 
 	const tavily = process.env.TAVILY_API_KEY;
-	if (tavily) return { search: tavilySearch(tavily), provider: "Tavily" };
+	if (tavily) return tavilySearch(tavily);
 
-	return undefined;
+	return duckDuckGo;
 }
 
 export default function (pi: ExtensionAPI) {
+	const search = resolveSearch();
+
+	// Searches run one at a time, spaced apart. Parallel tool calls would otherwise burst
+	// several requests at once, which is exactly what gets an address rate-limited.
+	let queue: Promise<unknown> = Promise.resolve();
+	let lastRequest = 0;
+
+	const throttle = <T>(operation: () => Promise<T>): Promise<T> => {
+		const run = queue.then(async () => {
+			const wait = MIN_SEARCH_INTERVAL_MS - (Date.now() - lastRequest);
+			if (wait > 0) await sleep(wait);
+			try {
+				return await operation();
+			} finally {
+				lastRequest = Date.now();
+			}
+		});
+		queue = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	};
+
 	pi.registerTool({
 		name: "web_fetch",
 		label: "Fetch",
 		description: [
 			"Fetch a URL and return its readable text content.",
 			"Use it to read documentation, issues, release notes, or any page whose contents you need.",
-			"When you know where an answer lives, go straight to it rather than searching for it.",
+			"When you know where an answer lives, go straight to it rather than searching for it first.",
 			"Prefer an authenticated CLI such as `gh` for private resources; this tool sends no credentials.",
 		].join("\n"),
 		promptSnippet: "web_fetch: read a web page as text",
@@ -151,9 +272,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	const configured = resolveSearch();
-	if (!configured) return;
-
 	pi.registerTool({
 		name: "web_search",
 		label: "Search",
@@ -161,6 +279,7 @@ export default function (pi: ExtensionAPI) {
 			"Search the web and return titles, URLs, and snippets.",
 			"Use it for anything that may have changed since your training data, then read the",
 			"promising results with web_fetch rather than trusting the snippets alone.",
+			"Searches are spaced a moment apart, so prefer one good query to several narrow ones.",
 		].join("\n"),
 		promptSnippet: "web_search: search the web for current information",
 		parameters: Type.Object({
@@ -168,7 +287,7 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		async execute(_toolCallId, params, signal) {
-			const results = await configured.search(params.query, signal);
+			const results = await throttle(() => search(params.query, signal));
 			if (results.length === 0) {
 				return { content: [{ type: "text", text: `No results for "${params.query}"` }], details: { results } };
 			}

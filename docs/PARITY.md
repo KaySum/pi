@@ -15,7 +15,7 @@ What this configuration provides, what pi already had, and what configuration ca
 | `TodoWrite` | `todo_write` | `extensions/todo.ts` |
 | `Task` | `task` | `extensions/task.ts` |
 | `WebFetch` | `web_fetch` | `extensions/web.ts` |
-| `WebSearch` | `web_search` | `extensions/web.ts`; optional, registered only when a key is set |
+| `WebSearch` | `web_search` | `extensions/web.ts`; keyless via DuckDuckGo, or a provider key |
 | `AskUserQuestion` | `ask_user` | `extensions/ask.ts`; single question, no multi-select |
 | `ExitPlanMode` | `exit_plan_mode` | `extensions/plan-mode.ts` |
 | `Bash(run_in_background)` | `bash_background` | `extensions/background-bash.ts` |
@@ -69,12 +69,6 @@ extension gating tool calls inside the process, not an OS boundary. A blocked ru
 agent, not a process the agent already started. For a real boundary, run pi in a container —
 pi documents Docker, a Gondolin micro-VM, and OpenShell patterns.
 
-**Keyless web search.** There is no search backend that works without a credential.
-DuckDuckGo's HTML endpoint answers a few queries and then returns an anti-bot challenge, its
-official API returns nothing for ordinary queries, and the independent engines require
-JavaScript to pass a challenge. `web_search` is therefore registered only when a provider key
-is configured; `web_fetch` covers reading known pages without one.
-
 **Notebooks.** No structured notebook editing.
 
 **Hosted surfaces.** IDE extensions, the desktop and web apps, and GitHub Actions are
@@ -89,6 +83,10 @@ a JSON event stream, an RPC protocol, and a TypeScript SDK.
 - `task` shells out to `pi` on `PATH`. If pi is installed elsewhere, the tool fails at spawn.
 - `web_fetch` strips HTML with regular expressions. It is fine for documentation and issues,
   and poor on heavily scripted pages.
+- `web_search` rides DuckDuckGo's lite endpoint, which rate-limits by IP. Requests are spaced
+  1.5s apart and a challenge is retried once; a burst beyond that reports the limit and
+  suggests waiting or setting a provider key. Its markup is stable but unversioned, so a
+  redesign there would need the parser updated.
 - Plan mode's read-only bash allowlist is conservative; expect to approve things it rejects.
 - `extensions/ui.ts` re-registers pi's built-in tools to restyle them. It preserves their
   definitions and delegates execution, but it is the riskiest piece here; set

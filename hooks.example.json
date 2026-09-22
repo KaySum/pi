@@ -1,0 +1,41 @@
+{
+  "PostToolUse": [
+    {
+      "matcher": "write|edit",
+      "hooks": [
+        {
+          "command": "jq -r '.tool_input.file_path' | grep -E '\\.(ts|tsx|js|json)$' | xargs -r npx --no-install prettier --write"
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "bash",
+      "hooks": [
+        {
+          "command": "jq -e '.tool_input.command | test(\"git push --force\") | not' > /dev/null || { echo 'force-push is not allowed here' >&2; exit 2; }"
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        {
+          "command": "echo \"Current branch: $(git -C \\\"$PI_PROJECT_DIR\\\" branch --show-current 2>/dev/null)\""
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "hooks": [{ "command": "git -C \"$PI_PROJECT_DIR\" status --short 2>/dev/null | head -20", "timeout": 10 }]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [{ "command": "osascript -e 'display notification \"pi is done\" with title \"pi\"'" }]
+    }
+  ]
+}

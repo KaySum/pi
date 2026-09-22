@@ -37,6 +37,7 @@ What this configuration provides, what pi already had, and what configuration ca
 | Subagents (`.claude/agents`) | `agents/` | Also reads `.pi/agents/` and `.claude/agents/` |
 | Skills | `skills/` | Native, plus `~/.agents/skills/` and `.agents/skills/` |
 | Slash commands | `prompts/` | Native prompt templates |
+| Checkpoint / restore | `checkpoints.json` | `extensions/checkpoints.ts`; see [CHECKPOINTS.md](CHECKPOINTS.md) |
 | Status line | `extensions/statusline.ts` | Built-in text, or an executable `statusline` in the agent dir |
 | Keybindings | `keybindings.json` | Native |
 | Themes | `themes/` | Native |
@@ -51,7 +52,7 @@ What this configuration provides, what pi already had, and what configuration ca
 | `/resume`, `--continue` | `/resume`, `-c` | Native |
 | `/clear` | `/new` | Native |
 | `/export` | `/export`, `/share` | Native |
-| `/rewind` checkpoints | `/tree`, `/fork` | Native, but conversational — pi does not snapshot the working tree |
+| `/rewind` checkpoints | `/rewind`, `/tree`, `/fork` | `extensions/checkpoints.ts` — restores code in both directions |
 | Background tasks | `bash_background` | `extensions/background-bash.ts` |
 
 ## Gaps
@@ -64,9 +65,6 @@ through a CLI the agent calls with `bash`.
 extension gating tool calls inside the process, not an OS boundary. A blocked rule stops the
 agent, not a process the agent already started. For a real boundary, run pi in a container —
 pi documents Docker, a Gondolin micro-VM, and OpenShell patterns.
-
-**Checkpoints.** `/tree` and `/fork` move the conversation back, but files already written
-stay written. Commit before large changes, or add a `git-checkpoint` extension.
 
 **Notebooks.** No structured notebook editing.
 
@@ -82,3 +80,5 @@ a JSON event stream, an RPC protocol, and a TypeScript SDK.
 - `web_fetch` strips HTML with regular expressions. It is fine for documentation and issues,
   and poor on heavily scripted pages.
 - Plan mode's read-only bash allowlist is conservative; expect to approve things it rejects.
+- Checkpoints cover the working directory only. A restore cannot undo a migration that already
+  ran, a request already sent, or a file written outside the project.

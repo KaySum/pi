@@ -52,6 +52,7 @@ settings.json        pi settings (model, tools, resource paths)
 AGENTS.md            user-level instructions applied across working directories
 APPEND_SYSTEM.md     additions to pi's system prompt
 permissions.json     allow / ask / deny rules for the permissions extension
+checkpoints.json     working-tree snapshot and restore settings
 hooks.json           shell hooks bound to lifecycle events
 hooks.example.json   worked hook examples to copy from
 agents/              subagent definitions, one Markdown file each
@@ -74,11 +75,16 @@ Tools, on top of pi's built-in `read`, `bash`, `edit`, `write`, `grep`, `find`, 
 | `exit_plan_mode` | `ExitPlanMode` |
 | `bash_background`, `bash_output`, `bash_kill` | background `Bash`, `BashOutput`, `KillShell` |
 
-Commands: `/plan`, `/permissions`, `/agents`, `/todos`, `/jobs`, plus `/init`, `/review`,
-`/commit`, `/pr`, `/security-review` from `prompts/`.
+Commands: `/plan`, `/rewind`, `/permissions`, `/agents`, `/todos`, `/jobs`, plus `/init`,
+`/review`, `/commit`, `/pr`, `/security-review` from `prompts/`.
 
 Behavior: tool calls pass through `permissions.json` before running, lifecycle events fire
 the shell hooks in `hooks.json`, and the footer carries context usage and the git branch.
+
+The working tree is checkpointed as you go and restored when you move around pi's session
+tree — backwards, forwards, or onto a sibling branch. Snapshots are commits in a shadow git
+repository that never touches the project's own `.git`. See
+[`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md).
 
 `web_search` needs a provider key in the environment — `BRAVE_API_KEY` or `TAVILY_API_KEY`.
 

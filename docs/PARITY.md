@@ -39,6 +39,7 @@ What this configuration provides, what pi already had, and what configuration ca
 | Slash commands | `prompts/` | Native prompt templates |
 | Checkpoint / restore | `checkpoints.json` | `extensions/checkpoints.ts`; see [CHECKPOINTS.md](CHECKPOINTS.md) |
 | Status line | `extensions/statusline.ts` | Built-in text, or an executable `statusline` in the agent dir |
+| Feature switches | `features.json` | `/features`; every addition here can be turned off |
 | Transcript layout | `extensions/ui.ts` | Bullet/branch tool rendering; see [UX.md](UX.md) |
 | Theme | `themes/claude*.json` | Claude palette, light and dark |
 | Keybindings | `keybindings.json` | `ctrl+r` expand, `shift+tab` plan mode |
@@ -96,6 +97,6 @@ a JSON event stream, an RPC protocol, and a TypeScript SDK.
 - Plan mode's read-only bash allowlist is conservative; expect to approve things it rejects.
 - `extensions/ui.ts` re-registers pi's built-in tools to restyle them. It preserves their
   definitions and delegates execution, but it is the riskiest piece here; set
-  `toolRendering: false` in `ui.json` to fall back to pi's own rendering.
+  `uiToolRendering: false` in `features.json` to fall back to pi's own rendering.
 - Checkpoints cover the working directory only. A restore cannot undo a migration that already
   ran, a request already sent, or a file written outside the project.

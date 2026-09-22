@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { enabled } from "../lib/features.ts";
 
 type HookEvent =
 	| "PreToolUse"
@@ -81,6 +82,8 @@ function run(hook: Hook, payload: unknown, cwd: string): Promise<{ code: number;
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("hooks")) return;
+
 	let config: HookConfig = {};
 
 	const load = (ctx: ExtensionContext) => {

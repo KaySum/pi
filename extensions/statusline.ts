@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { enabled } from "../lib/features.ts";
 
 const KEY = "statusline";
 const TIMEOUT_MS = 5_000;
@@ -37,6 +38,8 @@ function isExecutable(file: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("statusline")) return;
+
 	const custom = path.join(agentDir(), KEY);
 
 	const refresh = async (ctx: ExtensionContext) => {

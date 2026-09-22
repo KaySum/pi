@@ -85,11 +85,10 @@ Set `trackAgentEditedIgnoredFiles` to `false` if you would rather it were not.
 ## Settings
 
 `checkpoints.json` in the agent directory, overridden by `.pi/checkpoints.json` in a trusted
-project.
+project. To switch checkpointing off entirely, set `"checkpoints": false` in `features.json`.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Turn the whole extension off |
 | `granularity` | `"tool"` | `"tool"` snapshots after every mutating tool; `"turn"` only at turn boundaries |
 | `restoreOnTreeNavigation` | `true` | Restore after `/tree` moves the leaf |
 | `restoreOnFork` | `true` | Restore when a fork opens at an earlier point |

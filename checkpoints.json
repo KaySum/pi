@@ -1,5 +1,4 @@
 {
-  "enabled": true,
   "granularity": "tool",
   "restoreOnTreeNavigation": true,
   "restoreOnFork": true,

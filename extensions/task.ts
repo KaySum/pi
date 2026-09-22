@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { type ExtensionAPI, parseFrontmatter, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 interface Agent {
 	name: string;
@@ -117,7 +118,7 @@ function runSubagent(agent: Agent, prompt: string, cwd: string, signal: AbortSig
 }
 
 export default function (pi: ExtensionAPI) {
-	if (process.env[SUBAGENT_ENV]) return;
+	if (!enabled("task") || process.env[SUBAGENT_ENV]) return;
 
 	const agents = discover(process.cwd());
 

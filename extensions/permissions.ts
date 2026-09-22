@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
+import { enabled } from "../lib/features.ts";
 
 type Mode = "allow" | "ask" | "deny";
 
@@ -84,6 +85,8 @@ function targetOf(event: ToolCallEvent, cwd: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("permissions")) return;
+
 	let defaultMode: Mode = "allow";
 	let rules: Record<Mode, Rule[]> = { allow: [], ask: [], deny: [] };
 	const sessionAllowed = new Set<string>();

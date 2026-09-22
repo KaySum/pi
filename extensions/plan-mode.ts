@@ -8,6 +8,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 const MUTATING_TOOLS = new Set(["edit", "write"]);
 
@@ -30,6 +31,8 @@ function isReadOnly(command: string): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("planMode")) return;
+
 	let active = false;
 
 	let reminded = false;

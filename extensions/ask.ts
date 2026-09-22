@@ -7,10 +7,13 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 const OTHER = "Something else…";
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("ask")) return;
+
 	pi.registerTool({
 		name: "ask_user",
 		label: "Ask",

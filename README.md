@@ -54,13 +54,14 @@ AGENTS.md            user-level instructions applied across working directories
 APPEND_SYSTEM.md     additions to pi's system prompt
 permissions.json     allow / ask / deny rules for the permissions extension
 checkpoints.json     working-tree snapshot and restore settings
-ui.json              transcript layout, header, and spinner toggles
+features.json        one switch per feature this config adds
 keybindings.json     key assignments
 themes/              Claude palette, light and dark
 hooks.json           shell hooks bound to lifecycle events
 hooks.example.json   worked hook examples to copy from
 agents/              subagent definitions, one Markdown file each
 extensions/          TypeScript extensions
+lib/                 shared helpers the extensions import
 prompts/             slash-command templates
 skills/              on-demand instruction packages
 docs/                parity notes
@@ -93,6 +94,38 @@ repository that never touches the project's own `.git`. See
 Interface: tool calls render as `⏺ Read(file.ts)` with an indented `⎿` result, the theme
 carries Claude's palette in light and dark, `shift+tab` toggles plan mode, `ctrl+r` expands
 tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md).
+
+## Turning things off
+
+Everything this configuration adds has a switch in `features.json`. Nothing is load-bearing for
+anything else, so you can run as much or as little of it as you want - no subagents, no
+checkpoints, pi's own tool rendering, whichever combination suits you.
+
+```json
+{ "task": false, "checkpoints": false, "uiHeader": false }
+```
+
+Keys default to `true`, so a missing key is never a silent disable. Run `/features` to see the
+current state, and `/reload` after editing.
+
+| Key | What it turns off |
+|---|---|
+| `permissions` | allow / ask / deny rules on every tool call |
+| `hooks` | shell commands bound to lifecycle events |
+| `checkpoints` | working-tree snapshots and `/rewind` |
+| `task` | subagents |
+| `todo` | the `todo_write` task list |
+| `webFetch`, `webSearch` | reading pages, and search |
+| `ask` | `ask_user` multiple-choice questions |
+| `planMode` | `/plan` and the mutation block |
+| `backgroundBash` | background jobs |
+| `statusline` | context usage and branch in the footer |
+| `memory` | the `#` shortcut |
+| `uiToolRendering`, `uiHeader`, `uiWorkingIndicator` | the interface layer |
+
+Switches are read from the agent directory only. A project's `.pi/features.json` is
+deliberately ignored: extensions load before pi resolves project trust, so honouring one would
+let a cloned repository switch off the permission gate that exists to contain it.
 
 ## Credentials
 

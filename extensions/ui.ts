@@ -6,10 +6,9 @@
  * and custom renderers to match, delegating execution to the original implementations so
  * only the presentation changes.
  *
- * Everything here is cosmetic and can be turned off per part in `ui.json`.
+ * Everything here is cosmetic, and each part has its own switch in `features.json`.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -24,6 +23,7 @@ import {
 import type { EditToolDetails, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
+import { enabled } from "../lib/features.ts";
 
 /** Tool arguments. `any` keeps the renderers assignable whatever schema the tool declares. */
 // biome-ignore lint/suspicious/noExplicitAny: contextual typing against each tool's own schema
@@ -38,14 +38,6 @@ interface RenderOptions {
 	expanded: boolean;
 	isPartial: boolean;
 }
-
-interface Config {
-	toolRendering: boolean;
-	header: boolean;
-	workingIndicator: boolean;
-}
-
-const DEFAULTS: Config = { toolRendering: true, header: true, workingIndicator: true };
 
 const BULLET = "⏺";
 const BRANCH = "⎿";
@@ -71,17 +63,8 @@ const WORKING_WORDS = [
 
 const SPINNER = ["·", "✢", "✳", "∗", "✻", "✽"];
 
-const ANSI = /\[[0-9;]*m/g;
+const ANSI = /\u001b\[[0-9;]*m/g;
 const plainWidth = (text: string): number => text.replace(ANSI, "").length;
-
-function readConfig(): Config {
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
-	try {
-		return { ...DEFAULTS, ...(JSON.parse(fs.readFileSync(path.join(agentDir, "ui.json"), "utf-8")) as Partial<Config>) };
-	} catch {
-		return DEFAULTS;
-	}
-}
 
 function shorten(target: unknown, cwd: string): string {
 	if (typeof target !== "string" || target === "") return "";
@@ -107,7 +90,6 @@ function isFailure(result: ToolResult): boolean {
 }
 
 export default function (pi: ExtensionAPI) {
-	const config = readConfig();
 	const cwd = process.cwd();
 
 	/** `⏺ Read(src/index.ts)` */
@@ -143,7 +125,7 @@ export default function (pi: ExtensionAPI) {
 
 	const pending = (theme: Theme, verb: string) => result(theme, theme.fg("dim", verb));
 
-	if (config.toolRendering) {
+	if (enabled("uiToolRendering")) {
 		const read = createReadTool(cwd);
 		pi.registerTool({
 			...read,
@@ -275,7 +257,7 @@ export default function (pi: ExtensionAPI) {
 		registerSearch(createLsTool(cwd), "List", "path");
 	}
 
-	if (config.header) {
+	if (enabled("uiHeader")) {
 		let info = { model: "", cwd };
 
 		class Header implements Component {
@@ -313,7 +295,7 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
-	if (config.workingIndicator) {
+	if (enabled("uiWorkingIndicator")) {
 		let timer: ReturnType<typeof setInterval> | undefined;
 
 		const stop = (ctx: ExtensionContext) => {

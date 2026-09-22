@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { enabled } from "../lib/features.ts";
 
 const HEADING = "## Notes";
 
@@ -31,6 +32,8 @@ function append(file: string, note: string): void {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("memory")) return;
+
 	const choose = async (ctx: ExtensionContext): Promise<string | undefined> => {
 		const files = targets(ctx.cwd);
 		if (files.length === 1 || !ctx.hasUI) return files[0];

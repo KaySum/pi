@@ -1,0 +1,17 @@
+{
+  "permissions": true,
+  "hooks": true,
+  "checkpoints": true,
+  "task": true,
+  "todo": true,
+  "webFetch": true,
+  "webSearch": true,
+  "ask": true,
+  "planMode": true,
+  "backgroundBash": true,
+  "statusline": true,
+  "memory": true,
+  "uiToolRendering": true,
+  "uiHeader": true,
+  "uiWorkingIndicator": true
+}

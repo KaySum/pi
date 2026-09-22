@@ -9,6 +9,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 interface Job {
 	id: string;
@@ -32,6 +33,8 @@ function tail(text: string, cap: number): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("backgroundBash")) return;
+
 	const jobs = new Map<string, Job>();
 	let counter = 0;
 

@@ -126,13 +126,13 @@ Worth not flattening away in the name of parity:
 
 ## Turning it off
 
-`ui.json` in the agent directory:
+`features.json` in the agent directory:
 
 | Key | Default | Effect |
 |---|---|---|
-| `toolRendering` | `true` | Claude Code tool layout; `false` restores pi's boxes |
-| `header` | `true` | Welcome box |
-| `workingIndicator` | `true` | Spinner, verb, and elapsed time |
+| `uiToolRendering` | `true` | Claude Code tool layout; `false` restores pi's boxes |
+| `uiHeader` | `true` | Welcome box |
+| `uiWorkingIndicator` | `true` | Spinner, verb, and elapsed time |
 
 Tool rendering is the one to disable first if a built-in tool misbehaves, since it is the only
-part that re-registers pi's own tools.
+part that re-registers pi's own tools. Run `/features` to see the current state.

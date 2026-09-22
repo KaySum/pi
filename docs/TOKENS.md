@@ -71,7 +71,7 @@ Being honest about the other side of the ledger:
 
 - **16 tools** are registered — 7 built-in plus 9 custom. Each carries a description and a JSON
   schema in every request. They cache, but they are not free. Trim `defaultTools` in
-  `settings.json` if you want a narrower set.
+  `settings.json` for the built-ins, and switch off what you do not use in `features.json`.
 - **`APPEND_SYSTEM.md`** adds roughly 900 tokens to the cached prefix.
 - **The `task` tool description** grows with each file in `agents/`, since the roster is
   embedded in it.

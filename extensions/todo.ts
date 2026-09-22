@@ -11,6 +11,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 type Status = "pending" | "in_progress" | "completed";
 
@@ -38,6 +39,8 @@ function render(todos: Todo[]): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("todo")) return;
+
 	let todos: Todo[] = [];
 
 	const restore = (ctx: ExtensionContext) => {

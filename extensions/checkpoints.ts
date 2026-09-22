@@ -25,6 +25,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { enabled } from "../lib/features.ts";
 
 const ENTRY_TYPE = "checkpoint";
 
@@ -43,7 +44,6 @@ const READ_ONLY_TOOLS = new Set([
 ]);
 
 interface Config {
-	enabled: boolean;
 	/** "tool" snapshots after every mutating tool; "turn" only at turn boundaries. */
 	granularity: "tool" | "turn";
 	restoreOnTreeNavigation: boolean;
@@ -53,7 +53,6 @@ interface Config {
 }
 
 const DEFAULTS: Config = {
-	enabled: true,
 	granularity: "tool",
 	restoreOnTreeNavigation: true,
 	restoreOnFork: true,
@@ -147,6 +146,8 @@ function repoPathFor(cwd: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	if (!enabled("checkpoints")) return;
+
 	let config = DEFAULTS;
 	let repo = "";
 	let ready = false;
@@ -180,8 +181,6 @@ export default function (pi: ExtensionAPI) {
 
 	const init = async (ctx: ExtensionContext): Promise<boolean> => {
 		config = readConfig(ctx.cwd, ctx.isProjectTrusted());
-		if (!config.enabled) return false;
-
 		repo = repoPathFor(ctx.cwd);
 		if (!fs.existsSync(path.join(repo, "HEAD"))) {
 			fs.mkdirSync(repo, { recursive: true, mode: 0o700 });

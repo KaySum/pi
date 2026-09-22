@@ -12,6 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { enabled } from "../lib/features.ts";
 
 const MAX_CHARS = 60_000;
 /** Snippets are for deciding what to fetch, not for reading. Providers can return paragraphs. */
@@ -222,6 +223,10 @@ function resolveSearch(): Search {
 }
 
 export default function (pi: ExtensionAPI) {
+	const canFetch = enabled("webFetch");
+	const canSearch = enabled("webSearch");
+	if (!canFetch && !canSearch) return;
+
 	const search = resolveSearch();
 
 	// Searches run one at a time, spaced apart. Parallel tool calls would otherwise burst
@@ -246,61 +251,65 @@ export default function (pi: ExtensionAPI) {
 		return run;
 	};
 
-	pi.registerTool({
-		name: "web_fetch",
-		label: "Fetch",
-		description: [
-			"Fetch a URL and return its readable text content.",
-			"Use it to read documentation, issues, release notes, or any page whose contents you need.",
-			"When you know where an answer lives, go straight to it rather than searching for it first.",
-			"Prefer an authenticated CLI such as `gh` for private resources; this tool sends no credentials.",
-		].join("\n"),
-		promptSnippet: "web_fetch: read a web page as text",
-		parameters: Type.Object({
-			url: Type.String({ description: "Absolute http(s) URL" }),
-		}),
+	if (canFetch) {
+		pi.registerTool({
+			name: "web_fetch",
+			label: "Fetch",
+			description: [
+				"Fetch a URL and return its readable text content.",
+				"Use it to read documentation, issues, release notes, or any page whose contents you need.",
+				"When you know where an answer lives, go straight to it rather than searching for it first.",
+				"Prefer an authenticated CLI such as `gh` for private resources; this tool sends no credentials.",
+			].join("\n"),
+			promptSnippet: "web_fetch: read a web page as text",
+			parameters: Type.Object({
+				url: Type.String({ description: "Absolute http(s) URL" }),
+			}),
 
-		async execute(_toolCallId, params, signal) {
-			const url = new URL(params.url);
-			if (url.protocol === "http:") url.protocol = "https:";
+			async execute(_toolCallId, params, signal) {
+				const url = new URL(params.url);
+				if (url.protocol === "http:") url.protocol = "https:";
 
-			const response = await request(url.toString(), {}, signal);
-			const contentType = response.headers.get("content-type") ?? "";
-			const body = await response.text();
-			const text = contentType.includes("html") ? htmlToText(body) : body;
+				const response = await request(url.toString(), {}, signal);
+				const contentType = response.headers.get("content-type") ?? "";
+				const body = await response.text();
+				const text = contentType.includes("html") ? htmlToText(body) : body;
 
-			return {
-				content: [{ type: "text", text: truncate(text, url.toString()) }],
-				details: { url: url.toString(), contentType, length: text.length },
-			};
-		},
-	});
+				return {
+					content: [{ type: "text", text: truncate(text, url.toString()) }],
+					details: { url: url.toString(), contentType, length: text.length },
+				};
+			},
+		});
+	}
 
-	pi.registerTool({
-		name: "web_search",
-		label: "Search",
-		description: [
-			"Search the web and return titles, URLs, and snippets.",
-			"Use it for anything that may have changed since your training data, then read the",
-			"promising results with web_fetch rather than trusting the snippets alone.",
-			"Searches are spaced a moment apart, so prefer one good query to several narrow ones.",
-		].join("\n"),
-		promptSnippet: "web_search: search the web for current information",
-		parameters: Type.Object({
-			query: Type.String({ description: "The search query" }),
-		}),
+	if (canSearch) {
+		pi.registerTool({
+			name: "web_search",
+			label: "Search",
+			description: [
+				"Search the web and return titles, URLs, and snippets.",
+				"Use it for anything that may have changed since your training data, then read the",
+				"promising results with web_fetch rather than trusting the snippets alone.",
+				"Searches are spaced a moment apart, so prefer one good query to several narrow ones.",
+			].join("\n"),
+			promptSnippet: "web_search: search the web for current information",
+			parameters: Type.Object({
+				query: Type.String({ description: "The search query" }),
+			}),
 
-		async execute(_toolCallId, params, signal) {
-			const results = await throttle(() => search(params.query, signal));
-			if (results.length === 0) {
-				return { content: [{ type: "text", text: `No results for "${params.query}"` }], details: { results } };
-			}
+			async execute(_toolCallId, params, signal) {
+				const results = await throttle(() => search(params.query, signal));
+				if (results.length === 0) {
+					return { content: [{ type: "text", text: `No results for "${params.query}"` }], details: { results } };
+				}
 
-			const text = results
-				.map((result, index) => `${index + 1}. ${result.title}\n   ${result.url}\n   ${clip(result.snippet, SNIPPET_CAP)}`)
-				.join("\n\n");
+				const text = results
+					.map((result, index) => `${index + 1}. ${result.title}\n   ${result.url}\n   ${clip(result.snippet, SNIPPET_CAP)}`)
+					.join("\n\n");
 
-			return { content: [{ type: "text", text }], details: { query: params.query, results } };
-		},
-	});
+				return { content: [{ type: "text", text }], details: { query: params.query, results } };
+			},
+		});
+	}
 }

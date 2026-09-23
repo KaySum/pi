@@ -48,26 +48,25 @@ small.
 
 ## Using it
 
-### Point pi at it
+### Install
 
-pi reads user configuration from its agent directory, `~/.pi/agent` by default. Either make
-this repository that directory, or point pi at it for a single run.
+pi reads its user configuration from `~/.pi/agent`. Clone this repository there:
 
 ```sh
-# Option A — make it the agent directory
-mv ~/.pi/agent ~/.pi/agent.backup 2>/dev/null   # if you already have one
-mkdir -p ~/.pi
-ln -s "$PWD" ~/.pi/agent
-
-# Option B — use it for one run, leaving your own setup alone
-PI_CODING_AGENT_DIR="$PWD" pi
+git clone https://github.com/KaySum/pi-claude-code ~/.pi/agent
 ```
 
-Option A is worth knowing about: pi writes `auth.json`, `trust.json`, and session state into
-its agent directory, so with the symlink those land in this checkout. `.gitignore` already
-excludes them, so your credentials will not be staged — but do not remove those entries.
+Then run `pi`. Nothing to install, no keys to set — see [Credentials](#credentials).
 
-Nothing needs installing, and no keys are required. See [Credentials](#credentials).
+If you already have a `~/.pi/agent`, move it aside first:
+
+```sh
+mv ~/.pi/agent ~/.pi/agent.backup
+```
+
+Because the clone *is* the agent directory, pi writes `auth.json`, `trust.json`, and session
+state into it. `.gitignore` already excludes those, so your credentials will not be staged —
+keep those entries if you fork this.
 
 ### The first run
 

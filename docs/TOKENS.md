@@ -47,14 +47,13 @@ returns `systemPrompt` from `before_agent_start`.
 Plan mode injects its reminder as a message **once per activation** rather than once per
 request. Re-sending it every turn would both cost tokens and accumulate copies of itself.
 
-`cacheWarming` is set to `streaming` in `settings.json`, and `showCacheMissNotices` is on so a
-cache miss is visible rather than silent.
+pi warms eligible provider caches during a run by default; `/session` shows the next decision.
 
 ## Compaction
 
-pi compacts automatically. `settings.json` reserves 16,384 tokens for the response and keeps
-24,000 tokens of recent turns unsummarized — slightly above pi's default, trading a little
-context for fewer summarization passes on long sessions.
+pi compacts automatically, reserving tokens for the response and keeping recent turns
+unsummarized. This configuration leaves those at pi's defaults; `compaction.keepRecentTokens`
+in `settings.json` is the knob if a long session summarizes more than you want.
 
 `/compact` takes custom instructions if you want the summary to preserve something specific.
 

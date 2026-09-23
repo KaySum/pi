@@ -28,11 +28,11 @@ What this configuration provides, what pi already had, and what configuration ca
 
 | Claude Code | Here | Notes |
 |---|---|---|
-| `CLAUDE.md` memory | `AGENTS.md` | Native. pi also reads `CLAUDE.md` from the agent dir, cwd, and parents |
+| `CLAUDE.md` memory | `AGENTS.md` | Native, and none ships — stock Claude Code has no user-level file either |
 | Output styles | `APPEND_SYSTEM.md` | Adds to pi's prompt; `SYSTEM.md` replaces it entirely |
 | `.claude/settings.json` | `settings.json` | Different keys — see pi's settings reference |
 | Permissions (`allow`/`ask`/`deny`) | `permissions.json` | `extensions/permissions.ts` |
-| Permission modes | `defaultMode` + `/plan` | `allow` ≈ acceptEdits, `ask` ≈ default, `deny` ≈ deny-by-default |
+| Permission modes | `defaultMode` + `/plan` | Ships `ask`, matching Claude Code's default mode; `allow` ≈ acceptEdits |
 | Hooks | `hooks.json` | `extensions/hooks.ts` |
 | Subagents (`.claude/agents`) | `agents/` | Also reads `.pi/agents/` and `.claude/agents/` |
 | Skills | `skills/` | Native, plus `~/.agents/skills/` and `.agents/skills/` |

@@ -50,7 +50,7 @@ small.
 
 ```
 settings.json        pi settings (model, tools, resource paths)
-AGENTS.md            user-level instructions applied across working directories
+AGENTS.example.md    template for your own instructions (not loaded)
 APPEND_SYSTEM.md     additions to pi's system prompt
 permissions.json     allow / ask / deny rules for the permissions extension
 checkpoints.json     working-tree snapshot and restore settings
@@ -94,6 +94,19 @@ repository that never touches the project's own `.git`. See
 Interface: tool calls render as `⏺ Read(file.ts)` with an indented `⎿` result, the theme
 carries Claude's palette in light and dark, `shift+tab` toggles plan mode, `ctrl+r` expands
 tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md).
+
+## Whose preferences
+
+This configuration matches **stock** Claude Code, not anyone's personal setup. It ships no
+`AGENTS.md`, because a fresh Claude Code install has no user-level `CLAUDE.md` either — its
+behavior comes from the system prompt. `APPEND_SYSTEM.md` carries that: tone, scope, context
+discipline, verification, corrections, safety. Your own preferences go in an `AGENTS.md` you
+write; `AGENTS.example.md` is a starting point.
+
+Permissions match Claude Code's default mode: read-only tools run unprompted, everything else
+asks, with the same "yes / yes, don't ask again this session / no" choices. The one deliberate
+addition is a short deny list for credential files — empty `deny` in `permissions.json` for
+literal stock behavior.
 
 ## Turning things off
 

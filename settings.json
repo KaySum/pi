@@ -1,28 +1,6 @@
 {
   "theme": "claude-light/claude",
-  "defaultThinkingLevel": "medium",
-  "defaultTools": [
-    "read",
-    "bash",
-    "edit",
-    "write",
-    "grep",
-    "find",
-    "ls"
-  ],
-  "enableSkillCommands": true,
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"],
   "steeringMode": "all",
-  "followUpMode": "all",
-  "doubleEscapeAction": "tree",
-  "showCacheMissNotices": true,
-  "cacheWarming": "streaming",
-  "defaultProjectTrust": "ask",
-  "compaction": {
-    "enabled": true,
-    "reserveTokens": 16384,
-    "keepRecentTokens": 24000
-  },
-  "markdown": {
-    "mermaid": "streaming"
-  }
+  "followUpMode": "all"
 }

@@ -1,0 +1,13 @@
+# pi writes these into its agent directory. When this repository is the agent
+# directory they land here, so keep credentials and local state out of git.
+auth.json
+trust.json
+models.json
+sessions/
+checkpoints/
+npm/
+node_modules/
+
+# Your own instructions. This repository deliberately ships none; see
+# AGENTS.example.md.
+AGENTS.md

@@ -46,26 +46,102 @@ See [`docs/PARITY.md`](docs/PARITY.md) for the feature-by-feature mapping and th
 configuration cannot close, and [`docs/TOKENS.md`](docs/TOKENS.md) for how context is kept
 small.
 
-## Layout
+## Using it
 
+### Point pi at it
+
+pi reads user configuration from its agent directory, `~/.pi/agent` by default. Either make
+this repository that directory, or point pi at it for a single run.
+
+```sh
+# Option A — make it the agent directory
+mv ~/.pi/agent ~/.pi/agent.backup 2>/dev/null   # if you already have one
+mkdir -p ~/.pi
+ln -s "$PWD" ~/.pi/agent
+
+# Option B — use it for one run, leaving your own setup alone
+PI_CODING_AGENT_DIR="$PWD" pi
 ```
-settings.json        pi settings (model, tools, resource paths)
-AGENTS.example.md    template for your own instructions (not loaded)
-APPEND_SYSTEM.md     additions to pi's system prompt
-permissions.json     allow / ask / deny rules for the permissions extension
-checkpoints.json     working-tree snapshot and restore settings
-features.json        one switch per feature this config adds
-keybindings.json     key assignments
-themes/              Claude palette, light and dark
-hooks.json           shell hooks bound to lifecycle events
-hooks.example.json   worked hook examples to copy from
-agents/              subagent definitions, one Markdown file each
-extensions/          TypeScript extensions
-lib/                 shared helpers the extensions import
-prompts/             slash-command templates
-skills/              on-demand instruction packages
-docs/                parity notes
-```
+
+Option A is worth knowing about: pi writes `auth.json`, `trust.json`, and session state into
+its agent directory, so with the symlink those land in this checkout. `.gitignore` already
+excludes them, so your credentials will not be staged — but do not remove those entries.
+
+Nothing needs installing, and no keys are required. See [Credentials](#credentials).
+
+### The first run
+
+Two prompts you should expect, both normal:
+
+- **Project trust.** pi asks before loading a project's `.pi/` resources, since those can run
+  code. Answering no still runs everything in this configuration.
+- **Permission prompts.** Reading and searching run unprompted; anything that writes a file or
+  runs a command asks first, with *yes once* / *yes, don't ask again this session* / *no*. This
+  is Claude Code's default mode. To stop being asked, add rules to `permissions.json` or set
+  `"defaultMode": "allow"`.
+
+### Commands
+
+| Command | Does |
+|---|---|
+| `/plan` | Investigate and propose without changing anything; `shift+tab` toggles it |
+| `/rewind` | Restore the working tree to an earlier checkpoint |
+| `/features` | Show which parts of this configuration are on |
+| `/agents` | List the available subagents |
+| `/todos`, `/jobs` | Current task list; running background jobs |
+| `/permissions` | Show the active permission rules |
+| `/init` | Write an `AGENTS.md` for the current project |
+| `/review` | Review the uncommitted diff for bugs |
+| `/commit`, `/pr` | Write a commit; open a pull request |
+| `/security-review` | Review the branch for security defects |
+
+pi's own `/tree`, `/fork`, `/resume`, `/compact`, `/export`, and `/reload` are all there too.
+Type `/` to search them.
+
+### Typing
+
+| Prefix | Effect |
+|---|---|
+| `/` | Run a command |
+| `!` | Run a shell command directly |
+| `#` | Append a note to your `AGENTS.md` |
+| `@` | Attach a file to the prompt |
+
+`esc` interrupts. `esc esc` opens the session tree. `ctrl+r` expands tool output. `shift+tab`
+toggles plan mode. `/hotkeys` lists the rest.
+
+### A few things it is good at
+
+**Change something risky.** `/plan` first — the agent can read and search but cannot edit until
+you accept the plan. Accept it and it implements.
+
+**Undo a bad edit.** Every tool call snapshots the working tree. `/rewind` puts the files back
+without touching the conversation, and moving around `/tree` moves the code with you — forwards
+as well as back. See [checkpoints](docs/CHECKPOINTS.md).
+
+**Answer a question that spans the repo.** Ask for it directly; the agent delegates to the
+`explore` subagent, whose searching happens in its own context so only the conclusion comes
+back.
+
+**Check work before committing.** `/review` for correctness, `/security-review` before shipping
+anything that touches input handling or auth.
+
+### Changing it
+
+| To change | Edit | Then |
+|---|---|---|
+| Which features run | `features.json` | `/reload` |
+| What asks permission | `permissions.json` | `/reload` |
+| How it talks and works | `APPEND_SYSTEM.md` | `/reload` |
+| Your own standing instructions | `AGENTS.md` (yours to create) | `/reload` |
+| Commands | add `prompts/<name>.md` | `/reload` |
+| Subagents | add `agents/<name>.md` | `/reload` |
+| Colors | `themes/claude.json` | `/reload` |
+| Keys | `keybindings.json` | `/reload` |
+| Commands run on events | `hooks.json` | `/reload` |
+
+`/reload` picks up every one of these without restarting. Ask the agent to make the change —
+the `harness-authoring` skill explains the formats to it.
 
 ## What it adds
 
@@ -94,6 +170,27 @@ repository that never touches the project's own `.git`. See
 Interface: tool calls render as `⏺ Read(file.ts)` with an indented `⎿` result, the theme
 carries Claude's palette in light and dark, `shift+tab` toggles plan mode, `ctrl+r` expands
 tool output, and `#` appends a note to AGENTS.md. See [`docs/UX.md`](docs/UX.md).
+
+## Layout
+
+```
+settings.json        pi settings (model, tools, resource paths)
+AGENTS.example.md    template for your own instructions (not loaded)
+APPEND_SYSTEM.md     additions to pi's system prompt
+permissions.json     allow / ask / deny rules for the permissions extension
+checkpoints.json     working-tree snapshot and restore settings
+features.json        one switch per feature this config adds
+keybindings.json     key assignments
+themes/              Claude palette, light and dark
+hooks.json           shell hooks bound to lifecycle events
+hooks.example.json   worked hook examples to copy from
+agents/              subagent definitions, one Markdown file each
+extensions/          TypeScript extensions
+lib/                 shared helpers the extensions import
+prompts/             slash-command templates
+skills/              on-demand instruction packages
+docs/                parity notes
+```
 
 ## Whose preferences
 
@@ -156,17 +253,6 @@ limit. It is an upgrade, never a requirement.
 The only external programs anything here calls are `git` (checkpoints and the status line, which
 report and carry on if it is missing) and `pi` itself (subagents). `hooks.json` ships empty;
 `hooks.example.json` is reference material and runs nothing until you copy from it.
-
-## Using it
-
-pi reads its user configuration from `~/.pi/agent`. Point that at this checkout — either by
-symlinking it, or by setting `PI_CODING_AGENT_DIR` to this directory when you launch pi:
-
-```sh
-PI_CODING_AGENT_DIR=/path/to/this/repo pi
-```
-
-Run `/reload` inside a session after editing settings, instructions, or any resource.
 
 ## Caveats
 

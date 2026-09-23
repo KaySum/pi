@@ -173,6 +173,12 @@ Run `/reload` inside a session after editing settings, instructions, or any reso
 The extensions here are written against pi's documented `ExtensionAPI` but have not been
 executed against a pi install. Treat them as a starting point to verify, not as tested code.
 
+## Contributing
+
+Commit messages in this repository follow
+[Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`, imperative
+and lowercase after the colon, with the body explaining *why*. `git log` is the reference.
+
 ## License
 
 MIT

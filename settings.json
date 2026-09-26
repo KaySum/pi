@@ -5,5 +5,8 @@
   "defaultModel": "gpt-6-luna",
   "enableInstallTelemetry": false,
   "tuiMode": "fullscreen",
-  "editorPaddingX": 1
+  "editorPaddingX": 1,
+  "packages": [
+    "npm:pi-web-access"
+  ]
 }

@@ -8,6 +8,7 @@
   "editorPaddingX": 1,
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-todo",
     "npm:@narumitw/pi-usage",
     "npm:billion-context",
     "npm:context-mode",

@@ -1,6 +1,6 @@
 {
   "tui.select.down": ["down", "ctrl+n"],
   "tui.select.up": ["up", "ctrl+p"],
-  "tui.altScreen.halfPageDown": "ctrl+d",
-  "tui.altScreen.halfPageUp": "ctrl+u"
+  "tui.altScreen.halfPageDown": ["ctrl+d", "alt+d"],
+  "tui.altScreen.halfPageUp": "alt+u"
 }

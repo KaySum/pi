@@ -18,6 +18,17 @@ node ~/.pi/agent/scripts/sync-packages.mjs
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.
 
+## Session cleanup
+
+The local `extensions/session-cleanup/` extension expires inactive sessions after
+30 days and cleans configured plugin metadata for manually deleted transcripts.
+It runs only at session start or by explicit command—never by polling. Edit `session-cleanup.json` to change retention or add declarative
+file, SQLite, or command cleanup rules—no extension code changes needed.
+
+Run `/session-cleanup preview` to inspect candidates. See
+[configuration, safety limits, and plugin coverage](extensions/session-cleanup/README.md).
+Reload all running Pi instances before relying on active-session protection.
+
 ## Update and sync extensions
 
 Update the versions of configured extensions with:

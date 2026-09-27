@@ -7,6 +7,7 @@
   "tuiMode": "fullscreen",
   "editorPaddingX": 1,
   "packages": [
+    "npm:billion-context",
     "npm:pi-web-access"
   ]
 }

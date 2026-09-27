@@ -6,6 +6,7 @@
   "enableInstallTelemetry": false,
   "tuiMode": "fullscreen",
   "editorPaddingX": 1,
+  "treeFilterMode": "no-tools",
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@juicesharp/rpiv-todo",

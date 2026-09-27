@@ -22,6 +22,31 @@ function runPi(args) {
   if (result.status !== 0) fail(`pi ${args.join(" ")} failed with exit code ${result.status}`);
 }
 
+async function uninstallPi(source) {
+  const result = spawnSync("pi", ["uninstall", source], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) fail(`could not run pi: ${result.error.message}`);
+  if (result.status === 0) {
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    return;
+  }
+
+  // Pi may remove the physical npm/git install successfully but exit nonzero
+  // when the source was already removed manually from settings.json.
+  const remaining = [...(await discoverNpmPackages()), ...(await discoverGitPackages())];
+  if (!remaining.some((installedSource) => packageKey(installedSource) === packageKey(source))) {
+    console.log(`Removed ${source}; it was already absent from settings.json.`);
+    return;
+  }
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  fail(`pi uninstall ${source} failed with exit code ${result.status}`);
+}
+
 function sourceOf(entry) {
   const source = typeof entry === "string" ? entry : entry?.source;
   if (typeof source !== "string" || source.length === 0) {
@@ -105,6 +130,6 @@ if (dryRun) {
   process.exit(0);
 }
 
-for (const source of toRemove) runPi(["uninstall", source]);
+for (const source of toRemove) await uninstallPi(source);
 for (const source of toInstall) runPi(["install", source]);
 console.log("Pi packages now match settings.json.");

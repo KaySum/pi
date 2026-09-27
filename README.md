@@ -1,0 +1,47 @@
+# Pi configuration
+
+## Initial setup
+
+Install Pi, then clone this repository as its personal configuration directory:
+
+```sh
+mkdir -p ~/.pi
+git clone https://github.com/KaySum/pi.git ~/.pi/agent
+```
+
+Install the extensions declared in `settings.json` using the sync command:
+
+```sh
+node ~/.pi/agent/scripts/sync-packages.mjs
+```
+
+Then start Pi and sign in to your model provider. Credentials are stored locally
+and are not included in this repository.
+
+## Update and sync extensions
+
+Update the versions of configured extensions with:
+
+```sh
+pi update --extensions
+```
+
+To reconcile installed packages with the list in `settings.json`, run the sync
+command. It uses `pi install` for missing packages and `pi uninstall` for
+packages absent from the configured list:
+
+```sh
+node ~/.pi/agent/scripts/sync-packages.mjs
+```
+
+Preview actions without changing packages or files:
+
+```sh
+node ~/.pi/agent/scripts/sync-packages.mjs --dry-run
+```
+
+The script checks Pi's actual user install inventory: direct npm packages in
+`~/.pi/agent/npm/package.json` that have installed package files, plus
+Pi-managed git package checkouts. It uses Pi's `install`/`uninstall` commands to
+reconcile that inventory with `settings.json`; it does not run `npm install` or
+rewrite the npm lockfile.

@@ -8,6 +8,7 @@
   "editorPaddingX": 1,
   "packages": [
     "npm:billion-context",
+    "npm:context-mode",
     "npm:pi-background-tasks",
     "npm:pi-web-access"
   ]

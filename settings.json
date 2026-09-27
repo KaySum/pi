@@ -10,6 +10,7 @@
     "npm:billion-context",
     "npm:context-mode",
     "npm:pi-background-tasks",
+    "npm:pi-powerline-footer",
     "npm:pi-web-access"
   ]
 }

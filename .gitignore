@@ -25,3 +25,5 @@ node_modules/
 
 # Keep settings.json, themes/, extensions/, skills/, prompts/, and
 # instruction files tracked. Never put API keys in tracked configuration.
+
+/state

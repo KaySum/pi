@@ -15,6 +15,7 @@
     "npm:context-mode",
     "npm:pi-background-tasks",
     "npm:pi-cc-extensions",
-    "npm:pi-web-access"
+    "npm:pi-web-access",
+    "npm:pi-workspace-history"
   ]
 }

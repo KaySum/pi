@@ -14,7 +14,6 @@
     "npm:context-mode",
     "npm:pi-background-tasks",
     "npm:pi-cc-extensions",
-    "npm:pi-powerline-footer",
     "npm:pi-web-access"
   ]
 }

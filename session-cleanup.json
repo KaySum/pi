@@ -4,6 +4,24 @@
   "sessionRoots": ["{agentDir}/sessions"],
   "rules": [
     {
+      "name": "background-task-artifacts",
+      "type": "paths",
+      "root": "{cwd}/.pi/tasks",
+      "patterns": ["{sessionId}-*"]
+    },
+    {
+      "name": "delegate-artifacts",
+      "type": "paths",
+      "root": "{cwd}/.pi/delegate",
+      "patterns": ["{sessionId}-*"]
+    },
+    {
+      "name": "fusion-artifacts",
+      "type": "paths",
+      "root": "{cwd}/.pi/fusion",
+      "patterns": ["{sessionId}-*"]
+    },
+    {
       "name": "workspace-history",
       "type": "paths",
       "root": "{agentDir}/state/workspace-history/workspaces",

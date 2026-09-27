@@ -24,6 +24,43 @@ async function fixture(t, extra = {}) {
   return { root, cleaner, add, present, config };
 }
 
+test('configured background artifact rules follow parent deletion and expiration', async t => {
+  const defaults = JSON.parse(await fs.readFile(new URL('../../session-cleanup.json', import.meta.url), 'utf8'));
+  const names = ['background-task-artifacts', 'delegate-artifacts', 'fusion-artifacts'];
+  const rules = defaults.rules.filter(rule => names.includes(rule.name));
+  assert.equal(rules.length, 3);
+  for (const mode of ['manual', 'expired']) {
+    const { root, cleaner, add, present } = await fixture(t, { rules, retentionDays: mode === 'expired' ? 30 : null });
+    const id = '11111111-1111-1111-1111-111111111111';
+    const sibling = '22222222-2222-2222-2222-222222222222';
+    const p = await add(id); await add(sibling);
+    const targets = [], survivors = [];
+    for (const kind of ['tasks', 'delegate', 'fusion']) {
+      for (const session of [id, sibling, 'uninventoried']) {
+        for (const pid of ['123', '456']) {
+          const target = path.join(root, '.pi', kind, `${session}-${pid}`);
+          await fs.mkdir(path.join(target, 'nested'), { recursive: true });
+          await fs.writeFile(path.join(target, 'nested', 'artifact'), 'owned');
+          (session === id ? targets : survivors).push(target);
+        }
+      }
+    }
+    await cleaner.run();
+    for (const target of targets) assert.equal(await present(target), true);
+    if (mode === 'manual') await fs.unlink(p);
+    else { const old = new Date(Date.now() - 31 * 86400000); await fs.utimes(p, old, old); }
+    const preview = await cleaner.run({ dryRun: true });
+    assert.deepEqual(preview.errors, []);
+    assert.equal(preview.preview.filter(entry => names.includes(entry.rule)).length, 3);
+    for (const target of targets) assert.equal(await present(target), true);
+    const report = await cleaner.run();
+    assert.deepEqual(report.errors, []); assert.deepEqual(report.cleaned, [id]);
+    for (const target of targets) assert.equal(await present(target), false);
+    for (const target of survivors) assert.equal(await present(target), true);
+    for (const kind of ['tasks', 'delegate', 'fusion']) assert.equal(await present(path.join(root, '.pi', kind)), true);
+  }
+});
+
 test('manual deletion applies rules, preserves siblings, and removes completed records', async t => {
   const { root, cleaner, add, present } = await fixture(t);
   const p = await add('a'); await add('b');

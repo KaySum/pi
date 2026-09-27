@@ -94,11 +94,12 @@ Commands run **without a shell**, with literal argument substitution. They also 
 
 The repository's `session-cleanup.json` includes:
 
+- **Background tasks, delegates, and Fusion:** `{cwd}/.pi/tasks/{sessionId}-*`, `{cwd}/.pi/delegate/{sessionId}-*`, and `{cwd}/.pi/fusion/{sessionId}-*`, including logs, snapshots, reports, and nested child-session files. All process-suffixed directories belonging to the parent session are removed together. These follow parent-session deletion/expiration, not artifact age. There is no child-task liveness guard: manually deleting the parent can remove artifacts of still-running children. Active parent-session leases still protect cleanup. Only the transcript's recorded project directory is searched; moved projects or artifacts in other working directories need configuration. Existing untracked orphans are not swept.
 - **Workspace history:** session subtrees only, guarded by `active-session.json`; shared workspace repositories/logs remain. Change the root if the plugin uses custom `storageDir`.
 - **Context-mode:** session events/resume/meta/tool counters and session-attributed FTS chunks, using its transcript-path hash rather than Pi UUID. Shared databases, untagged knowledge, vocabulary/source metadata, project event Markdown, and stats remain. Change the roots if using `CONTEXT_MODE_DIR`. These are targeted row deletions, not a whole-project purge.
 - **Todo/questionnaire transcript data:** disappears with the transcript; there is no separate owned database to delete. Unattributable crash-leftover editor temp files are not guessed at.
 
-No blanket deletion of `.pi`, shared caches, plugin configuration, credentials, or project output files is performed. Web-access caches are shared/referenced by forks and already have a one-hour TTL; cleanup leaves them to that plugin. Background-task and billion-context data must not be removed with naive session-ID globs: running task ownership and proxy conversation/reference lifecycles need a safe adapter.
+No blanket deletion of `.pi`, shared caches, plugin configuration, credentials, or project output files is performed. Web-access caches are shared/referenced by forks and already have a one-hour TTL; cleanup leaves them to that plugin. Billion-context data remains excluded: proxy conversation/reference lifecycles need a safe adapter.
 
 ## Recovery and safety limits
 

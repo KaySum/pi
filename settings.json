@@ -1,6 +1,6 @@
 {
   "lastChangelogVersion": "0.87.1",
-  "theme": "dark",
+  "theme": "TokyoNight Moon",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-luna",
   "enableInstallTelemetry": false,

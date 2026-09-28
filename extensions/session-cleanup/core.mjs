@@ -76,17 +76,23 @@ export async function noSymlinks(p) {
   }
   return true;
 }
-export async function matches(root, patterns, vars) {
+export async function matches(root, patterns, vars, knownSessionIds = []) {
   root = expand(root, vars);
   if (!path.isAbsolute(root)) throw Error(`Rule root must be absolute: ${root}`);
   if (!await noSymlinks(root)) return [];
   const found = new Set();
   for (const pattern of patterns) {
+    const rawSegments = pattern.split('/');
     const segments = expand(pattern, vars).split('/');
     if (segments.some(s => !s || s === '..' || s === '.')) throw Error('Unsafe expanded pattern');
     let parents = [root];
-    for (const segment of segments) {
+    for (const [index, segment] of segments.entries()) {
       const next = [];
+      // A delimiter is not an ownership boundary when IDs themselves contain '-'.
+      // Prefer the longer known identity, even if its transcript has been deleted.
+      const competingIds = rawSegments[index] === '{sessionId}-*'
+        ? [...knownSessionIds].filter(id => id.startsWith(`${vars.sessionId}-`))
+        : [];
       const re = new RegExp('^' + segment.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
       for (const parent of parents) {
         if (!await noSymlinks(parent)) continue;
@@ -94,6 +100,7 @@ export async function matches(root, patterns, vars) {
         if (!info.isDirectory()) continue;
         for (const entry of await fs.readdir(parent, { withFileTypes: true })) {
           if (!re.test(entry.name)) continue;
+          if (competingIds.some(id => entry.name === id || entry.name.startsWith(`${id}-`))) continue;
           if (entry.isSymbolicLink()) throw Error(`Refusing symlink: ${path.join(parent, entry.name)}`);
           next.push(path.join(parent, entry.name));
         }
@@ -134,13 +141,13 @@ export async function runCommand(command, args, input, timeoutMs = 30000) {
   });
 }
 
-export async function applyRule(rule, record, vars, dryRun = false) {
+export async function applyRule(rule, record, vars, dryRun = false, knownSessionIds = []) {
   if (rule.type === 'command') {
     const command = expand(rule.command, vars), args = rule.args.map(a => expand(a, vars));
     if (!dryRun) await runCommand(command, args, { ...record, agentDir: vars.agentDir }, (rule.timeoutSeconds ?? 30) * 1000);
     return [`command ${rule.name}`];
   }
-  const targets = await matches(rule.root, rule.patterns, vars);
+  const targets = await matches(rule.root, rule.patterns, vars, knownSessionIds);
   for (const target of targets) {
     for (const g of rule.guards ?? []) {
       const leasePath = path.join(target, g.file);
@@ -253,66 +260,84 @@ export class Cleaner {
     try {
       await atomicJson(path.join(lock, 'owner.json'), { pid: process.pid });
       const statePath = path.join(this.stateDir, 'inventory.json');
-      const state = await readJson(statePath, { version: 1, records: {} });
-      if (state.version !== 1 || !state.records || typeof state.records !== 'object') throw Error('Invalid cleanup inventory');
+      const saved = await readJson(statePath, { version: 2, records: {} });
+      if (!saved || ![1, 2].includes(saved.version) || !saved.records || typeof saved.records !== 'object' || Array.isArray(saved.records)) throw Error('Invalid cleanup inventory');
+      // Version 1 keyed only by path, losing pending work when a path was reused.
+      // Include cwd as well: the same ID can have artifacts in multiple projects.
+      const identityKey = r => hash(JSON.stringify([r.path, r.id, r.cwd]));
+      const state = { version: 2, records: {} };
+      for (const r of Object.values(saved.records)) {
+        if (!r || typeof r.id !== 'string' || !sessionId.test(r.id) || typeof r.path !== 'string' || !path.isAbsolute(r.path) || typeof r.cwd !== 'string' || !path.isAbsolute(r.cwd) || !Array.isArray(r.done) || !r.done.every(s => typeof s === 'string')) throw Error('Invalid inventory record');
+        state.records[identityKey(r)] = r;
+      }
       const baseVars = { agentDir: this.agentDir, home: os.homedir(), node: process.execPath };
       const roots = config.sessionRoots.map(r => path.resolve(expand(r, baseVars)));
       const live = await scan(roots); // Incomplete inventories must never trigger cleanup.
-      const active = await this.activePaths();
-      const liveIds = new Set([...live.values()].map(r => r.id));
-      for (const [p, r] of live) {
-        // A restored transcript may have recreated previously cleaned metadata.
-        state.records[hash(p)] = { ...r, done: [] };
+      for (const r of live.values()) {
+        // A restored identity may have recreated previously cleaned metadata.
+        // Other identities at this pathname retain their pending rule journal.
+        state.records[identityKey(r)] = { ...r, done: [] };
       }
-      // Journal the identity BEFORE deleting a transcript, including on first run.
+      // Keep the full identity snapshot even after individual records complete.
+      const records = Object.values(state.records);
+      const knownIds = new Set(records.map(r => r.id));
+      const rules = config.rules.filter(r => r.enabled !== false);
+      const inScope = r => roots.some(root => {
+        const relative = path.relative(root, r.path);
+        return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      });
+      const variables = r => ({ ...baseVars, sessionId: r.id, sessionFile: r.path, sessionPathHash16: hash(r.path).slice(0, 16), cwd: r.cwd });
+      const leased = async (r, current = live) => {
+        const active = await this.activePaths();
+        return active.has(r.path) || [...records, ...current.values()].some(other => other.id === r.id && active.has(other.path));
+      };
+      // Journal every identity BEFORE deleting any transcript, including on first run.
       if (!dryRun) await atomicJson(statePath, state);
-      for (const [key, r] of Object.entries(state.records)) {
-        if (typeof r.id !== 'string' || !sessionId.test(r.id) || typeof r.path !== 'string' || !path.isAbsolute(r.path) || typeof r.cwd !== 'string' || !path.isAbsolute(r.cwd) || !Array.isArray(r.done)) throw Error('Invalid inventory record');
-        if (!roots.some(root => r.path.startsWith(root + path.sep))) continue;
-        if (active.has(r.path) || [...live.values()].some(other => other.id === r.id && active.has(other.path))) continue;
+      const simulated = new Set();
+      // Expire first, then reconcile all identities. Earlier copies must not be
+      // forgotten just because a later copy of the same ID still awaited expiration.
+      for (const r of [...live.values()]) {
+        if (!inScope(r) || config.retentionDays === null || now - r.mtimeMs < config.retentionDays * DAY) continue;
         try {
-          if (live.has(r.path)) {
-            if (config.retentionDays === null || now - r.mtimeMs < config.retentionDays * DAY) continue;
-            if (dryRun) {
-              report.preview.push({ session: r.path, reason: 'expired' });
-              live.delete(r.path); // Simulate deletions so duplicate-ID plans match a real scan.
-              const vars = { ...baseVars, sessionId: r.id, sessionFile: r.path, sessionPathHash16: hash(r.path).slice(0, 16), cwd: r.cwd };
-              if (![...live.values()].some(other => other.id === r.id && other.path !== r.path)) {
-                for (const rule of config.rules.filter(r => r.enabled !== false)) report.preview.push({ session: r.path, rule: rule.name, targets: await applyRule(rule, r, vars, true) });
-              }
-              continue;
-            }
-            // Check configured metadata leases before expiring the transcript too.
-            const vars = { ...baseVars, sessionId: r.id, sessionFile: r.path, sessionPathHash16: hash(r.path).slice(0, 16), cwd: r.cwd };
-            for (const rule of config.rules.filter(r => r.enabled !== false && r.type === 'paths')) await applyRule(rule, r, vars, true);
-            // Recheck modification and leases immediately before removal.
-            const stat = await fs.stat(r.path);
-            if (stat.mtimeMs !== r.mtimeMs || (await this.activePaths()).has(r.path)) continue;
-            await noSymlinks(r.path);
+          if (await leased(r)) continue;
+          // Preview uses exactly the same metadata-lease preflight as execution.
+          for (const rule of rules.filter(r => r.type === 'paths')) await applyRule(rule, r, variables(r), true, knownIds);
+          const stat = await fs.stat(r.path);
+          if (stat.mtimeMs !== r.mtimeMs || await leased(r)) continue;
+          await noSymlinks(r.path);
+          if (dryRun) {
+            report.preview.push({ session: r.path, reason: 'expired' });
+            simulated.add(r.path);
+          } else {
             await this.removeTranscript(r.path);
             if (await exists(r.path)) throw Error('Transcript still exists after deletion');
-            live.delete(r.path);
-            if (![...live.values()].some(other => other.id === r.id)) liveIds.delete(r.id);
             report.expired.push(r.path);
-          } else if (await exists(r.path)) {
-            // Malformed/replaced transcript is not evidence of deletion.
-            continue;
           }
-          if (liveIds.has(r.id)) continue;
-          if ((await this.activePaths()).has(r.path) || await exists(r.path)) continue;
-          const vars = { ...baseVars, sessionId: r.id, sessionFile: r.path, sessionPathHash16: hash(r.path).slice(0, 16), cwd: r.cwd };
-          let failed = false;
+          live.delete(r.path);
+        } catch (e) { report.errors.push(`${r.path}: ${e.message}`); }
+      }
+      const remainingIds = new Set([...live.values()].map(r => r.id));
+      for (const [key, r] of Object.entries(state.records)) {
+        if (!inScope(r) || remainingIds.has(r.id)) continue;
+        try {
+          if (!simulated.has(r.path) && await exists(r.path)) continue;
           const protectedNow = async () => {
-            if ((await this.activePaths()).has(r.path) || (!dryRun && await exists(r.path))) return true;
-            if (!dryRun && [...(await scan(roots)).values()].some(other => other.id === r.id)) return true;
-            return false;
+            const current = dryRun ? live : await scan(roots);
+            for (const other of current.values()) knownIds.add(other.id);
+            if (await leased(r, current)) return true;
+            // A reused/malformed pathname may still own path-keyed metadata.
+            if (!simulated.has(r.path) && await exists(r.path)) return true;
+            return [...current.values()].some(other => other.id === r.id);
           };
-          for (const rule of config.rules.filter(r => r.enabled !== false)) {
+          if (await protectedNow()) continue;
+          const vars = variables(r);
+          let failed = false;
+          for (const rule of rules) {
             const signature = hash(JSON.stringify(rule));
             if (r.done.includes(signature)) continue;
             try {
               if (await protectedNow()) { failed = true; break; }
-              const targets = await applyRule(rule, r, vars, dryRun);
+              const targets = await applyRule(rule, r, vars, dryRun, knownIds);
               if (dryRun) report.preview.push({ session: r.path, rule: rule.name, targets });
               else { r.done.push(signature); await atomicJson(statePath, state); }
             } catch (e) { failed = true; report.errors.push(`${r.id} / ${rule.name}: ${e.message}`); }

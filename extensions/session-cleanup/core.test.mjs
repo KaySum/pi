@@ -209,7 +209,8 @@ test('preview accounts for two expired copies of one session ID', async t => {
   for (const filename of ['first.jsonl', 'second.jsonl']) { const p = await add('a', filename); await fs.utimes(p, old, old); }
   const report = await cleaner.run({ dryRun: true });
   assert.equal(report.preview.filter(p => p.reason === 'expired').length, 2);
-  assert.equal(report.preview.filter(p => p.rule === 'files').length, 1);
+  // Reconcile both path identities, including cwd/path-hash-specific rules.
+  assert.equal(report.preview.filter(p => p.rule === 'files').length, 2);
 });
 
 test('a lease published during a command protects against subsequent rules', async t => {

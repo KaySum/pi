@@ -30,7 +30,7 @@ Commands:
 
 Manual deletion is **eventually consistent**, not atomic: it is observed on the next session start or `/session-cleanup run`. Associated metadata is cleaned during that same run, without an extra delay. Failed cleanup retries wait for another session-start or explicit run; no timer is scheduled. The built-in selector itself is unchanged. Before a session has ever been inventoried, its deletion cannot be associated with external metadata. Existing orphans are deliberately not guessed at.
 
-A matching session ID still present elsewhere in the configured inventory blocks metadata cleanup. Include **all** custom session roots to make that protection meaningful. A missing/unreadable root pauses the entire scan. Invalid transcripts are preserved, not assumed deleted. Custom IDs must contain only ASCII letters, digits, `_`, `-`, start with a letter/digit, and be at most 200 characters.
+A matching session ID still present elsewhere in the configured inventory blocks metadata cleanup. A live lease on any inventoried copy also protects every copy's metadata, even after its transcript is manually deleted. Include **all** custom session roots to make that protection meaningful. A missing/unreadable root pauses the entire scan. Invalid transcripts are preserved, not assumed deleted. Custom IDs must contain only ASCII letters, digits, `_`, `-`, start with a letter/digit, and be at most 200 characters.
 
 ## Add an extension without changing code
 
@@ -57,7 +57,7 @@ Session roots accept only the first three variables. Metadata rules accept all o
 }
 ```
 
-Patterns are root-relative and support `*` within a single path segment, not `**`. A path rule must contain an exact `{sessionId}` segment, a session filename such as `{sessionId}.json`, or a `{sessionId}-*` segment. `..`, absolute patterns, and symbolic links are refused. Only matched subtrees are removed; roots/shared parents remain.
+Patterns are root-relative and support `*` within a single path segment, not `**`. A path rule must contain an exact `{sessionId}` segment, a session filename such as `{sessionId}.json`, or a `{sessionId}-*` segment. For `{sessionId}-*`, longer known IDs take precedence: cleaning `a` excludes `a-b` and `a-b-*` when `a-b` is in the live scan or pending inventory. Keep all relevant session roots configured; ownership of never-inventoried sessions cannot be inferred. `..`, absolute patterns, and symbolic links are refused. Only matched subtrees are removed; roots/shared parents remain.
 
 Optional guards read a JSON file directly inside each matched target. A live/unknown PID or malformed lease blocks cleanup (and automatic expiration of that transcript). A missing guard file means no lease; a dead PID permits cleanup. PID reuse conservatively delays removal. Use a command adapter instead if a plugin has more complicated liveness or ownership semantics.
 
@@ -103,7 +103,9 @@ No blanket deletion of `.pi`, shared caches, plugin configuration, credentials, 
 
 ## Recovery and safety limits
 
-State lives in `<agent-dir>/state/session-cleanup/`: an identity inventory, per-process active leases, and a cross-process lock. The inventory contains paths/IDs/cwd, **not conversation contents**. Completed records are removed. Newly added rules apply to future/pending cleanups, not already forgotten sessions.
+State lives in `<agent-dir>/state/session-cleanup/`: an identity inventory, per-process active leases, and a cross-process lock. The inventory contains paths/IDs/cwd, **not conversation contents**. Version 1 inventories migrate automatically to version 2 on a non-preview run. Identities are keyed by transcript path, session ID, and recorded cwd, so reusing a pathname does not overwrite pending cleanup. Old identities remain deferred while that pathname exists, protecting path-keyed metadata belonging to its replacement. Reload all running instances after upgrading; old code cannot read version 2 inventories.
+
+Expiration is a separate phase before metadata reconciliation, so all expired copies can have their metadata cleaned during the same run. Preview uses the same expiration guards and lists metadata operations per identity (shared targets may appear more than once); it does not execute commands, delete metadata, or migrate/write the inventory. Completed records are removed. Newly added rules apply to future/pending cleanups, not already forgotten sessions.
 
 Expiration tries Pi's `trash` command and falls back to unlink. **Metadata deletion is permanent**, even if the transcript went to Trash. Restoring that transcript later will not restore deleted plugin history. Preview first; set `retentionDays` to `null` to disable expiration.
 

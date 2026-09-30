@@ -27,8 +27,3 @@ node_modules/
 # instruction files tracked. Never put API keys in tracked configuration.
 
 /state
-
-# Local background task artifacts (may contain conversation snapshots)
-/.pi/tasks/
-/.pi/delegate/
-/.pi/fusion/

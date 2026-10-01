@@ -9,7 +9,6 @@
   "treeFilterMode": "no-tools",
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:@juicesharp/rpiv-todo",
     "npm:@narumitw/pi-btw",
     "npm:@narumitw/pi-usage",
     "npm:pi-cc-extensions",

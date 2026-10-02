@@ -69,36 +69,64 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", (_event, ctx) => {
-    if (!policy.enabled || compactionRequested) return;
+    // Observe the low-water mark, but never interrupt an operation to compact.
+    if (!policy.enabled || armed || compactionRequested) return;
+    const usage = ctx.getContextUsage();
+    if (
+      usage &&
+      usage.tokens !== null &&
+      usage.contextWindow > 0 &&
+      usage.tokens / usage.contextWindow <= policy.compactAgainWhenBelowContextRatio
+    ) {
+      armed = true;
+    }
+  });
+
+  pi.on("input", async (event, ctx) => {
+    // Steering/follow-ups belong to the active operation, not a new user request.
+    if (event.source === "extension" || event.streamingBehavior || !ctx.isIdle()) {
+      return { action: "continue" };
+    }
+    if (!policy.enabled || compactionRequested) return { action: "continue" };
 
     const usage = ctx.getContextUsage();
-    if (!usage || usage.tokens === null || usage.contextWindow <= 0) return;
+    if (!usage || usage.tokens === null || usage.contextWindow <= 0) return { action: "continue" };
 
     const ratio = usage.tokens / usage.contextWindow;
     if (!armed) {
       if (ratio <= policy.compactAgainWhenBelowContextRatio) armed = true;
-      else return;
+      else return { action: "continue" };
     }
-    if (ratio < policy.compactAtContextRatio || usage.tokens < policy.minContextTokens) return;
+    if (ratio < policy.compactAtContextRatio || usage.tokens < policy.minContextTokens) {
+      return { action: "continue" };
+    }
 
     armed = false;
     compactionRequested = true;
     if (policy.notify) {
       ctx.ui.notify(
-        `Context is ${(ratio * 100).toFixed(0)}% full; compacting at ${(policy.compactAtContextRatio * 100).toFixed(0)}%.`,
+        `Context is ${(ratio * 100).toFixed(0)}% full; compacting before processing your message.`,
         "info",
       );
     }
-    ctx.compact({
-      customInstructions: policy.customInstructions || undefined,
-      onComplete: () => {
-        compactionRequested = false;
-      },
-      onError: (error) => {
-        compactionRequested = false;
-        if (policy.notify) ctx.ui.notify(`Automatic compaction failed: ${error.message}`, "warning");
-      },
-    });
+    try {
+      // compact() is fire-and-forget; hold the original input until it finishes.
+      await new Promise<void>((resolve, reject) => {
+        ctx.compact({
+          customInstructions: policy.customInstructions || undefined,
+          onComplete: () => resolve(),
+          onError: reject,
+        });
+      });
+    } catch (error) {
+      if (policy.notify) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Automatic compaction failed: ${message}`, "warning");
+      }
+    } finally {
+      compactionRequested = false;
+    }
+    return { action: "continue" };
   });
 
   pi.registerCommand("proactive-compaction", {

@@ -18,6 +18,16 @@ node ~/.pi/agent/scripts/sync-packages.mjs
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.
 
+## Pi-owned Neovim
+
+`extensions/nvim-service/` starts a private headless Neovim for each Pi runtime.
+An independent supervisor cleans it up even if Pi crashes or is killed, including
+when Neovim is unresponsive. Run `/reload` to activate and `/nvim-service` to
+inspect it. Other extensions can use `PI_NVIM_SOCKET` or its discovery events;
+your editor's `$NVIM` is unchanged.
+
+See [configuration, extension API, and shutdown guarantees](extensions/nvim-service/README.md).
+
 ## Session cleanup
 
 The local `extensions/session-cleanup/` extension expires inactive sessions after

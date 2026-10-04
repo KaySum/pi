@@ -88,8 +88,9 @@ Neovim tools or connect existing tools to it automatically.
 
 ### Shared consumer library
 
-`client.mjs`, `rpc.mjs`, `discovery.mjs`, and `buffers.lua` provide shared
-consumer infrastructure used by [diagnostics](../nvim-diagnostics/README.md):
+`client.mjs`, `rpc.mjs`, `discovery.mjs`, `buffers.lua`, and `positions.mjs` provide
+the infrastructure used by [diagnostics](../nvim-diagnostics/README.md) and
+[semantic tools](../nvim-semantic/README.md):
 
 - Lazy, identity-verified socket clients; readiness/stopped discovery and cleanup.
 - One process-wide request queue per service, including queue-time deadlines and
@@ -98,7 +99,7 @@ consumer infrastructure used by [diagnostics](../nvim-diagnostics/README.md):
   active-request leases. No forced overwrite of modified buffers or source saves.
 - Cache eviction only for old owned, hidden, unlisted, unmodified buffers; a
   target of 128 entries, with protected buffers allowed to exceed it.
-- Bounded private report files.
+- Strict LSP encoding-to-byte conversion and bounded private report files.
 
 The shared cache retains the historical `pi_nvim_diagnostics_owned` buffer
 variable as its ownership marker. Mark adopted buffers listed or clear that
@@ -151,8 +152,8 @@ node --test --test-timeout=15000 extensions/nvim-service/*.test.mjs
 Pi supplies extension imports through its loader. For standalone type-checking,
 the sibling tsconfigs resolve the optional development dependencies installed by
 `npm --prefix extensions/nvim-diagnostics ci --ignore-scripts`. Run
-`npm --prefix extensions/nvim-diagnostics run typecheck` to check the service and
-diagnostics extensions. Development typings are not needed by the process manager or by
+`npm --prefix extensions/nvim-diagnostics run typecheck` to check all three Neovim
+extensions. Development typings are not needed by the process manager or by
 Pi's runtime loader.
 
 Tests use `-u NONE` or temporary init files, not your interactive Neovim or its

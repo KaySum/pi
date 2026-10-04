@@ -35,6 +35,11 @@ with explicit coverage/freshness status. Modified service buffers are never
 overwritten; missing providers and timeouts are not presented as clean results.
 See [setup, tool parameters, limits, and tests](extensions/nvim-diagnostics/README.md).
 
+`extensions/nvim-semantic/` adds read-only `nvim_navigate`, `nvim_hover`, and
+`nvim_symbols` tools for LSP navigation, type inspection, and file/workspace
+symbol search. It shares RPC, disk refresh, request serialization, and buffer
+leases with diagnostics—no extra Neovim. See [parameters and coverage limits](extensions/nvim-semantic/README.md).
+
 ## Session cleanup
 
 The local `extensions/session-cleanup/` extension expires inactive sessions after

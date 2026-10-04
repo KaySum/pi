@@ -8,7 +8,7 @@ use `$NVIM`, or connect to your interactive Neovim.
 
 Requires `nvim-service`, Node.js 22.19+, and Neovim 0.11+ (tested with 0.12.5).
 Install the shared runtime dependency, the MessagePack codec (now housed in
-`nvim-service`):
+`nvim-service`, also used by `nvim-semantic`):
 
 ```sh
 npm --prefix ~/.pi/agent/extensions/nvim-service ci --ignore-scripts
@@ -130,8 +130,8 @@ are lazy and verify the service PID/ownership marker/socket before loading Lua.
 No resources start during registration, and discovery never blocks an earlier
 `session_start` handler waiting for a later one.
 
-Calls are serialized by the shared service client library, which also manages
-the buffer cache and active-request leases.
+Calls are serialized across diagnostics and semantic consumers using the shared
+service client library. Both use the same buffer cache and active-request leases.
 Cancellation, shutdown, and service replacement reject
 outstanding work, release RPC resources, and cancel request-local work. Lua has
 a deadline fallback (one second beyond the call deadline) if a connection vanishes.

@@ -110,4 +110,20 @@ function M.state(f)
   if vim.bo[f.entry.buf].modified then return 'buffer_modified' end
   if api.nvim_buf_get_changedtick(f.entry.buf) ~= f.tick then return 'buffer_changed' end
 end
+-- Do not load target files: only inspect already-existing buffers.
+function M.inspect(paths)
+  local results = {}
+  for _, path in ipairs(paths) do
+    local buf, e = find(path), M.entries[path]
+    local out = { path = path, loaded = buf ~= nil and api.nvim_buf_is_loaded(buf) }
+    if out.loaded then
+      out.modified = vim.bo[buf].modified
+      out.hash = e and M.valid(e) and e.tick == api.nvim_buf_get_changedtick(buf) and e.hash or nil
+      out.fileformat = vim.bo[buf].fileformat
+      out.fileencoding = vim.bo[buf].fileencoding
+    end
+    table.insert(results, out)
+  end
+  return results
+end
 return true

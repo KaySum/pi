@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test --test-timeout=15000 *.test.mjs",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p ../nvim-service/tsconfig.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ../nvim-service/tsconfig.json && tsc --noEmit -p ../nvim-semantic/tsconfig.json"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.87.1",

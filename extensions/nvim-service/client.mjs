@@ -21,14 +21,14 @@ export function validatePath(value) {
 }
 
 // Fixed-size reads and O_NONBLOCK prevent an unbounded read or FIFO race.
-export async function fingerprint(path, signal) {
+export async function readDisk(path, signal, maximum = MAX_FILE_BYTES) {
   signal.throwIfAborted();
   const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const before = await file.stat();
     if (!before.isFile()) throw new Error('Not a regular file');
-    if (before.size > MAX_FILE_BYTES) throw new Error('File exceeds the 2 MiB diagnostics limit');
-    const buffer = Buffer.alloc(Math.min(before.size + 1, MAX_FILE_BYTES + 1));
+    if (before.size > Math.min(maximum, MAX_FILE_BYTES)) throw new Error('File exceeds the bounded Neovim read budget (at most 2 MiB per file)');
+    const buffer = Buffer.alloc(Math.min(before.size + 1, maximum + 1, MAX_FILE_BYTES + 1));
     let length = 0;
     while (length < buffer.length) {
       signal.throwIfAborted();
@@ -42,12 +42,14 @@ export async function fingerprint(path, signal) {
     }
     const bytes = buffer.subarray(0, length);
     if (bytes.includes(0)) throw new Error('Binary file (NUL bytes)');
-    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { throw new Error('File is not valid UTF-8 text'); }
     signal.throwIfAborted();
-    return createHash('sha256').update(bytes).digest('hex');
+    return { hash: createHash('sha256').update(bytes).digest('hex'), text, bytes: length };
   } finally { await file.close(); }
 }
+export async function fingerprint(path, signal) { return (await readDisk(path, signal)).hash; }
 
 function abortable(promise, signal) {
   signal.throwIfAborted();

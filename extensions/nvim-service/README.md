@@ -5,7 +5,12 @@ Run **`/reload`** or restart Pi to activate. **`/nvim-service`** shows its PID,
 supervisor PID, working directory, and RPC socket.
 
 Requires **macOS or Linux**, Node.js 22.19+ (as required by Pi), and `nvim` on PATH.
-There are no additional npm, Python, or compiler dependencies.
+The process manager itself has no additional npm, Python, or compiler dependencies.
+Consumers using its shared RPC client need the pinned MessagePack dependency:
+
+```sh
+npm --prefix ~/.pi/agent/extensions/nvim-service ci --ignore-scripts
+```
 
 ## Configuration
 
@@ -81,6 +86,26 @@ resources never start in the extension factory (e.g. during `pi --help`).
 This extension only manages the instance; it does **not** register model-facing
 Neovim tools or connect existing tools to it automatically.
 
+### Shared consumer library
+
+`client.mjs`, `rpc.mjs`, `discovery.mjs`, and `buffers.lua` provide shared
+consumer infrastructure used by [diagnostics](../nvim-diagnostics/README.md):
+
+- Lazy, identity-verified socket clients; readiness/stopped discovery and cleanup.
+- One process-wide request queue per service, including queue-time deadlines and
+  cancellation; unrelated instances do not block each other.
+- Bounded UTF-8 disk reads and content hashes, plus a shared Lua buffer cache with
+  active-request leases. No forced overwrite of modified buffers or source saves.
+- Cache eviction only for old owned, hidden, unlisted, unmodified buffers; a
+  target of 128 entries, with protected buffers allowed to exceed it.
+- Bounded private report files.
+
+The shared cache retains the historical `pi_nvim_diagnostics_owned` buffer
+variable as its ownership marker. Mark adopted buffers listed or clear that
+marker to protect them. Request leases have a deadline fallback if a consumer
+connection disappears. Libraries are inert until used; installing the codec
+alone does not open any buffers or start a second editor.
+
 ## Shutdown and failure handling
 
 ```text
@@ -123,11 +148,12 @@ supervisor's own, unreaped child.
 node --test --test-timeout=15000 extensions/nvim-service/*.test.mjs
 ```
 
-Pi supplies extension imports through its loader; this config repository does
-not install project-local Pi/Node development typings. A standalone editor may
-therefore report missing `@earendil-works/pi-coding-agent` or `@types/node` types.
-For type-checking, resolve those from your installed Pi, or install them as local
-development dependencies. They are not additional runtime dependencies.
+Pi supplies extension imports through its loader. For standalone type-checking,
+the sibling tsconfigs resolve the optional development dependencies installed by
+`npm --prefix extensions/nvim-diagnostics ci --ignore-scripts`. Run
+`npm --prefix extensions/nvim-diagnostics run typecheck` to check the service and
+diagnostics extensions. Development typings are not needed by the process manager or by
+Pi's runtime loader.
 
 Tests use `-u NONE` or temporary init files, not your interactive Neovim or its
 configuration. They cover normal/natural exit, crashes, signals including

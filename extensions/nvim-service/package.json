@@ -1,0 +1,6 @@
+{
+  "name": "pi-nvim-service-client",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@msgpack/msgpack": "3.1.3" }
+}

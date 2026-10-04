@@ -13,7 +13,7 @@ Install the extensions declared in `settings.json` using the sync command:
 
 ```sh
 node ~/.pi/agent/scripts/sync-packages.mjs
-npm --prefix ~/.pi/agent/extensions/nvim-diagnostics ci --omit=dev --ignore-scripts
+npm --prefix ~/.pi/agent/extensions/nvim-service ci --ignore-scripts
 ```
 
 Then start Pi and sign in to your model provider. Credentials are stored locally

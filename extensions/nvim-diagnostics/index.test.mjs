@@ -33,7 +33,8 @@ export async function formatReport(report) { return {text:'diagnostics report',d
 const { clients } = await import(mockURL);
 const source = await readFile(new URL('./index.ts', import.meta.url), 'utf8');
 const { default: register } = await import(dataURL(stripTypeScriptTypes(source)
-  .replace("'./core.mjs'", JSON.stringify(mockURL)).replace("'@earendil-works/pi-ai'", JSON.stringify(typeURL))));
+  .replace("'./core.mjs'", JSON.stringify(mockURL)).replace("'@earendil-works/pi-ai'", JSON.stringify(typeURL))
+  .replace("'../nvim-service/discovery.mjs'", JSON.stringify(new URL('../nvim-service/discovery.mjs', import.meta.url).href))));
 
 function setup(t) {
   const handlers = new Map(), tools = [], events = new EventEmitter();

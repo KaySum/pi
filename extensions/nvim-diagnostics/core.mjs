@@ -1,148 +1,32 @@
-import { constants } from 'node:fs';
-import { open, realpath, readFile, mkdtemp, writeFile } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
-import { resolve, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { realpath } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { connectRpc } from './rpc.mjs';
+import { ServiceClient, fingerprint, validatePath, validateTimeout, errorText, boundedReport } from '../nvim-service/client.mjs';
 
 export const SEVERITIES = ['error', 'warning', 'info', 'hint'];
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const OUTPUT_BYTES = 16384;
 const SETTLE_MS = 400;
 const CALL = 'return _G.__pi_diagnostics_v1[...](select(2, ...))';
 const emptyCounts = () => Object.fromEntries(SEVERITIES.map(s => [s, 0]));
-const errorText = error => error instanceof Error ? error.message : String(error);
 
 export function validateParams(params) {
-  if (!params || !Array.isArray(params.files) || !params.files.length || params.files.length > 32 ||
-      params.files.some(p => typeof p !== 'string' || !p.length || p.length > 4096 || p.includes('\0'))) {
+  if (!params || !Array.isArray(params.files) || !params.files.length || params.files.length > 32 || params.files.some(p => !validatePath(p))) {
     throw new Error('files must contain 1–32 explicit paths (no NUL bytes, up to 4096 characters each)');
   }
   if (params.severities !== undefined && (!Array.isArray(params.severities) || !params.severities.length ||
       params.severities.length > 4 || params.severities.some(s => !SEVERITIES.includes(s)))) {
     throw new Error('severities must contain error, warning, info, or hint');
   }
-  const timeoutMs = params.timeoutMs ?? 10000;
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30000) {
-    throw new Error('timeoutMs must be an integer between 100 and 30000');
-  }
-  return { files: params.files, severities: params.severities ?? SEVERITIES, timeoutMs };
+  return { files: params.files, severities: params.severities ?? SEVERITIES, timeoutMs: validateTimeout(params.timeoutMs) };
 }
 
-// Fixed-size reads, not unbounded readFile(), and O_NONBLOCK against a FIFO race.
-async function fingerprint(path, signal) {
-  signal.throwIfAborted();
-  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  try {
-    const before = await file.stat();
-    if (!before.isFile()) throw new Error('Not a regular file');
-    if (before.size > MAX_FILE_BYTES) throw new Error('File exceeds the 2 MiB diagnostics limit');
-    const buffer = Buffer.alloc(Math.min(before.size + 1, MAX_FILE_BYTES + 1));
-    let length = 0;
-    while (length < buffer.length) {
-      signal.throwIfAborted();
-      const { bytesRead } = await file.read(buffer, length, buffer.length - length, length);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    const after = await file.stat();
-    if (length !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
-      throw new Error('File changed while being read; retry');
-    }
-    const bytes = buffer.subarray(0, length);
-    if (bytes.includes(0)) throw new Error('Binary file (NUL bytes)');
-    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch { throw new Error('File is not valid UTF-8 text'); }
-    signal.throwIfAborted();
-    return createHash('sha256').update(bytes).digest('hex');
-  } finally { await file.close(); }
-}
-
-function abortable(promise, signal) {
-  signal.throwIfAborted();
-  return new Promise((resolvePromise, reject) => {
-    const abort = () => reject(signal.reason);
-    signal.addEventListener('abort', abort, { once: true });
-    promise.then(resolvePromise, reject).finally(() => signal.removeEventListener('abort', abort));
-  });
-}
-
-export class DiagnosticsClient {
-  constructor() {
-    this.service = undefined;
-    this.rpc = undefined;
-    this.generation = new AbortController();
-    this.tail = Promise.resolve();
-  }
-
-  setService(info) {
-    if (this.service?.socket === info?.socket && this.service?.pid === info?.pid) return;
-    this.generation.abort(new Error('Neovim service stopped or changed; retry after it is ready'));
-    this.rpc?.close();
-    this.rpc = undefined;
-    this.service = info;
-    this.generation = new AbortController();
-  }
-
-  close() {
-    this.generation.abort(new Error('Neovim diagnostics session shut down'));
-    this.rpc?.close();
-    this.rpc = undefined;
-    this.service = undefined;
-    this.generation = new AbortController();
-  }
-
-  async connect(signal) {
-    if (this.rpc && !this.rpc.closed) return this.rpc;
-    if (!this.service) throw new Error('Pi-owned Neovim is unavailable. Enable nvim-service and run /reload.');
-    const info = this.service;
-    const rpc = await connectRpc(info.socket, signal);
-    try {
-      const identity = await rpc.request('nvim_exec_lua', [
-        'return {pid=vim.fn.getpid(), owned=vim.env.PI_NVIM_SERVICE, socket=vim.env.PI_NVIM_SOCKET}', [],
-      ], signal);
-      if (identity.pid !== info.pid || identity.owned !== '1' || identity.socket !== info.socket) {
-        throw new Error('Refusing to use a Neovim that does not match the Pi-owned service');
-      }
-      const lua = await readFile(new URL('./diagnostics.lua', import.meta.url), { encoding: 'utf8', signal });
-      await rpc.request('nvim_exec_lua', [lua, []], signal);
-      signal.throwIfAborted();
-      this.rpc = rpc;
-      return rpc;
-    } catch (error) { rpc.close(); throw error; }
-  }
-
+export class DiagnosticsClient extends ServiceClient {
+  constructor() { super(new URL('./diagnostics.lua', import.meta.url)); }
   async diagnose(input, cwd, callerSignal) {
     const params = validateParams(input);
-    const timerController = new AbortController();
-    const deadline = Date.now() + params.timeoutMs;
-    const timeout = new DOMException('Neovim diagnostics deadline exceeded', 'TimeoutError');
-    const timer = setTimeout(() => timerController.abort(timeout), params.timeoutMs);
-    const signal = AbortSignal.any([timerController.signal, this.generation.signal, callerSignal].filter(Boolean));
-    let began = false;
-    const work = this.tail.then(() => {
-      began = true;
-      return this.run(params, cwd, signal, deadline, timerController, callerSignal);
-    });
-    // Calls from the same extension share buffers; include queue time in the deadline.
-    this.tail = work.catch(() => {});
-    try {
-      return await abortable(work, signal);
-    } catch (error) {
-      // run() returns a partial report on its own deadline; give its synchronous
-      // abort handlers/finally a turn to finish. Queued work must never start late.
-      if (signal.reason === timeout && !callerSignal?.aborted) {
-        // A timed-out queued call returns now, not after the preceding call.
-        return began ? await work : await this.run(params, cwd, signal, deadline, timerController, callerSignal);
-      }
-      // Finish active cancellation cleanup before exposing the rejection. Calls
-      // still in the queue can reject immediately without touching Neovim.
-      if (began) await work.catch(() => {});
-      throw error;
-    } finally { clearTimeout(timer); }
+    return this.enqueue(params.timeoutMs, callerSignal, ({ signal, deadline, timeoutController }) =>
+      this.run(params, cwd, signal, deadline, timeoutController, callerSignal));
   }
-
   async run(params, cwd, signal, deadline, timeoutController, callerSignal) {
     const started = deadline - params.timeoutMs;
     const files = [], seen = new Map();
@@ -189,8 +73,6 @@ export class DiagnosticsClient {
         }
         snapshot = await call('snapshot', token, true);
         timedOut = !settledBeforeDeadline || snapshot.some(f => f.status === 'timed_out' || (!f.status && (!f.observed || f.pendingPulls > 0)));
-        // Detect disk races rather than silently returning diagnostics for a
-        // different version. Content hashes also catch preserved mtimes/sizes.
         for (const file of valid) {
           try {
             if (await fingerprint(file.path, signal) !== file.hash) file.status = 'disk_changed';
@@ -204,15 +86,12 @@ export class DiagnosticsClient {
     } catch (error) {
       if (timeoutController.signal.aborted && !callerSignal?.aborted && signal.reason === timeoutController.signal.reason) {
         timedOut = true;
-        // At most one connection/request was active. A frozen service must not
-        // leave sockets holding Pi open; the service supervisor remains untouched.
         rpc?.close();
         if (this.rpc === rpc) this.rpc = undefined;
       } else throw error;
     } finally {
       if (rpc && token) rpc.notify('nvim_exec_lua', [CALL, ['finish', token]]);
     }
-    // Include inputs not reached before the shared deadline.
     const covered = new Set(files.flatMap(f => f.requested));
     for (const path of params.files) if (!covered.has(path)) files.push({ path: resolve(cwd, path), requested: [path], status: 'timed_out' });
     const rows = files.map(file => {
@@ -251,18 +130,7 @@ export async function formatReport(report) {
     if (!file.diagnostics.length) lines.push('  No matching diagnostics reported; this is not proof the file is clean.');
     lines.push('');
   }
-  const fullText = lines.join('\n');
-  if (Buffer.byteLength(fullText) <= OUTPUT_BYTES && lines.length <= 1000) return { text: fullText, details: report };
-  const directory = await mkdtemp(join(tmpdir(), 'pi-nvim-diagnostics-report-'));
-  const fullOutputPath = join(directory, 'report.json');
-  await writeFile(fullOutputPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
-  const kept = [];
-  let bytes = 0;
-  for (const line of lines) {
-    const size = Buffer.byteLength(line) + 1;
-    if (bytes + size > OUTPUT_BYTES - 1024 || kept.length >= 980) break;
-    kept.push(line); bytes += size;
-  }
-  const details = { ...report, files: report.files.map(({ diagnostics, ...file }) => ({ ...file, matchingDiagnostics: diagnostics.length })), truncated: true, fullOutputPath };
-  return { text: kept.join('\n') + `\n\n[Output truncated. Full retrieved report: ${fullOutputPath}]`, details };
+  return boundedReport(report, lines, () => ({ ...report,
+    files: report.files.map(({ diagnostics, ...file }) => ({ ...file, matchingDiagnostics: diagnostics.length })),
+  }), 'diagnostics');
 }

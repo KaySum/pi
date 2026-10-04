@@ -2,26 +2,12 @@ import { Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { DiagnosticsClient, formatReport } from './core.mjs';
 
-type ServiceInfo = { socket: string; pid: number };
-function serviceInfo(value: unknown): ServiceInfo | undefined {
-  if (!value || typeof value !== 'object' || !('socket' in value) || !('pid' in value)) return;
-  if (typeof value.socket !== 'string' || !value.socket.startsWith('/') ||
-      typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid < 1) return;
-  return { socket: value.socket, pid: value.pid };
-}
+import { bindDiscovery } from '../nvim-service/discovery.mjs';
 
 export default function (pi: ExtensionAPI) {
   // Registration is inert: no sockets, timers, processes, or filesystem reads.
   const client = new DiagnosticsClient();
-  const accept = (value: unknown) => client.setService(serviceInfo(value));
-  const discover = () => pi.events.emit('nvim-service:get', { reply: accept });
-  pi.events.on('nvim-service:ready', accept);
-  pi.events.on('nvim-service:stopped', value => {
-    const stopped = serviceInfo(value);
-    if (stopped?.socket === client.service?.socket && stopped?.pid === client.service?.pid) client.setService(undefined);
-  });
-  pi.on('session_start', discover); // Never wait for a later session_start handler.
-  pi.on('session_shutdown', () => client.close());
+  const discover = bindDiscovery(pi, client);
 
   pi.registerTool({
     name: 'nvim_diagnostics',

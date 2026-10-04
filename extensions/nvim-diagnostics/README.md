@@ -7,10 +7,11 @@ use `$NVIM`, or connect to your interactive Neovim.
 ## Setup
 
 Requires `nvim-service`, Node.js 22.19+, and Neovim 0.11+ (tested with 0.12.5).
-Install the one runtime dependency, the MessagePack codec:
+Install the shared runtime dependency, the MessagePack codec (now housed in
+`nvim-service`):
 
 ```sh
-npm --prefix ~/.pi/agent/extensions/nvim-diagnostics ci --omit=dev --ignore-scripts
+npm --prefix ~/.pi/agent/extensions/nvim-service ci --ignore-scripts
 ```
 
 Then run **`/reload`** in Pi. The extension auto-loads from this directory.
@@ -129,7 +130,9 @@ are lazy and verify the service PID/ownership marker/socket before loading Lua.
 No resources start during registration, and discovery never blocks an earlier
 `session_start` handler waiting for a later one.
 
-Calls are serialized. Cancellation, shutdown, and service replacement reject
+Calls are serialized by the shared service client library, which also manages
+the buffer cache and active-request leases.
+Cancellation, shutdown, and service replacement reject
 outstanding work, release RPC resources, and cancel request-local work. Lua has
 a deadline fallback (one second beyond the call deadline) if a connection vanishes.
 The single Lua observer/cache is service-scoped; it has no idle polling. Idle
@@ -151,6 +154,7 @@ larger than the runtime-only installation but make local editor checks resolve
 Pi's imports without host-specific paths or declaration stubs.
 
 ```sh
+npm --prefix extensions/nvim-service ci --ignore-scripts
 npm --prefix extensions/nvim-diagnostics ci --ignore-scripts
 npm --prefix extensions/nvim-diagnostics run typecheck
 npm --prefix extensions/nvim-diagnostics test

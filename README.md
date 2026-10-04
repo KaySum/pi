@@ -13,6 +13,7 @@ Install the extensions declared in `settings.json` using the sync command:
 
 ```sh
 node ~/.pi/agent/scripts/sync-packages.mjs
+npm --prefix ~/.pi/agent/extensions/nvim-diagnostics ci --omit=dev --ignore-scripts
 ```
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
@@ -27,6 +28,12 @@ inspect it. Other extensions can use `PI_NVIM_SOCKET` or its discovery events;
 your editor's `$NVIM` is unchanged.
 
 See [configuration, extension API, and shutdown guarantees](extensions/nvim-service/README.md).
+
+`extensions/nvim-diagnostics/` adds the `nvim_diagnostics` tool. Pi can request a
+batch of disk files, optionally filter severities, and receive Neovim diagnostics
+with explicit coverage/freshness status. Modified service buffers are never
+overwritten; missing providers and timeouts are not presented as clean results.
+See [setup, tool parameters, limits, and tests](extensions/nvim-diagnostics/README.md).
 
 ## Session cleanup
 

@@ -71,10 +71,28 @@ plugins that publish there. Quickfix-only or proprietary plugin stores are not
 included. Save-only/manual linters are **not** triggered with fake save events or
 extra shell commands. Normal configured file-load hooks may run them.
 
-For LSPs supporting document pull diagnostics, it makes an explicit request for
+For LSPs supporting document pull diagnostics, it makes explicit requests for
 hidden buffers, using Neovim's public response handler for encoding conversion,
-namespaces, and related-document handling. It uses the default/static provider
-identifier; multiple dynamically registered identifiers may not all be refreshed.
+namespaces, and related-document handling. Provider identifiers come from
+Neovim's dynamic registrations matching the **explicit anchor buffer**, with
+static/default capabilities used when no matching dynamic registration exists.
+This keeps tool-owned and automatic pulls in the same provider namespace instead
+of creating an extra default-identifier copy (for example, with Pyright).
+
+Requests are tracked separately for each client/provider identifier. Repeated
+registrations for the same identifier share a pull; diagnostics from **distinct
+providers are not deduplicated by message text**. Neovim 0.12 exposes multiple
+matching registrations; the 0.11 accessor exposes only its first matching
+registration, so other providers may not all be explicitly refreshed there.
+The tool limits its pulls to **16 distinct identifiers per client/file/call**,
+including registration changes during that call. Lookup failures, invalid
+identifiers, and exhausted provider limits are explicit `pull_error` results,
+not guessed default identifiers or proof of complete coverage.
+
+Registration lookup does not repair Neovim's own buffer initialization. For
+example, Neovim 0.12 can fail to initialize pull state for a hidden buffer with
+only selector-scoped dynamic registrations. A response-handler failure remains
+`pull_error`; the tool does not patch private runtime state to hide it.
 Push servers remain controlled by Neovim's normal open/change notifications.
 Only this tool's own pull requests are canceled on cleanup.
 
@@ -82,7 +100,7 @@ Neovim can cancel a tool-owned pull during an automatic diagnostic refresh and
 consume the cancellation acknowledgement without invoking its response callback.
 The tool also observes public `LspRequest` completion events, waits for normal
 response handlers to run, and retries these interrupted pulls at most twice per
-client/file. Exhausted retries or other explicit pull failures are reported as
+client/provider/file. Exhausted retries or other explicit pull failures are reported as
 `pull_error`, not left pending until the deadline or presented as a clean result.
 Retries still use the original whole-call deadline. This does not disable
 Neovim's automatic refreshes or cancel requests owned by other consumers.
@@ -111,7 +129,8 @@ All reports declare **`completeness: "best_effort"`**. In particular:
 Each result includes client names/roots, diagnostic-event counts where available,
 pull errors, refresh state, and disk-verification status. `pendingPullClients`
 identifies clients with outstanding tool-owned pulls; `pullRetries` counts
-retries after a completion without a response callback. Both are shown in text
+retries after a completion without a response callback. Pull errors include the
+provider identifier when known. Both pending clients and retries are shown in text
 when nonempty/nonzero. A service disconnect is an explicit failed tool call;
 a timeout can retain already-collected results.
 **No matching diagnostics does not mean the file passed every check.** Still run
@@ -179,5 +198,7 @@ Tests use private services with clean/custom configurations and deterministic
 Lua/LSP fixtures, not your interactive editor or external language servers.
 They cover actual push/pull diagnostics, external edits, delayed/empty results,
 partial coverage, native refresh/cancellation acknowledgements, bounded retries,
-queued deadlines, frozen/dead services, cache
-retention, output limits, discovery/reload behavior, and RPC framing/lifecycle.
+dynamic identifiers/selectors, static fallback, multiple-provider provenance,
+legacy registration-accessor compatibility, provider limits, queued deadlines,
+frozen/dead services, cache retention, output limits, discovery/reload behavior,
+and RPC framing/lifecycle.

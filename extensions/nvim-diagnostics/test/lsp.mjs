@@ -1,8 +1,9 @@
 // Deterministic push/pull LSP fixture. No network, plugins, or installed servers.
 const mode = process.argv[2];
+const dynamic = mode.startsWith('dynamic');
 const documents = new Map();
 const held = new Set();
-let refreshed = false;
+let refreshed = false, registered = false;
 let buffer = Buffer.alloc(0);
 function send(value) {
   const body = Buffer.from(JSON.stringify(value));
@@ -18,16 +19,33 @@ function message(m) {
   const reply = result => send({ jsonrpc: '2.0', id: m.id, result });
   if (m.method === 'initialize') {
     reply({ capabilities: { positionEncoding: 'utf-16', textDocumentSync: { openClose: true, change: 1 },
-      ...(mode !== 'push' ? { diagnosticProvider: { identifier: 'fixture', interFileDependencies: false, workspaceDiagnostics: false } } : {}) } });
+      ...(mode !== 'push' && (!dynamic || mode === 'dynamic-selectors') ? { diagnosticProvider: { identifier: mode === 'default' ? undefined : 'fixture', interFileDependencies: false, workspaceDiagnostics: false } } : {}) } });
   } else if (m.method === 'textDocument/didOpen' || m.method === 'textDocument/didChange') {
     const { uri, version } = m.params.textDocument;
     const text = m.params.textDocument.text ?? m.params.contentChanges[0].text;
     documents.set(uri, { text, version });
+    if (dynamic && !registered) {
+      registered = true;
+      const providers = mode === 'dynamic-selectors' ? [
+        { identifier: 'wrong-buffer', documentSelector: [{ scheme: 'file', pattern: '**/*.excluded' }] },
+        { identifier: 'fixture-dynamic', documentSelector: [{ scheme: 'file', pattern: '**/*.lsp' }, { pattern: '**/*.lsp' }] },
+      ] : mode === 'dynamic-multi' || mode === 'dynamic-cancel' ? [
+        { identifier: 'fixture-dynamic' }, { identifier: 'fixture-other' }, { identifier: 'fixture-dynamic' },
+      ] : [{ identifier: 'fixture-dynamic' }];
+      send({ jsonrpc: '2.0', id: 'fixture-register', method: 'client/registerCapability', params: {
+        registrations: providers.map((options, i) => ({ id: `provider-${i}`, method: 'textDocument/diagnostic',
+          registerOptions: { interFileDependencies: false, workspaceDiagnostics: false, ...options } })),
+      } });
+    }
     if (mode === 'push') setTimeout(() => send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics',
       params: { uri, version, diagnostics: diagnostics(text) } }), 150);
   } else if (m.method === 'textDocument/diagnostic') {
     if (mode === 'hang') return;
-    if (mode === 'cancel') {
+    if (mode === 'dynamic-legacy' && m.params.identifier !== 'fixture-dynamic') {
+      send({ jsonrpc: '2.0', id: m.id, error: { code: -32602, message: 'Expected dynamically registered identifier' } });
+      return;
+    }
+    if (mode === 'cancel' || (mode === 'dynamic-cancel' && m.params.identifier === 'fixture-other')) {
       setTimeout(() => send({ jsonrpc: '2.0', id: m.id, error: { code: -32800, message: 'Request cancelled' } }), 30);
       return;
     }

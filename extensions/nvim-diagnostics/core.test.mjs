@@ -29,6 +29,17 @@ async function fixture(t, init = fileURLToPath(new URL('./test/producer.lua', im
   };
 }
 
+async function dynamicFixture(t, mode = 'dynamic', onAttach = '') {
+  const initDir = await mkdtemp('/tmp/pi-diag-dynamic-init-');
+  t.after(() => rm(initDir, { recursive: true, force: true }));
+  const init = join(initDir, 'init.lua');
+  const cmd = [process.execPath, fileURLToPath(new URL('./test/lsp.mjs', import.meta.url)), mode];
+  await writeFile(init, `vim.api.nvim_create_autocmd('BufReadPost',{pattern='*.lsp',callback=function(ev)
+    vim.lsp.start({name='fixture-dynamic',cmd=vim.json.decode([==[${JSON.stringify(cmd)}]==]),root_dir=vim.fn.getcwd(),
+      on_attach=function(client) ${onAttach} end},{bufnr=ev.buf}) end})`);
+  return fixture(t, init);
+}
+
 test('validates bounded arguments before accessing the service', () => {
   for (const params of [{}, { files: [] }, { files: Array(33).fill('a') }, { files: ['a\0b'] },
     { files: ['a'], severities: [] }, { files: ['a'], severities: ['fatal'] }, { files: ['a'], timeoutMs: 99 }]) {
@@ -197,7 +208,7 @@ test('unexpected service death produces an explicit error, not empty diagnostics
   await rejected;
 });
 
-for (const mode of ['push', 'pull', 'hang']) {
+for (const mode of ['push', 'pull', 'default', 'hang']) {
   test(`real LSP ${mode} diagnostics for hidden files`, async t => {
     const initDir = await mkdtemp('/tmp/pi-diag-init-');
     t.after(() => rm(initDir, { recursive: true, force: true }));
@@ -256,6 +267,90 @@ for (const mode of ['refresh', 'cancel']) {
       assert.equal(row.pullErrors.length, 1);
       assert.match(row.pullErrors[0].error, /cancelled|response callback/i);
     }
+  });
+}
+
+for (const mode of ['dynamic', 'dynamic-selectors', 'dynamic-multi']) {
+  test(`${mode} pulls use matching provider namespaces without hiding distinct providers`, async t => {
+    const f = await dynamicFixture(t, mode);
+    if (!await f.lua("return vim.fn.has('nvim-0.12') == 1")) return t.skip('Per-provider namespaces require Neovim 0.12');
+    const path = await f.file('a.lsp', mode === 'dynamic-selectors' ? 'OK' : 'é BAD');
+    // Bootstrap Neovim's pull state before testing selectors. In 0.12 its
+    // registerCapability defaults check uses the current buffer, not the anchor.
+    if (mode === 'dynamic-selectors') await f.diagnose([path], { timeoutMs: 3000 });
+    const identifiers = mode === 'dynamic-multi' ? ['fixture-dynamic', 'fixture-other'] : ['fixture-dynamic'];
+    for (const text of ['é BAD', 'OK', 'é BAD']) {
+      await writeFile(path, text);
+      const report = await f.diagnose([path], { timeoutMs: 3000 });
+      const row = report.files[0];
+      assert.equal(report.timedOut, false, JSON.stringify(report));
+      assert.equal(row.status, 'updated', JSON.stringify(report));
+      assert.equal(row.completedPulls, identifiers.length, 'One owned pull per distinct matching identifier');
+      assert.deepEqual(row.pullErrors, []);
+      const expected = text === 'OK' ? [] : identifiers.map(id => `nvim.lsp.fixture-dynamic.${row.clients[0].id}.${id}`).sort();
+      assert.deepEqual(row.diagnostics.map(d => d.namespace).sort(), expected,
+        'Do not introduce a nil/static namespace or deduplicate identical results from distinct providers');
+      // A matching dynamic registration takes precedence over static capabilities.
+      await f.lua(`local c=vim.lsp.get_clients({bufnr=vim.fn.bufnr(...)})[1]
+        c.server_capabilities.diagnosticProvider={identifier='stale-static',interFileDependencies=false,workspaceDiagnostics=false}`, [path]);
+    }
+    assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+  });
+}
+
+test('supports the Neovim 0.11 method-keyed, single-registration accessor', async t => {
+  const f = await dynamicFixture(t, 'dynamic-legacy', `
+    if vim.fn.has('nvim-0.12') == 1 then
+      local get=client.dynamic_capabilities.get
+      client.dynamic_capabilities.get=function(self,method,opts)
+        if method~='textDocument/diagnostic' then return nil end
+        local registrations=get(self,'diagnosticProvider',opts)
+        return registrations and registrations[1]
+      end
+    end`);
+  const path = await f.file('a.lsp', 'é BAD');
+  const report = await f.diagnose([path], { timeoutMs: 3000 });
+  assert.equal(report.timedOut, false, JSON.stringify(report));
+  assert.equal(report.files[0].status, 'updated', JSON.stringify(report));
+  assert.equal(report.files[0].completedPulls, 1);
+  assert.equal(report.files[0].diagnostics.length, 1);
+  assert.deepEqual(report.files[0].pullErrors, []);
+});
+
+test('cancellation tracking and retries remain independent for each dynamic provider', async t => {
+  const f = await dynamicFixture(t, 'dynamic-cancel');
+  if (!await f.lua("return vim.fn.has('nvim-0.12') == 1")) return t.skip('Multiple registration accessors require Neovim 0.12');
+  const report = await f.diagnose([await f.file('a.lsp', 'é BAD')], { timeoutMs: 3000 });
+  const row = report.files[0];
+  assert.equal(report.timedOut, false, JSON.stringify(report));
+  assert.equal(row.status, 'pull_error');
+  assert.equal(row.completedPulls, 1);
+  assert.equal(row.pendingPulls, 0);
+  assert.equal(row.pullRetries, 2);
+  assert.equal(row.pullErrors.length, 1);
+  assert.equal(row.pullErrors[0].identifier, 'fixture-other');
+  assert.equal(row.diagnostics.length, 1, 'Keep the successful provider result');
+  assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+});
+
+for (const [name, override, error] of [
+  ['unavailable accessor', 'c.dynamic_capabilities.get=nil', /registration.*unavailable/i],
+  ['invalid identifier', `c.dynamic_capabilities.get=function() return {{registerOptions={identifier=42}}} end`, /identifier/i],
+  ['false identifier', `c.dynamic_capabilities.get=function() return {{registerOptions={identifier=false}}} end`, /identifier/i],
+  ['provider limit', `c.dynamic_capabilities.get=function() local r={} for i=1,17 do r[i]={registerOptions={identifier='id-'..i}} end return r end`, /limit.*16/i],
+]) {
+  test(`dynamic provider ${name} is explicit, never guessed as a default identifier`, async t => {
+    const f = await dynamicFixture(t);
+    const path = await f.file('a.lsp', 'é BAD');
+    await f.diagnose([path], { timeoutMs: 3000 });
+    await f.lua(`local c=vim.lsp.get_clients({bufnr=vim.fn.bufnr(...)})[1]; ${override}`, [path]);
+    const report = await f.diagnose([path], { timeoutMs: 3000 });
+    assert.equal(report.timedOut, false, JSON.stringify(report));
+    assert.equal(report.files[0].status, 'pull_error');
+    assert.equal(report.files[0].completedPulls, 0);
+    assert.equal(report.files[0].pendingPulls, 0);
+    assert.equal(report.files[0].pullErrors.length, 1);
+    assert.match(report.files[0].pullErrors[0].error, error);
   });
 }
 

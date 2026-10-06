@@ -4,7 +4,7 @@ local B = assert(_G.__pi_nvim_buffers_v1)
 local M = { entries = B.entries, requests = {} }
 _G.__pi_diagnostics_v1 = M
 local group = vim.api.nvim_create_augroup('PiNvimDiagnosticsV1', { clear = true })
-local MAX_PULL_ATTEMPTS = 3
+local MAX_PULL_ATTEMPTS, MAX_PULL_PROVIDERS = 3, 16
 -- Neovim consumes RequestCancelled acknowledgements without calling the response
 -- handler. Observe completion too, but defer until the normal handler has run.
 vim.api.nvim_create_autocmd('LspRequest', {
@@ -14,15 +14,16 @@ vim.api.nvim_create_autocmd('LspRequest', {
     if not data.request or data.request.method ~= 'textDocument/diagnostic' or data.request.type ~= 'complete' then return end
     for _, r in pairs(M.requests) do
       for _, f in ipairs(r.files) do
-        local pull = f.pulls[data.client_id]
-        if pull and pull.id == data.request_id and not pull.done then
-          vim.schedule(function()
-            if M.requests[r.token] == r and f.pulls[data.client_id] == pull and not pull.done then
-              pull.done = true
-              pull.retryable = true
-              pull.error = 'Diagnostic request ended without a response callback (cancelled or superseded)'
-            end
-          end)
+        for key, pull in pairs(f.pulls) do
+          if pull.client.id == data.client_id and pull.id == data.request_id and not pull.done then
+            vim.schedule(function()
+              if M.requests[r.token] == r and f.pulls[key] == pull and not pull.done then
+                pull.done = true
+                pull.retryable = true
+                pull.error = 'Diagnostic request ended without a response callback (cancelled or superseded)'
+              end
+            end)
+          end
         end
       end
     end
@@ -33,7 +34,7 @@ function M.begin(token, inputs, deadline)
   local r = B.begin(token, inputs, deadline)
   r.token = token
   M.requests[token] = r
-  for _, f in ipairs(r.files) do f.pulls = {} end
+  for _, f in ipairs(r.files) do f.pulls = {}; f.providerErrors = {} end
   r.on_finish = function()
     M.requests[token] = nil
     for _, f in ipairs(r.files) do
@@ -44,17 +45,48 @@ function M.begin(token, inputs, deadline)
   end
   return true
 end
-local function pull_for(r, f, client)
-  local previous = f.pulls[client.id]
+local function providers_for(client, buf)
+  local dynamic = client.dynamic_capabilities
+  local registrations
+  if dynamic and type(dynamic.get) == 'function' then
+    -- 0.12 exposes provider-keyed lists; 0.11 exposes one method-keyed match.
+    -- Pass the anchor explicitly: the service's current buffer is unrelated.
+    registrations = dynamic:get('diagnosticProvider', { bufnr = buf })
+      or dynamic:get('textDocument/diagnostic', { bufnr = buf })
+  end
+  local providers, seen = {}, {}
+  local function add(capability)
+    local identifier
+    if type(capability) == 'table' then identifier = capability.identifier end
+    if identifier == vim.NIL then identifier = nil end
+    assert(identifier == nil or type(identifier) == 'string', 'Invalid diagnostic provider identifier')
+    local key = client.id .. ':' .. (identifier == nil and 'default' or 'id:' .. identifier)
+    if not seen[key] then
+      assert(#providers < MAX_PULL_PROVIDERS, 'Diagnostic provider limit exceeded (16 per client/file/call)')
+      seen[key] = true
+      table.insert(providers, { key = key, identifier = identifier })
+    end
+  end
+  if registrations then
+    if registrations.method then registrations = { registrations } end
+    for _, registration in ipairs(registrations) do add(registration.registerOptions) end
+  else
+    local capability = client.server_capabilities.diagnosticProvider
+    assert(capability, 'Diagnostic provider registration unavailable; refusing to guess an identifier')
+    add(capability)
+  end
+  assert(#providers > 0, 'Diagnostic provider registration unavailable')
+  return providers
+end
+local function pull_for(r, f, client, provider)
+  local key, identifier = provider.key, provider.identifier
+  local previous = f.pulls[key]
   if previous and not (previous.done and previous.retryable and previous.attempts < MAX_PULL_ATTEMPTS) then return end
-  if not client.initialized or not client:supports_method('textDocument/diagnostic', f.entry.buf) then return end
-  local pull = { client = client, done = false, attempts = previous and previous.attempts + 1 or 1 }
-  f.pulls[client.id] = pull
-  local params = { textDocument = { uri = vim.uri_from_bufnr(f.entry.buf) } }
-  local capability = client.server_capabilities.diagnosticProvider
-  if type(capability) == 'table' then params.identifier = capability.identifier end
+  local pull = { client = client, identifier = identifier, done = false, attempts = previous and previous.attempts + 1 or 1 }
+  f.pulls[key] = pull
+  local params = { textDocument = { uri = vim.uri_from_bufnr(f.entry.buf) }, identifier = identifier }
   local ok, sent, id = pcall(client.request, client, 'textDocument/diagnostic', params, function(err, result, ctx)
-    if M.requests[r.token] ~= r or f.pulls[client.id] ~= pull then return end
+    if M.requests[r.token] ~= r or f.pulls[key] ~= pull then return end
     pull.done = true
     if B.state(f) then pull.error = 'Buffer changed during diagnostic request'
     elseif err then pull.error = tostring(err.message or err)
@@ -65,6 +97,24 @@ local function pull_for(r, f, client)
   end, f.entry.buf)
   if not ok or not sent then pull.done = true; pull.error = tostring(id or sent)
   else pull.id = id end
+end
+local function pulls_for(r, f, client)
+  if not client.initialized or not client:supports_method('textDocument/diagnostic', f.entry.buf) then return end
+  local ok, providers = pcall(providers_for, client, f.entry.buf)
+  f.providerErrors[client.id] = nil
+  if not ok then f.providerErrors[client.id] = { client = client.name, error = tostring(providers) }; return end
+  local count = 0
+  for _, pull in pairs(f.pulls) do if pull.client.id == client.id then count = count + 1 end end
+  for _, provider in ipairs(providers) do
+    if not f.pulls[provider.key] then
+      if count >= MAX_PULL_PROVIDERS then
+        f.providerErrors[client.id] = { client = client.name, error = 'Diagnostic provider limit exceeded (16 per client/file/call)' }
+        break
+      end
+      count = count + 1
+    end
+    pull_for(r, f, client, provider)
+  end
 end
 local severity = { 'error', 'warning', 'info', 'hint' }
 local function text(value, maximum)
@@ -88,17 +138,24 @@ function M.snapshot(token, include_diagnostics)
       for _, client in ipairs(vim.lsp.get_clients({ bufnr = e.buf })) do
         table.insert(out.clients, { name = text(client.name, 512) or 'unknown', id = client.id,
           root = text(client.config.root_dir, 4096), initialized = client.initialized == true })
-        pull_for(r, f, client)
+        pulls_for(r, f, client)
       end
       table.sort(out.clients, function(a, b) return a.id < b.id end)
+      local pending = {}
       for _, pull in pairs(f.pulls) do
         out.pullRetries = out.pullRetries + pull.attempts - 1
         if not pull.done then
           out.pendingPulls = out.pendingPulls + 1
-          table.insert(out.pendingPullClients, text(pull.client.name, 512) or 'unknown')
+          pending[text(pull.client.name, 512) or 'unknown'] = true
         elseif pull.success then out.completedPulls = out.completedPulls + 1
-        elseif pull.error then table.insert(out.pullErrors, { client = pull.client.name, error = pull.error }) end
+        elseif pull.error then table.insert(out.pullErrors, {
+          client = text(pull.client.name, 512), identifier = text(pull.identifier, 512), error = text(pull.error, 8192),
+        }) end
       end
+      for _, err in pairs(f.providerErrors) do
+        table.insert(out.pullErrors, { client = text(err.client, 512), error = text(err.error, 8192) })
+      end
+      out.pendingPullClients = vim.tbl_keys(pending)
       table.sort(out.pendingPullClients)
       out.observed = out.eventsSinceRefresh > 0 or out.completedPulls > 0
       if include_diagnostics then

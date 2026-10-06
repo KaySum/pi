@@ -3,6 +3,31 @@ if _G.__pi_diagnostics_v1 then return true end
 local B = assert(_G.__pi_nvim_buffers_v1)
 local M = { entries = B.entries, requests = {} }
 _G.__pi_diagnostics_v1 = M
+local group = vim.api.nvim_create_augroup('PiNvimDiagnosticsV1', { clear = true })
+local MAX_PULL_ATTEMPTS = 3
+-- Neovim consumes RequestCancelled acknowledgements without calling the response
+-- handler. Observe completion too, but defer until the normal handler has run.
+vim.api.nvim_create_autocmd('LspRequest', {
+  group = group,
+  callback = function(ev)
+    local data = ev.data or {}
+    if not data.request or data.request.method ~= 'textDocument/diagnostic' or data.request.type ~= 'complete' then return end
+    for _, r in pairs(M.requests) do
+      for _, f in ipairs(r.files) do
+        local pull = f.pulls[data.client_id]
+        if pull and pull.id == data.request_id and not pull.done then
+          vim.schedule(function()
+            if M.requests[r.token] == r and f.pulls[data.client_id] == pull and not pull.done then
+              pull.done = true
+              pull.retryable = true
+              pull.error = 'Diagnostic request ended without a response callback (cancelled or superseded)'
+            end
+          end)
+        end
+      end
+    end
+  end,
+})
 function M.finish(token) B.finish(token) end
 function M.begin(token, inputs, deadline)
   local r = B.begin(token, inputs, deadline)
@@ -20,14 +45,16 @@ function M.begin(token, inputs, deadline)
   return true
 end
 local function pull_for(r, f, client)
-  if f.pulls[client.id] or not client.initialized or not client:supports_method('textDocument/diagnostic', f.entry.buf) then return end
-  local pull = { client = client, done = false }
+  local previous = f.pulls[client.id]
+  if previous and not (previous.done and previous.retryable and previous.attempts < MAX_PULL_ATTEMPTS) then return end
+  if not client.initialized or not client:supports_method('textDocument/diagnostic', f.entry.buf) then return end
+  local pull = { client = client, done = false, attempts = previous and previous.attempts + 1 or 1 }
   f.pulls[client.id] = pull
   local params = { textDocument = { uri = vim.uri_from_bufnr(f.entry.buf) } }
   local capability = client.server_capabilities.diagnosticProvider
   if type(capability) == 'table' then params.identifier = capability.identifier end
   local ok, sent, id = pcall(client.request, client, 'textDocument/diagnostic', params, function(err, result, ctx)
-    if M.requests[r.token] ~= r then return end
+    if M.requests[r.token] ~= r or f.pulls[client.id] ~= pull then return end
     pull.done = true
     if B.state(f) then pull.error = 'Buffer changed during diagnostic request'
     elseif err then pull.error = tostring(err.message or err)
@@ -56,7 +83,8 @@ function M.snapshot(token, include_diagnostics)
       out.changedtick = f.tick
       out.eventsSinceRequest = e.events - f.initialEvents
       out.eventsSinceRefresh = e.events - e.refreshEvents
-      out.pendingPulls, out.completedPulls = 0, 0
+      out.pendingPulls, out.completedPulls, out.pullRetries = 0, 0, 0
+      out.pendingPullClients = {}
       for _, client in ipairs(vim.lsp.get_clients({ bufnr = e.buf })) do
         table.insert(out.clients, { name = text(client.name, 512) or 'unknown', id = client.id,
           root = text(client.config.root_dir, 4096), initialized = client.initialized == true })
@@ -64,10 +92,14 @@ function M.snapshot(token, include_diagnostics)
       end
       table.sort(out.clients, function(a, b) return a.id < b.id end)
       for _, pull in pairs(f.pulls) do
-        if not pull.done then out.pendingPulls = out.pendingPulls + 1
+        out.pullRetries = out.pullRetries + pull.attempts - 1
+        if not pull.done then
+          out.pendingPulls = out.pendingPulls + 1
+          table.insert(out.pendingPullClients, text(pull.client.name, 512) or 'unknown')
         elseif pull.success then out.completedPulls = out.completedPulls + 1
         elseif pull.error then table.insert(out.pullErrors, { client = pull.client.name, error = pull.error }) end
       end
+      table.sort(out.pendingPullClients)
       out.observed = out.eventsSinceRefresh > 0 or out.completedPulls > 0
       if include_diagnostics then
         for _, d in ipairs(vim.diagnostic.get(e.buf)) do
@@ -92,6 +124,7 @@ function M.snapshot(token, include_diagnostics)
 end
 function M.dispose()
   for _, token in ipairs(vim.tbl_keys(M.requests)) do M.finish(token) end
+  vim.api.nvim_del_augroup_by_id(group)
   _G.__pi_diagnostics_v1 = nil
 end
 return true

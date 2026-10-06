@@ -211,7 +211,12 @@ for (const mode of ['push', 'pull', 'hang']) {
     if (mode === 'hang') {
       assert.equal(report.files[0].status, 'timed_out');
       assert.equal(report.timedOut, true);
+      assert.deepEqual(report.files[0].pendingPullClients, ['fixture-hang']);
+      assert.match((await formatReport(report)).text, /Still waiting for diagnostic pulls: "fixture-hang"/);
     } else {
+      assert.equal(report.timedOut, false);
+      assert.equal(report.files[0].pullRetries, 0, 'Ordinary response callbacks must run before completion bookkeeping');
+      assert.deepEqual(report.files[0].pullErrors, []);
       assert.equal(report.files[0].diagnostics.length, 1, JSON.stringify(report));
       assert.equal(report.files[0].diagnostics[0].column, 4, 'UTF-16 LSP offset converted by Neovim to UTF-8 byte column');
       await writeFile(path, 'OK');
@@ -219,6 +224,38 @@ for (const mode of ['push', 'pull', 'hang']) {
       assert.equal(fixed.files[0].diagnostics.length, 0, JSON.stringify(fixed));
     }
     assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+  });
+}
+
+for (const mode of ['refresh', 'cancel']) {
+  test(`LSP ${mode} cancellation acknowledgements cannot leave phantom pending pulls`, async t => {
+    const initDir = await mkdtemp('/tmp/pi-diag-cancel-init-');
+    t.after(() => rm(initDir, { recursive: true, force: true }));
+    const init = join(initDir, 'init.lua');
+    const cmd = [process.execPath, fileURLToPath(new URL('./test/lsp.mjs', import.meta.url)), mode];
+    await writeFile(init, `vim.api.nvim_create_autocmd('BufReadPost',{pattern='*.lsp',callback=function(ev) vim.lsp.start({name='fixture-${mode}',cmd=vim.json.decode([==[${JSON.stringify(cmd)}]==]),root_dir=vim.fn.getcwd()},{bufnr=ev.buf}) end})`);
+    const f = await fixture(t, init);
+    const path = await f.file('a.lsp', 'é BAD');
+    const report = await f.diagnose([path], { timeoutMs: 3000 });
+    assert.equal(report.timedOut, false, JSON.stringify(report));
+    assert.ok(report.elapsedMs < 2200, 'Do not wait for the deadline after a cancellation acknowledgement');
+    const row = report.files[0];
+    assert.equal(row.pendingPulls, 0);
+    assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+    if (mode === 'refresh') {
+      assert.equal(row.status, 'updated');
+      assert.equal(row.diagnostics.length, 1);
+      assert.equal(row.completedPulls, 1, 'A replacement owned pull must receive an actual response');
+      assert.equal(row.pullRetries, 1);
+      assert.match((await formatReport(report)).text, /pull retries after cancellation\/supersession: 1/);
+      assert.deepEqual(row.pullErrors, []);
+    } else {
+      assert.equal(row.status, 'pull_error', 'Exhausted retries are not an empty success');
+      assert.equal(row.completedPulls, 0);
+      assert.equal(row.pullRetries, 2, 'At most three attempts per client');
+      assert.equal(row.pullErrors.length, 1);
+      assert.match(row.pullErrors[0].error, /cancelled|response callback/i);
+    }
   });
 }
 

@@ -1,6 +1,8 @@
 // Deterministic push/pull LSP fixture. No network, plugins, or installed servers.
 const mode = process.argv[2];
 const documents = new Map();
+const held = new Set();
+let refreshed = false;
 let buffer = Buffer.alloc(0);
 function send(value) {
   const body = Buffer.from(JSON.stringify(value));
@@ -25,11 +27,22 @@ function message(m) {
       params: { uri, version, diagnostics: diagnostics(text) } }), 150);
   } else if (m.method === 'textDocument/diagnostic') {
     if (mode === 'hang') return;
+    if (mode === 'cancel') {
+      setTimeout(() => send({ jsonrpc: '2.0', id: m.id, error: { code: -32800, message: 'Request cancelled' } }), 30);
+      return;
+    }
+    if (mode === 'refresh' && !refreshed) {
+      refreshed = true; held.add(m.id);
+      send({ jsonrpc: '2.0', id: 'fixture-refresh', method: 'workspace/diagnostic/refresh', params: null });
+      return;
+    }
     const doc = documents.get(m.params.textDocument.uri);
     setTimeout(() => reply({ kind: 'full', resultId: String(doc?.version), items: diagnostics(doc?.text ?? '') }), 150);
+  } else if (m.method === '$/cancelRequest') {
+    if (held.delete(m.params.id)) send({ jsonrpc: '2.0', id: m.params.id, error: { code: -32800, message: 'Request cancelled' } });
   } else if (m.method === 'shutdown') reply(null);
   else if (m.method === 'exit') process.exit(0);
-  else if (m.id != null) reply(null);
+  else if (m.method && m.id != null) reply(null);
 }
 process.stdin.on('data', chunk => {
   buffer = Buffer.concat([buffer, chunk]);

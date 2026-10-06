@@ -64,7 +64,7 @@ export class DiagnosticsClient extends ServiceClient {
             signature = next; changedAt = Date.now();
             snapshot = await call('snapshot', token, true);
           }
-          const settled = states.every(f => f.status || (f.observed && !f.pendingPulls && f.clients.every(c => c.initialized)));
+          const settled = states.every(f => f.status || ((f.observed || f.pullErrors.length > 0) && !f.pendingPulls && f.clients.every(c => c.initialized)));
           if (states.every(f => f.status) || (settled && Date.now() - changedAt >= SETTLE_MS)) {
             settledBeforeDeadline = true;
             break;
@@ -72,7 +72,7 @@ export class DiagnosticsClient extends ServiceClient {
           await delay(Math.min(80, Math.max(1, deadline - Date.now() - 120)), undefined, { signal });
         }
         snapshot = await call('snapshot', token, true);
-        timedOut = !settledBeforeDeadline || snapshot.some(f => f.status === 'timed_out' || (!f.status && (!f.observed || f.pendingPulls > 0)));
+        timedOut = !settledBeforeDeadline || snapshot.some(f => f.status === 'timed_out' || (!f.status && ((!f.observed && !f.pullErrors.length) || f.pendingPulls > 0)));
         for (const file of valid) {
           try {
             if (await fingerprint(file.path, signal) !== file.hash) file.status = 'disk_changed';
@@ -98,7 +98,7 @@ export class DiagnosticsClient extends ServiceClient {
       const data = snapshot.find(f => f.path === file.path);
       const row = { ...data, path: file.path, requested: file.requested, diskVerified: file.diskVerified === true, diagnostics: data?.diagnostics ?? [] };
       row.status = file.status ?? data?.status ?? (!data ? 'timed_out' :
-        data.pendingPulls ? 'timed_out' : data.eventsSinceRequest > 0 || data.completedPulls > 0 ? 'updated' :
+        data.pendingPulls ? 'timed_out' : data.pullErrors.length ? 'pull_error' : data.eventsSinceRequest > 0 || data.completedPulls > 0 ? 'updated' :
           data.observed ? 'cached' : data.clients.length || data.diagnostics.length ? 'unconfirmed' : 'no_provider_observed');
       if (file.error) row.error = file.error;
       row.counts = emptyCounts();
@@ -122,6 +122,8 @@ export async function formatReport(report) {
     lines.push(`${JSON.stringify(file.path)} — ${file.status}; ${SEVERITIES.map(s => `${file.counts[s]} ${s}`).join(', ')}`);
     if (file.error) lines.push(`  Error: ${JSON.stringify(file.error)}`);
     lines.push(`  Disk contents reverified: ${file.diskVerified ? 'yes' : 'no'}; LSP clients: ${(file.clients ?? []).map(c => JSON.stringify(c.name)).join(', ') || 'none observed'}`);
+    if (file.pendingPullClients?.length) lines.push(`  Still waiting for diagnostic pulls: ${file.pendingPullClients.map(name => JSON.stringify(name)).join(', ')}`);
+    if (file.pullRetries) lines.push(`  Diagnostic pull retries after cancellation/supersession: ${file.pullRetries}`);
     for (const error of file.pullErrors ?? []) lines.push(`  Pull error: ${JSON.stringify(error)}`);
     for (const d of file.diagnostics) {
       lines.push(`  ${d.line}:${d.column} ${d.severity} ${JSON.stringify(d.source ?? d.namespace ?? 'unknown')}${d.code !== undefined ? ` [${JSON.stringify(d.code)}]` : ''}: ${JSON.stringify(d.message)}${d.messageTruncated ? ' [message truncated]' : ''}`);

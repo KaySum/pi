@@ -78,6 +78,15 @@ identifier; multiple dynamically registered identifiers may not all be refreshed
 Push servers remain controlled by Neovim's normal open/change notifications.
 Only this tool's own pull requests are canceled on cleanup.
 
+Neovim can cancel a tool-owned pull during an automatic diagnostic refresh and
+consume the cancellation acknowledgement without invoking its response callback.
+The tool also observes public `LspRequest` completion events, waits for normal
+response handlers to run, and retries these interrupted pulls at most twice per
+client/file. Exhausted retries or other explicit pull failures are reported as
+`pull_error`, not left pending until the deadline or presented as a clean result.
+Retries still use the original whole-call deadline. This does not disable
+Neovim's automatic refreshes or cancel requests owned by other consumers.
+
 It observes diagnostic events, client attachment/initialization, and pull
 responses, then allows a **400 ms quiet period**. These observations are only
 heuristics: diagnostic events include resets, push messages may be versionless,
@@ -94,13 +103,17 @@ All reports declare **`completeness: "best_effort"`**. In particular:
 | `unconfirmed` | Clients or cached diagnostics exist, but no update/completion evidence for this refresh. |
 | `no_provider_observed` | Neither an attached LSP nor diagnostics/events were observed; a provider could still be unavailable or starting. |
 | `timed_out` | Queuing, RPC, preparation, or a document pull did not finish within the budget. |
+| `pull_error` | An explicit pull failed, including cancellation after bounded retries. Retained diagnostics may be useful but coverage is incomplete. |
 | `file_error` | Missing, unreadable, non-regular, oversized, invalid-UTF-8 file, or Neovim loading error. |
 | `buffer_modified` | An unsaved service buffer was left untouched. |
 | `disk_changed`, `buffer_changed`, `buffer_unavailable` | The input changed or disappeared during the check. |
 
 Each result includes client names/roots, diagnostic-event counts where available,
-pull errors, refresh state, and disk-verification status. A service disconnect is
-an explicit failed tool call; a timeout can retain already-collected results.
+pull errors, refresh state, and disk-verification status. `pendingPullClients`
+identifies clients with outstanding tool-owned pulls; `pullRetries` counts
+retries after a completion without a response callback. Both are shown in text
+when nonempty/nonzero. A service disconnect is an explicit failed tool call;
+a timeout can retain already-collected results.
 **No matching diagnostics does not mean the file passed every check.** Still run
 appropriate tests, builds, and linters.
 
@@ -165,5 +178,6 @@ node --test --test-timeout=15000 extensions/*/*.test.mjs
 Tests use private services with clean/custom configurations and deterministic
 Lua/LSP fixtures, not your interactive editor or external language servers.
 They cover actual push/pull diagnostics, external edits, delayed/empty results,
-partial coverage, cancellation, queued deadlines, frozen/dead services, cache
+partial coverage, native refresh/cancellation acknowledgements, bounded retries,
+queued deadlines, frozen/dead services, cache
 retention, output limits, discovery/reload behavior, and RPC framing/lifecycle.

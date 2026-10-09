@@ -12,9 +12,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'nvim_diagnostics',
     label: 'Neovim diagnostics',
-    description: 'Check disk files using Pi-owned Neovim diagnostics. Loads/refreshes unmodified buffers; never saves files. Returns errors, warnings, info, and hints with coverage/freshness status. Lines/UTF-8 byte columns are 1-based; range ends exclusive. Output capped at 16 KiB; larger reports go to a private file.',
+    description: 'Read disk diagnostics through Pi-owned Neovim. Default snapshot mode reads best-effort diagnostic caches, not a completed check. Explicit check mode requires named LSP clients and their own document-pull replies for verified input snapshots; missing or push-only providers cannot count as complete. Never saves files. Returns check/coverage states, request/service identity, provider evidence, and diagnostics. Lines/UTF-8 byte columns are 1-based; ends exclusive. Text capped at 16 KiB; larger reports go to a private file.',
     promptGuidelines: [
-      'After editing, batch changed files into nvim_diagnostics. Check coverage/status: empty or cached results do not prove correctness and do not replace tests, builds, or linters. Retry timed-out startup checks when useful.',
+      'After editing, batch changed files into nvim_diagnostics. Use mode: check with requiredClients when the expected LSP client names are known; the same names are required for every file, so group batches accordingly. Inspect check status separately from diagnostic counts: complete means selected requests answered, not that the file passed. Snapshot emptiness, cached results, and push-only observations do not establish completion. Neither mode replaces tests, builds, or linters.',
     ],
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -22,6 +22,13 @@ export default function (pi: ExtensionAPI) {
         minItems: 1, maxItems: 32,
         description: 'Explicit file paths relative to cwd or absolute. No glob expansion or reference/range syntax. UTF-8 text, at most 2 MiB each.',
       }),
+      mode: Type.Optional(Type.Union([Type.Literal('snapshot'), Type.Literal('check')], {
+        description: 'Default snapshot: best-effort cache observations, no completion claim. Check: require explicit clients and fresh owned full document-diagnostic replies, with final source verification.',
+      })),
+      requiredClients: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 512 }), {
+        minItems: 1, maxItems: 16, uniqueItems: true,
+        description: 'Required only in check mode; forbidden in snapshot mode. Exact case-sensitive LSP client names, e.g. pyright (not source Pyright). Every name applies to every file. Missing, initializing, or push-only clients remain incomplete at the deadline.',
+      })),
       severities: Type.Optional(Type.Array(Type.Union([
         Type.Literal('error'), Type.Literal('warning'), Type.Literal('info'), Type.Literal('hint'),
       ]), { minItems: 1, maxItems: 4, uniqueItems: true, description: 'Default: all severities. Counts include unfiltered diagnostics.' })),

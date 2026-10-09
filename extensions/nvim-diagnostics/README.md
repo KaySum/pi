@@ -38,11 +38,18 @@ for a particular file/root. Headless-incompatible plugins may need configuration
   symlinks, spaces, quotes, and Unicode work. No glob, directory-recursion, or
   `@reference :L...` parsing. Source files must be regular UTF-8 text, no NUL
   bytes, at most **2 MiB** each. Invalid files get individual errors.
+- `mode`: optional, **`snapshot`** by default. Reads best-effort cached observations,
+  not a completed check. Use **`check`** for explicit required-provider completion.
+- `requiredClients`: required in check mode and forbidden in snapshot mode;
+  **1–16 unique exact, case-sensitive LSP client names**, at most 512 characters
+  each. The same requirements apply to **every file** in the batch. These are
+  client names (`pyright`), not diagnostic sources (`Pyright`).
 - `severities`: optional; default **error, warning, info, hint**. Filters returned
   entries, not the per-file counts of retrieved diagnostics.
 - `timeoutMs`: optional, **10000** by default; range **100–30000**. One shared
-  deadline covers queuing, connection, and diagnostic collection, not a separate
-  timeout per file. Filesystem/scheduling overhead is not a real-time guarantee.
+  deadline covers queuing, connection, discovery, collection/conversion, and source
+  verification, not a separate timeout per file. It is a maximum, not a startup
+  sleep. Filesystem/scheduling overhead is not a real-time guarantee.
 
 The extension adds usage guidance but does not run tools autonomously, scan a
 project in the background, inject messages, or automatically apply fixes.
@@ -63,10 +70,64 @@ or buffer revisions change, including edits that preserve file size and mtime.
 - Disk/buffer changes during the check are reported, not silently treated as
   successful verification. Any retained diagnostics in such a result may be stale.
 
-## Coverage and freshness
+## Check mode: explicit required providers
+
+```json
+{
+  "files": ["probe.py"],
+  "mode": "check",
+  "requiredClients": ["pyright"],
+  "timeoutMs": 20000
+}
+```
+
+A fast empty linter cannot satisfy a requirement for an absent type checker.
+Check mode waits for the named clients on each file and requests every currently
+exposed applicable pull provider from each matching attached instance. Unrelated
+clients remain visible but receive no tool-owned requests and cannot block it.
+No server is installed, enabled, or guessed to fulfill a requirement.
+
+Only this call's **full document-diagnostic replies** count. These replies are
+retained directly and converted against the input disk snapshot; neither cached
+results, automatic pulls, push publications, nor `unchanged` replies without a
+baseline establish completion. Related-document results are outside the anchor's
+scope. Check mode does not publish its replies through Neovim's cache handler.
+This also avoids depending on that handler's hidden-buffer pull-state setup.
+
+`check.status` is separate from observation status and diagnostic counts:
+
+| Check status | Meaning |
+| --- | --- |
+| `not_requested` | Snapshot mode; no provider-backed check was attempted. |
+| `complete` | Required owned replies were collected and sources reverified. Errors can still be present: **complete is not a pass verdict**. |
+| `incomplete` | Missing/initializing clients, pending responses, unverifiable push-only coverage, or a final verification race prevented completion. |
+| `failed` | A required request/lookup, response validation/collection, or source verification failed. Partial results may remain. |
+
+Missing and push-only providers wait within the same deadline: an attachment or
+new pull capability might still arrive. Neovim's public discovery currently hides
+clients awaiting initialization, so `missing` means **not observed**, not proven
+absent or disabled. Terminal failures can finish early. Registration replacement
+retires obsolete owned work even when an identifier is reused; retries and limits
+apply across the call. Multiple instances with one required name must all answer
+when observed attached; the first successful instance cannot hide another failure.
+
+Check mode compares loaded logical UTF-8 lines with the disk snapshot (BOM/CRLF
+normalized), then fences buffer revisions and reverifies disk hashes. It rejects
+bare-CR files and unsafe range conversions. A source conflict invalidates completion,
+without overwriting the buffer or discarding already-retained useful replies.
+
+This is deliberately scoped to names/instances/registrations observed at final
+verification. It cannot certify future attachments, complete workspace indexing,
+server correctness, or builds/tests. Push-only observations remain available in
+snapshot mode. Neovim 0.11's single-match dynamic accessor cannot establish full
+registration coverage, so such checks stay unconfirmed; static providers can still
+be checked. Compatibility shapes are simulated on 0.12, not tested on a 0.11 binary.
+See [the full completion contract and regression boundaries](CHECK_CONTRACT.md).
+
+## Snapshot coverage and freshness
 
 Neovim stores a **diagnostic cache**, not a universal "all checks finished" flag.
-This tool reads all namespaces exposed by `vim.diagnostic`, including LSP and
+Snapshot mode reads all namespaces exposed by `vim.diagnostic`, including LSP and
 plugins that publish there. Quickfix-only or proprietary plugin stores are not
 included. Save-only/manual linters are **not** triggered with fake save events or
 extra shell commands. Normal configured file-load hooks may run them.
@@ -84,15 +145,19 @@ registrations for the same identifier share a pull; diagnostics from **distinct
 providers are not deduplicated by message text**. Neovim 0.12 exposes multiple
 matching registrations; the 0.11 accessor exposes only its first matching
 registration, so other providers may not all be explicitly refreshed there.
-The tool limits its pulls to **16 distinct identifiers per client/file/call**,
-including registration changes during that call. Lookup failures, invalid
+The tool limits observations to **16 client instances per file/call**, prioritizing
+required names in check mode, and pulls to **16 distinct identifiers per
+client/file/call**. Identifiers are bounded to 512 bytes, and each lookup permits
+at most 128 matching registrations (including duplicates). Client/provider limits
+include registration/client changes during that call. Lookup failures, invalid
 identifiers, and exhausted provider limits are explicit `pull_error` results,
 not guessed default identifiers or proof of complete coverage.
 
 Registration lookup does not repair Neovim's own buffer initialization. For
 example, Neovim 0.12 can fail to initialize pull state for a hidden buffer with
 only selector-scoped dynamic registrations. A response-handler failure remains
-`pull_error`; the tool does not patch private runtime state to hide it.
+`pull_error` in snapshot mode; the tool does not patch private runtime state to
+hide it. Check mode consumes direct replies instead of using that cache handler.
 Push servers remain controlled by Neovim's normal open/change notifications.
 Only this tool's own pull requests are canceled on cleanup.
 
@@ -100,13 +165,15 @@ Neovim can cancel a tool-owned pull during an automatic diagnostic refresh and
 consume the cancellation acknowledgement without invoking its response callback.
 The tool also observes public `LspRequest` completion events, waits for normal
 response handlers to run, and retries these interrupted pulls at most twice per
-client/provider/file. Exhausted retries or other explicit pull failures are reported as
+client/provider/file. Registration replacement also consumes this three-attempt
+budget. Exhausted retries or other explicit pull failures are reported as
 `pull_error`, not left pending until the deadline or presented as a clean result.
 Retries still use the original whole-call deadline. This does not disable
 Neovim's automatic refreshes or cancel requests owned by other consumers.
 
-It observes diagnostic events, client attachment/initialization, and pull
-responses, then allows a **400 ms quiet period**. These observations are only
+Snapshot mode observes diagnostic events, client attachment/initialization, and
+pull responses, then allows a **400 ms quiet period**. Check mode does not use a
+quiet period as a completion condition. These observations are only
 heuristics: diagnostic events include resets, push messages may be versionless,
 and another provider might still start or publish later. Missing evidence waits
 until the collection budget is exhausted. Warm calls can reuse observations for
@@ -126,13 +193,21 @@ All reports declare **`completeness: "best_effort"`**. In particular:
 | `buffer_modified` | An unsaved service buffer was left untouched. |
 | `disk_changed`, `buffer_changed`, `buffer_unavailable` | The input changed or disappeared during the check. |
 
-Each result includes client names/roots, diagnostic-event counts where available,
-pull errors, refresh state, and disk-verification status. `pendingPullClients`
-identifies clients with outstanding tool-owned pulls; `pullRetries` counts
-retries after a completion without a response callback. Pull errors include the
-provider identifier when known. Both pending clients and retries are shown in text
-when nonempty/nonzero. A service disconnect is an explicit failed tool call;
-a timeout can retain already-collected results.
+Schema-version-2 reports expose request ID, mode, check status, elapsed time,
+budget/stop reason, and serving PID/socket/identity verification **in model-visible
+text**, not only Pi's UI-only `details`. A queued request can identify an advertised
+service without falsely claiming it contacted it. The diagnostic helper protocol
+version is an API contract marker, not proof of a particular Git checkout.
+
+Per-file output includes source hashes/ticks, verification state, required-client
+outcomes, observed client IDs/names/roots, and per-provider identifiers, owned
+request IDs, attempts, response kinds, timing offsets and failures. Neovim request
+versions are not server acknowledgements of index freshness. Snapshots expose
+cache namespaces; checks expose direct client/provider provenance. Provider
+metadata retained across a source conflict is labeled as not reverified.
+`pendingPullClients` identifies outstanding owned work; `pullRetries` counts extra
+attempts after cancellation/supersession, including registration changes. A service
+disconnect is an explicit failed tool call; deadlines can retain partial results.
 **No matching diagnostics does not mean the file passed every check.** Still run
 appropriate tests, builds, and linters.
 
@@ -141,7 +216,10 @@ appropriate tests, builds, and linters.
 Results are grouped by canonical file, sorted by severity and position, and
 contain message, source/namespace, code, start/end range, and severity counts.
 Positions use **1-based lines and UTF-8 byte columns; ends are exclusive**. Neovim
-converts LSP character encodings before this tool reads diagnostics.
+converts encodings for cached snapshots; check mode converts owned response ranges
+against the original UTF-8 input, independently of diagnostic caches. Unconvertible
+ranges stay explicitly labeled with raw 0-based, provider-encoded `lspRange` values
+and invalidate completion; they are never presented as invented source positions.
 
 Readable output is capped at **16 KiB / 1000 lines**. Larger results include a
 mode-0600 `report.json` in a private temporary directory. The path is in both the
@@ -149,8 +227,9 @@ text and structured `details.fullOutputPath`; read it with Pi's file tools.
 Reports persist independently of the Neovim service so they remain readable
 after a service restart (normal OS temp-file retention applies).
 
-A further RPC safety cap limits each snapshot to 10000 diagnostics / an estimated
-8 MiB and each message to 8192 bytes. Omissions and message truncation are
+A further RPC safety cap limits each snapshot, or retained owned check replies
+across the call, to 10000 diagnostics / an estimated 8 MiB and each message to
+8192 bytes. Response collection omissions invalidate check completion. Omissions and message truncation are
 explicit; even the full retrieved report cannot restore those omitted details.
 Arbitrary diagnostic `user_data` is not serialized. Diagnostic text and file
 names are untrusted data, never instructions to execute.
@@ -201,4 +280,11 @@ partial coverage, native refresh/cancellation acknowledgements, bounded retries,
 dynamic identifiers/selectors, static fallback, multiple-provider provenance,
 legacy registration-accessor compatibility, provider limits, queued deadlines,
 frozen/dead services, cache retention, output limits, discovery/reload behavior,
-and RPC framing/lifecycle.
+and RPC framing/lifecycle. `check.test.mjs` additionally covers cold fast-empty /
+late-checker discovery with an already-incorrect file; missing, initializing,
+push-only and hanging clients; per-file requirements; unrelated hangs; cache
+contamination; full-response/range validation; multiple matching instances;
+registration replacement; observation/collection limits; final source races;
+BOM/CRLF/Unicode conversion; and stale-helper rejection. The older `TEST_PLAN.md`
+remains the snapshot/cold-evidence baseline; `CHECK_CONTRACT.md` describes the new
+check mode that the earlier plan treated as future work.

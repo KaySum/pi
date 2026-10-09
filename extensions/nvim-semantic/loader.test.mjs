@@ -22,10 +22,12 @@ test('actual Pi loader shares consumers safely and reconnects them after service
   const directory = await realpath(await mkdtemp('/tmp/pi-semantic-loader-'));
   const init = join(directory, 'init.lua');
   const cmd = [process.execPath, fileURLToPath(new URL('./test/lsp.mjs', import.meta.url)), 'delay'];
+  const diagnosticCmd = [process.execPath, fileURLToPath(new URL('../nvim-diagnostics/test/lsp.mjs', import.meta.url)), 'pull'];
   const producer = fileURLToPath(new URL('../nvim-diagnostics/test/producer.lua', import.meta.url));
   await writeFile(init, `dofile(${JSON.stringify(producer)})
 vim.api.nvim_create_autocmd('BufReadPost',{pattern='*.lsp',callback=function(ev)
-vim.lsp.start({name='loader-fixture',cmd=vim.json.decode([==[${JSON.stringify(cmd)}]==]),root_dir=vim.fn.getcwd()},{bufnr=ev.buf}) end})`);
+vim.lsp.start({name='loader-fixture',cmd=vim.json.decode([==[${JSON.stringify(cmd)}]==]),root_dir=vim.fn.getcwd()},{bufnr=ev.buf})
+vim.lsp.start({name='loader-checker',cmd=vim.json.decode([==[${JSON.stringify(diagnosticCmd)}]==]),root_dir=vim.fn.getcwd()},{bufnr=ev.buf}) end})`);
   const file = join(directory, 'sample.lsp'); await writeFile(file, 'é😀 target BAD\n');
   const oldInit = process.env.PI_NVIM_INIT;
   process.env.PI_NVIM_INIT = init;
@@ -53,6 +55,13 @@ vim.lsp.start({name='loader-fixture',cmd=vim.json.decode([==[${JSON.stringify(cm
     await emit('session_shutdown'); assert.equal(existsSync(first.socket), false);
     await emit('session_start'); assert.notEqual(serviceInfo().socket, first.socket);
     bus.emit('nvim-service:stopped', first);
+    const checked = await run('nvim_diagnostics', { files: [file], mode: 'check', requiredClients: ['loader-checker'], timeoutMs: 3000 });
+    assert.equal(checked.details.check.status, 'complete');
+    assert.equal(checked.details.files[0].diagnostics.length, 1, 'Only owned replies, not all cached namespaces');
+    assert.equal(checked.details.service.socket, serviceInfo().socket);
+    assert.equal(checked.details.service.identityVerified, true);
+    assert.ok(checked.content[0].text.includes(serviceInfo().socket), 'Identity is model-visible, not only in details');
+    assert.match(checked.content[0].text, /complete is not a pass verdict/);
     assert.equal((await run('nvim_hover', { file, line: 1, column: 8, timeoutMs: 3000 })).details.status, 'ok');
   } finally {
     await emit('session_shutdown');

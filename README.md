@@ -30,9 +30,12 @@ your editor's `$NVIM` is unchanged.
 See [configuration, extension API, and shutdown guarantees](extensions/nvim-service/README.md).
 
 `extensions/nvim-diagnostics/` adds the `nvim_diagnostics` tool. Pi can request a
-batch of disk files, optionally filter severities, and receive Neovim diagnostics
-with explicit coverage/freshness status. Modified service buffers are never
-overwritten; missing providers and timeouts are not presented as clean results.
+batch of disk files and optionally filter severities. Default `snapshot` mode
+reports best-effort cached observations; explicit `check` mode requires named LSP
+clients' own full replies and source verification. Check completion is separate
+from diagnostic counts, not a pass verdict. Reports expose request/service identity
+and provider evidence. Modified buffers are never overwritten; missing providers,
+push-only coverage, and timeouts cannot become complete checks.
 See [setup, tool parameters, limits, and tests](extensions/nvim-diagnostics/README.md).
 
 `extensions/nvim-semantic/` adds read-only `nvim_navigate`, `nvim_hover`, and

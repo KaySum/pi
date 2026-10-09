@@ -59,8 +59,11 @@ test('registers a bounded real tool without starting resources or injecting mess
   assert.equal(h.tool.executionMode, 'sequential');
   assert.equal(h.tool.parameters.properties.files.maxItems, 32);
   assert.equal(h.tool.parameters.properties.timeoutMs.maximum, 30000);
-  assert.match(h.tool.promptGuidelines.join(' '), /empty or cached results do not prove/);
-  assert.match(h.tool.description, /never saves/);
+  assert.deepEqual(h.tool.parameters.properties.mode.anyOf.map(v => v.const), ['snapshot', 'check']);
+  assert.equal(h.tool.parameters.properties.requiredClients.maxItems, 16);
+  assert.equal(h.tool.parameters.properties.requiredClients.uniqueItems, true);
+  assert.match(h.tool.promptGuidelines.join(' '), /do not establish completion/);
+  assert.match(h.tool.description, /never saves/i);
 });
 
 test('does not wait for a later service handler; ready/get discover it on demand', async t => {
@@ -70,7 +73,7 @@ test('does not wait for a later service handler; ready/get discover it on demand
   await assert.rejects(h.execute({ files: ['a'] }), /unavailable/);
   h.setInfo(first);
   h.events.emit('nvim-service:ready', first);
-  const params = { files: ['a'], severities: ['warning'] };
+  const params = { files: ['a'], severities: ['warning'], mode: 'check', requiredClients: ['pyright'] };
   const controller = new AbortController();
   const result = await h.execute(params, controller.signal);
   assert.deepEqual(result.content, [{ type: 'text', text: 'diagnostics report' }]);

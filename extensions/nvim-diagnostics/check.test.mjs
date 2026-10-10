@@ -38,6 +38,18 @@ ${extra}`);
   };
 }
 const required = row => row.requirements.find(r => r.name === 'checker');
+async function pendingPull(f, attempt) {
+  const before = Date.now();
+  while (Date.now() - before < 1500) {
+    const pull = await f.lua(`for _,r in pairs(_G.__pi_diagnostics_v1.requests) do
+      for _,file in ipairs(r.files) do for _,p in pairs(file.pulls) do
+        if p.id and not p.done and p.attempts==... then return {id=p.id,client=p.client.id} end
+      end end end; return false`, [attempt]);
+    if (pull) return pull;
+    await delay(20);
+  }
+  assert.fail(`Owned attempt ${attempt} was not pending`);
+}
 async function dynamicEnumeration(t, f) {
   if (await f.lua("return vim.fn.has('nvim-0.12') == 1")) return true;
   t.skip('Complete dynamic enumeration requires Neovim 0.12; legacy coverage is tested separately');
@@ -86,6 +98,7 @@ test('a cold check waits for the declared late checker with an error already pre
   assert.equal(report.service.socket, f.info.socket);
   assert.equal(report.service.identityVerified, true);
   assert.equal(report.schemaVersion, 2);
+  assert.equal(report.service.diagnosticsProtocol, 3);
   const text = (await formatReport(report)).text;
   for (const value of [report.requestId, String(f.info.pid), f.info.socket, 'checker', 'fixture', 'responded']) assert.ok(text.includes(value), value);
   assert.match(text, /elapsed.*ms/i);
@@ -147,6 +160,90 @@ for (const mode of ['error', 'cancel', 'unchanged', 'malformed', 'bad-range', 'm
     assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
   });
 }
+
+for (const mode of ['snapshot', 'check']) {
+  test(`${mode} discards a cancelled full reply and retries only after its completion`, async t => {
+    const f = await fixture(t, [{ name: 'checker', mode: 'cancel-full' }]);
+    const pending = f.run([await f.file()], { mode, requiredClients: mode === 'check' ? ['checker'] : undefined });
+    void pending.catch(() => {});
+    const first = await pendingPull(f, 1);
+    await f.lua('local p=...; vim.lsp.get_client_by_id(p.client):cancel_request(p.id)', [first]);
+    await pendingPull(f, 2);
+    await f.lua("vim.lsp.get_clients({name='checker'})[1]:request('fixture/release',{},function() end)");
+    const report = await pending;
+    const row = report.files[0], pull = row.providers[0].pulls[0];
+    assert.equal(report.check.status, mode === 'check' ? 'complete' : 'not_requested', JSON.stringify(report));
+    assert.equal(row.diagnostics.length, 1);
+    assert.equal(row.pullRetries, 1);
+    assert.equal(pull.attempts, 2);
+    assert.equal(pull.cancelledAttempts, 1);
+    assert.equal(pull.discardedReplies, 1);
+    assert.equal(pull.cancelled, false, 'The accepted retry was not cancelled');
+    assert.match((await formatReport(report)).text, /discarded replies=1/);
+    assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+  });
+}
+
+test('cancellation before Client:request returns its ID still invalidates the response', async t => {
+  const f = await fixture(t, [{ name: 'checker', mode: 'cancel-full' }], `
+vim.api.nvim_create_autocmd('LspAttach',{callback=function(ev)
+  local c=vim.lsp.get_client_by_id(ev.data.client_id); local request=c.request; local cancelled=false
+  c.request=function(self,method,params,handler,bufnr)
+    local ok,id=request(self,method,params,handler,bufnr)
+    if not cancelled and method=='textDocument/diagnostic' then
+      for _,r in pairs(_G.__pi_diagnostics_v1.requests) do for _,file in ipairs(r.files) do
+        for _,p in pairs(file.pulls) do if p.client==self and not p.id and not p.done then
+          cancelled=true; self:cancel_request(id)
+        end end
+      end end
+    end
+    return ok,id
+  end
+end})`);
+  const pending = f.run([await f.file()]);
+  void pending.catch(() => {});
+  await pendingPull(f, 2);
+  await f.lua("vim.lsp.get_clients({name='checker'})[1]:request('fixture/release',{},function() end)");
+  const report = await pending;
+  assert.equal(report.check.status, 'complete', JSON.stringify(report));
+  assert.equal(report.files[0].diagnostics.length, 1);
+  assert.equal(report.files[0].providers[0].pulls[0].discardedReplies, 1);
+});
+
+test('repeated cancelled full replies fail at the existing three-attempt limit', async t => {
+  const f = await fixture(t, [{ name: 'checker', mode: 'cancel-full' }]);
+  const pending = f.run([await f.file()]);
+  void pending.catch(() => {});
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const pull = await pendingPull(f, attempt);
+    await f.lua('local p=...; vim.lsp.get_client_by_id(p.client):cancel_request(p.id)', [pull]);
+  }
+  const report = await pending, row = report.files[0], pull = row.providers[0].pulls[0];
+  assert.equal(report.check.status, 'failed', JSON.stringify(report));
+  assert.equal(row.status, 'pull_error');
+  assert.equal(row.pullRetries, 2);
+  assert.equal(pull.attempts, 3);
+  assert.equal(pull.cancelledAttempts, 3);
+  assert.equal(pull.discardedReplies, 3);
+  assert.equal(row.diagnostics.length, 0);
+  assert.equal(await f.lua('return vim.tbl_count(_G.__pi_diagnostics_v1.requests)'), 0);
+});
+
+test('a cancel event alone is not completion and cannot trigger overlapping retries', async t => {
+  const f = await fixture(t, [{ name: 'checker', mode: 'hang' }]);
+  const pending = f.run([await f.file()], { timeoutMs: 900 });
+  void pending.catch(() => {});
+  const pull = await pendingPull(f, 1);
+  await f.lua('local p=...; vim.lsp.get_client_by_id(p.client):cancel_request(p.id)', [pull]);
+  const report = await pending, row = report.files[0], result = row.providers[0].pulls[0];
+  assert.equal(report.check.status, 'incomplete', JSON.stringify(report));
+  assert.equal(report.timedOut, true);
+  assert.equal(row.pullRetries, 0);
+  assert.equal(result.state, 'pending');
+  assert.equal(result.cancelled, true);
+  assert.equal(result.cancelledAttempts, 1);
+  assert.equal(result.discardedReplies, 0);
+});
 
 test('malformed snapshot replies remain explicit pull errors', async t => {
   const f = await fixture(t, [{ name: 'checker', mode: 'malformed' }]);
@@ -264,6 +361,29 @@ for (const mode of ['dynamic-switch', 'dynamic-replace']) {
   });
 }
 
+for (const mode of ['snapshot', 'check']) {
+  test(`${mode} treats equivalent registration aliases and duplicate matches as one stable provider`, async t => {
+    const f = await fixture(t, undefined, `vim.api.nvim_create_autocmd('LspAttach',{callback=function(ev)
+      local c=vim.lsp.get_client_by_id(ev.data.client_id); local revision=0
+      c.dynamic_capabilities.get=function()
+        revision=revision+1
+        local registrations={}
+        for i=1,1+revision%3 do
+          registrations[i]={id='alias-'..revision..'-'..i,method='textDocument/diagnostic',
+            registerOptions={identifier='fixture',interFileDependencies=false,workspaceDiagnostics=false}}
+        end
+        return registrations
+      end
+    end})`);
+    const report = await f.run([await f.file()], { mode, requiredClients: mode === 'check' ? ['checker'] : undefined });
+    assert.equal(report.check.status, mode === 'check' ? 'complete' : 'not_requested', JSON.stringify(report));
+    assert.equal(report.files[0].status, 'updated', JSON.stringify(report));
+    assert.equal(report.files[0].diagnostics.length, 1);
+    assert.equal(report.files[0].pullRetries, 0);
+    assert.equal(report.files[0].providers[0].pulls[0].attempts, 1);
+  });
+}
+
 test('legacy single-match dynamic enumeration cannot certify complete client coverage', async t => {
   const f = await fixture(t, [{ name: 'checker', mode: 'dynamic-multi' }], `
 vim.api.nvim_create_autocmd('LspAttach',{callback=function(ev)
@@ -300,13 +420,21 @@ test('required client observation limits fail rather than hiding another matchin
 });
 
 for (const [label, body, expected] of [
-  ['registration churn', `return {{method='textDocument/diagnostic',registerOptions={identifier='churn'}}}`, /attempt limit/],
+  ['registration churn', `revision=revision+1; changing.registerOptions.interFileDependencies=revision%2==0;
+    return {changing}`, /attempt limit/],
   ['registration count', `local list={}; for i=1,129 do list[i]={registerOptions={identifier='same'}} end; return list`, /128 matching/],
   ['identifier size', `return {{registerOptions={identifier=string.rep('x',513)}}}`, /512 bytes/],
+  ['option bytes', `return {{registerOptions={identifier='fixture',extra=string.rep('x',65537)}}}`, /64 KiB/],
+  ['option depth', `local value={}; for i=1,17 do value={nested=value} end;
+    return {{registerOptions={identifier='fixture',extra=value}}}`, /structure limit/],
+  ['option nodes', `local options={identifier='fixture'}; for i=1,2050 do options['key'..i]=true end;
+    return {{registerOptions=options}}`, /structure limit/],
+  ['invalid option value', `return {{registerOptions={identifier='fixture',extra=function() end}}}`, /Invalid.*options/],
 ]) {
   test(`${label} is an explicit required-provider failure at the final boundary`, async t => {
     const f = await fixture(t, undefined, `vim.api.nvim_create_autocmd('LspAttach',{callback=function(ev)
       local c=vim.lsp.get_client_by_id(ev.data.client_id)
+      local revision=0; local changing={method='textDocument/diagnostic',registerOptions={identifier='churn'}}
       c.dynamic_capabilities.get=function() ${body} end
     end})`);
     const report = await f.run([await f.file()]);
@@ -348,6 +476,6 @@ for (const text of ['😀 BAD\r\n', '\uFEFFé BAD\n', '\uFEFF\uFEFFBAD\n']) {
 
 test('a stale helper protocol requests reload rather than returning a misleading report', async t => {
   const f = await fixture(t);
-  await f.lua('_G.__pi_diagnostics_v1.protocolVersion=1');
+  await f.lua('_G.__pi_diagnostics_v1.protocolVersion=2');
   await assert.rejects(f.run([await f.file()]), /reload/i);
 });

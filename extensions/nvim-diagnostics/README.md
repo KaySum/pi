@@ -87,7 +87,7 @@ exposed applicable pull provider from each matching attached instance. Unrelated
 clients remain visible but receive no tool-owned requests and cannot block it.
 No server is installed, enabled, or guessed to fulfill a requirement.
 
-Only this call's **full document-diagnostic replies** count. These replies are
+Only this call's **uncancelled full document-diagnostic replies** count. These replies are
 retained directly and converted against the input disk snapshot; neither cached
 results, automatic pulls, push publications, nor `unchanged` replies without a
 baseline establish completion. Related-document results are outside the anchor's
@@ -106,9 +106,11 @@ This also avoids depending on that handler's hidden-buffer pull-state setup.
 Missing and push-only providers wait within the same deadline: an attachment or
 new pull capability might still arrive. Neovim's public discovery currently hides
 clients awaiting initialization, so `missing` means **not observed**, not proven
-absent or disabled. Terminal failures can finish early. Registration replacement
-retires obsolete owned work even when an identifier is reused; retries and limits
-apply across the call. Multiple instances with one required name must all answer
+absent or disabled. Terminal failures can finish early. Provider disappearance,
+identifier changes, and changed registration option values retire obsolete owned
+work. Equivalent registration aliases do not consume attempts merely because
+UUIDs, Lua objects, or duplicate match counts changed. Retries and limits apply
+across the call. Multiple instances with one required name must all answer
 when observed attached; the first successful instance cannot hide another failure.
 
 Check mode compares loaded logical UTF-8 lines with the disk snapshot (BOM/CRLF
@@ -148,9 +150,11 @@ registration, so other providers may not all be explicitly refreshed there.
 The tool limits observations to **16 client instances per file/call**, prioritizing
 required names in check mode, and pulls to **16 distinct identifiers per
 client/file/call**. Identifiers are bounded to 512 bytes, and each lookup permits
-at most 128 matching registrations (including duplicates). Client/provider limits
-include registration/client changes during that call. Lookup failures, invalid
-identifiers, and exhausted provider limits are explicit `pull_error` results,
+at most 128 matching registrations (including duplicates). Comparing registration
+options uses canonical values, bounded per lookup to 64 KiB, 2048 visited
+keys/values, and nesting depth 16. Client/provider limits include registration/client
+changes during that call. Lookup failures, invalid identifiers/options, and
+exhausted provider limits are explicit `pull_error` results,
 not guessed default identifiers or proof of complete coverage.
 
 Registration lookup does not repair Neovim's own buffer initialization. For
@@ -161,15 +165,21 @@ hide it. Check mode consumes direct replies instead of using that cache handler.
 Push servers remain controlled by Neovim's normal open/change notifications.
 Only this tool's own pull requests are canceled on cleanup.
 
-Neovim can cancel a tool-owned pull during an automatic diagnostic refresh and
-consume the cancellation acknowledgement without invoking its response callback.
-The tool also observes public `LspRequest` completion events, waits for normal
-response handlers to run, and retries these interrupted pulls at most twice per
-client/provider/file. Registration replacement also consumes this three-attempt
-budget. Exhausted retries or other explicit pull failures are reported as
-`pull_error`, not left pending until the deadline or presented as a clean result.
-Retries still use the original whole-call deadline. This does not disable
-Neovim's automatic refreshes or cancel requests owned by other consumers.
+Neovim can cancel a tool-owned pull during an automatic diagnostic refresh. A
+server may answer with an ordinary **empty full report**, not a cancellation error;
+that reply must not clear a snapshot cache or establish check completion. The tool
+observes public `LspRequest` cancellation events and discards such replies. A cancel
+event alone is not completion: no retry starts until the reply/completion arrives.
+Neovim can also consume a cancellation acknowledgement without invoking its
+response callback; deferred completion bookkeeping handles that path while letting
+normal response handlers run first.
+
+Interrupted pulls retry at most twice per client/provider/file. Meaningful provider
+changes consume the same three-attempt budget; equivalent registration aliases do
+not. Exhausted retries or other explicit failures become `pull_error`, not phantom
+pending work or a clean result. A cancelled request that never completes remains
+pending until the deadline. Retries use the original whole-call deadline. This
+does not disable automatic refreshes or cancel other consumers' requests.
 
 Snapshot mode observes diagnostic events, client attachment/initialization, and
 pull responses, then allows a **400 ms quiet period**. Check mode does not use a
@@ -198,10 +208,15 @@ budget/stop reason, and serving PID/socket/identity verification **in model-visi
 text**, not only Pi's UI-only `details`. A queued request can identify an advertised
 service without falsely claiming it contacted it. The diagnostic helper protocol
 version is an API contract marker, not proof of a particular Git checkout.
+Helper protocol **3** rejects older helpers without the cancellation/registration
+fixes; the report schema remains version 2. Run `/reload` after upgrading.
 
 Per-file output includes source hashes/ticks, verification state, required-client
 outcomes, observed client IDs/names/roots, and per-provider identifiers, owned
-request IDs, attempts, response kinds, timing offsets and failures. Neovim request
+request IDs, attempts, response kinds, timing offsets and failures. Per-pull
+`cancelled`/`cancelledAtMs` describe the current attempt's observed cancellation
+request, not its completion. `cancelledAttempts` and `discardedReplies` retain
+counts across retries; these are also shown in model-visible text. Neovim request
 versions are not server acknowledgements of index freshness. Snapshots expose
 cache namespaces; checks expose direct client/provider provenance. Provider
 metadata retained across a source conflict is labeled as not reverified.
@@ -284,7 +299,9 @@ and RPC framing/lifecycle. `check.test.mjs` additionally covers cold fast-empty 
 late-checker discovery with an already-incorrect file; missing, initializing,
 push-only and hanging clients; per-file requirements; unrelated hangs; cache
 contamination; full-response/range validation; multiple matching instances;
-registration replacement; observation/collection limits; final source races;
-BOM/CRLF/Unicode conversion; and stale-helper rejection. The older `TEST_PLAN.md`
-remains the snapshot/cold-evidence baseline; `CHECK_CONTRACT.md` describes the new
-check mode that the earlier plan treated as future work.
+meaningful registration changes and equivalent aliases; cancelled full replies,
+synchronous cancellation and retry bounds; observation/collection/option limits;
+final source races; BOM/CRLF/Unicode conversion; and stale-helper rejection.
+`CHECK_CONTRACT.md` defines the completion contract. The local `TEST_PLAN.md`, when
+present, describes live cold-check and snapshot retesting; it is not required at
+runtime.

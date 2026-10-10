@@ -33,9 +33,12 @@ For each file:
    initialized and expose their applicable document-pull registrations. Track
    provider identifiers independently. A single-match legacy accessor is not
    evidence that every matching dynamic registration was enumerated.
-3. Every current required provider must answer this call's own request with a
-   valid `full` response. An `unchanged` response without a baseline, an arbitrary
-   diagnostic event, a cache hit, or a push publication cannot satisfy the check.
+3. Every current required provider must answer this call's own **uncancelled**
+   request with a valid `full` response. A reply to an observed cancelled request
+   cannot satisfy the check, even if the server returns an ordinary empty `full`
+   result instead of a cancellation error. An `unchanged` response without a
+   baseline, an arbitrary diagnostic event, a cache hit, or a push publication
+   cannot satisfy the check.
 4. The requested source revision must remain stable. The loaded logical UTF-8
    lines must match the disk snapshot; preserve modified-buffer conflicts.
    Reverify disk hashes and buffer revisions before reporting completion.
@@ -67,12 +70,23 @@ initialization, so those remain `missing` (not observed), not a fabricated
 `initializing` or proven absent state. A push-only client stays unconfirmed; a dynamic pull capability
 can still arrive before that deadline. Neither condition is a successful check.
 Terminal required-provider failures may finish the check early. Client detachment
-invalidates its participation. Registration changes retire obsolete owned work;
-only current registrations can satisfy completion. Client-instance (16 per file),
-provider-identifier (16 per client/file), and attempt (three per identifier) limits
-apply across the call, not anew for each registry change or retry. Identifiers
-are bounded to 512 bytes; each lookup permits at most 128 matching registrations,
-including duplicates.
+invalidates its participation. Provider disappearance, identifier changes, or
+changes to the matching registration option values retire obsolete owned work.
+Equivalent registration aliases and duplicate selector matches do not: UUIDs,
+object identities, and duplicate counts are not distinct diagnostic providers.
+Only currently applicable providers can satisfy completion. Client-instance
+(16 per file), provider-identifier (16 per client/file), and attempt (three per
+identifier) limits apply across the call, not anew for each registry change or
+retry. Identifiers are bounded to 512 bytes; each lookup permits at most 128
+matching registrations, including duplicates. Canonical option encoding is bounded
+to 64 KiB, 2048 visited keys/values, and nesting depth 16 per lookup; invalid or
+excessive option structures fail explicitly.
+
+A public cancellation event marks the owned attempt unusable but does **not**
+complete it. Wait for its reply/completion before retrying, within the original
+three-attempt limit and deadline. Discard cancelled replies before retaining check
+results or invoking the snapshot cache handler. Cancellation acknowledgements
+whose callbacks Neovim suppresses still use deferred completion bookkeeping.
 
 The boundary is deliberately finite: required names and the attached matching
 instances/registrations observed at final verification. It does not certify that
@@ -91,12 +105,15 @@ Model-visible output, not just Pi's UI-only `details`, must show:
   for requirements that remain missing, pending, unconfirmed, or failed.
 - Observed client IDs, names, roots, initialization and attachment state.
 - Per-provider identifier, owned request ID, state, attempts, reply kind, request
-  and completion offsets when available, and failures/omissions.
+  and completion offsets when available, observed cancellation state/time,
+  cancelled-attempt/discarded-reply counts, and failures/omissions.
 - Cache namespaces in snapshots; client/provider provenance for direct replies.
 
 Timing fields are recorded at transitions, not continuously mutated observation
-fields that would themselves prevent a quiet period. A report protocol version
-identifies the API contract; it is not a Git checkout/build identity claim.
+fields that would themselves prevent a quiet period. Report schema version 2
+remains compatible; helper protocol **3** rejects older helpers that may accept
+cancelled replies or misidentify equivalent registration aliases. Neither version
+is a Git checkout/build identity claim.
 
 ## Required regression boundaries
 
@@ -105,8 +122,12 @@ identifies the API contract; it is not a Git checkout/build identity claim.
 - A missing, initializing, push-only, or hanging required client is not complete.
 - Required clients apply independently to every file; unrelated hanging clients
   do not block checks. Duplicate names cannot hide a failed matching instance.
-- Cancellation acknowledgements, multiple identifiers, registration changes,
-  omitted providers/results, and malformed responses retain explicit outcomes.
+- Cancellation acknowledgements and ordinary full replies after cancellation
+  cannot produce false completion; cancellation alone cannot trigger overlapping
+  retries. Equivalent registration aliases do not consume attempts; meaningful
+  option changes (including in-place mutations) still invalidate old work.
+- Multiple identifiers, omitted providers/results, malformed responses, and
+  oversized/invalid registration options retain explicit outcomes.
 - Cache contamination cannot add/remove owned check results. Source/disk/buffer
   races invalidate completion even when useful diagnostics have been retrieved.
 - Queued timeouts do not falsely claim contact with a service. Service replacement,

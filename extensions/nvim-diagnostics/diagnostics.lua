@@ -2,7 +2,7 @@
 if _G.__pi_diagnostics_v1 then return true end
 local B = assert(_G.__pi_nvim_buffers_v1)
 local api = vim.api
-local M = { entries = B.entries, requests = {}, protocolVersion = 2 }
+local M = { entries = B.entries, requests = {}, protocolVersion = 3 }
 _G.__pi_diagnostics_v1 = M
 local group = api.nvim_create_augroup('PiNvimDiagnosticsV1', { clear = true })
 local MAX_ATTEMPTS, MAX_PROVIDERS, MAX_CLIENTS = 3, 16, 16
@@ -18,23 +18,35 @@ local function pull_state(p)
   if not p.done or (p.retryable and p.attempts < MAX_ATTEMPTS) then return 'pending' end
   return p.success and 'responded' or 'error'
 end
--- RequestCancelled replies can skip the response handler. Defer completion
+local function cancelled(r, p)
+  if p.cancelled then return end
+  p.cancelled, p.cancelledAtMs = true, elapsed(r)
+  p.cancelledAttempts = p.cancelledAttempts + 1
+end
+-- A cancel event invalidates the reply but does not complete the request. Servers
+-- may answer cancellation with a normal (even empty full) result, not an error.
+-- RequestCancelled errors can skip the response handler altogether; defer complete
 -- bookkeeping so an ordinary scheduled response handler always gets first use.
 api.nvim_create_autocmd('LspRequest', {
   group = group,
   callback = function(ev)
     local data = ev.data or {}
-    if not data.request or data.request.method ~= 'textDocument/diagnostic' or data.request.type ~= 'complete' then return end
+    if not data.request or data.request.method ~= 'textDocument/diagnostic' then return end
+    local kind = data.request.type
+    if kind ~= 'cancel' and kind ~= 'complete' then return end
     for _, r in pairs(M.requests) do
       for _, f in ipairs(r.files) do
         for key, p in pairs(f.pulls) do
-          if p.client.id == data.client_id and p.id == data.request_id and not p.done then
-            vim.schedule(function()
-              if M.requests[r.token] == r and f.pulls[key] == p and not p.done then
-                p.done, p.retryable, p.completedAtMs = true, true, elapsed(r)
-                p.error = 'Diagnostic request ended without a response callback (cancelled or superseded)'
-              end
-            end)
+          if p.client.id == data.client_id and p.id == data.request_id and not p.done and not p.retired then
+            if kind == 'cancel' then cancelled(r, p)
+            else
+              vim.schedule(function()
+                if M.requests[r.token] == r and f.pulls[key] == p and not p.done then
+                  p.done, p.retryable, p.completedAtMs = true, true, elapsed(r)
+                  p.error = 'Diagnostic request ended without a response callback (cancelled or superseded)'
+                end
+              end)
+            end
           end
         end
       end
@@ -47,8 +59,7 @@ function M.begin(token, inputs, deadline, options)
   local r = B.begin(token, inputs, deadline)
   r.token, r.mode, r.required = token, options.mode or 'snapshot', {}
   r.names, r.startedAt = options.requiredClients or {}, options.startedAt or B.wall_ms()
-  r.records, r.bytes, r.registrationCounter = 0, 0, 0
-  r.registrationIds = setmetatable({}, { __mode = 'k' })
+  r.records, r.bytes = 0, 0
   for _, name in ipairs(r.names) do r.required[name] = true end
   M.requests[token] = r
   r.on_finish = function()
@@ -75,14 +86,47 @@ function M.begin(token, inputs, deadline, options)
   end
   return true
 end
-local function providers_for(client, buf, r)
+-- Compare option values, not registration UUIDs or Lua object identities. Servers
+-- can overlap/replace equivalent registrations; selectors can also match twice.
+-- Canonical JSON makes order/duplicate aliases irrelevant while still detecting
+-- meaningful option changes (including mutations of an existing Lua table).
+local function option_key(value, budget, depth)
+  budget.nodes = budget.nodes + 1
+  assert(depth <= 16 and budget.nodes <= 2048, 'Diagnostic registration options exceed structure limit')
+  local function charge(encoded)
+    budget.bytes = budget.bytes + #encoded
+    assert(budget.bytes <= 65536, 'Diagnostic registration options exceed 64 KiB per lookup')
+    return encoded
+  end
+  if type(value) ~= 'table' then
+    assert(value == vim.NIL or type(value) == 'string' or type(value) == 'boolean' or type(value) == 'number',
+      'Invalid diagnostic registration options')
+    if type(value) == 'string' then assert(#value <= 65536 - budget.bytes, 'Diagnostic registration options exceed 64 KiB per lookup') end
+    return charge(vim.json.encode(value))
+  end
+  local keys, parts, list = {}, {}, vim.islist(value)
+  for key in pairs(value) do
+    assert(list or type(key) == 'string', 'Invalid diagnostic registration option key')
+    keys[#keys + 1] = key
+    assert(#keys <= 2048 - budget.nodes, 'Diagnostic registration options exceed structure limit')
+  end
+  table.sort(keys)
+  charge(string.rep(',', math.max(0, #keys - 1)) .. (list and '[]' or '{}'))
+  for _, key in ipairs(keys) do
+    local prefix = list and '' or option_key(key, budget, depth + 1) .. charge(':')
+    parts[#parts + 1] = prefix .. option_key(value[key], budget, depth + 1)
+  end
+  return (list and '[' or '{') .. table.concat(parts, ',') .. (list and ']' or '}')
+end
+local function providers_for(client, buf)
   local dynamic, registrations = client.dynamic_capabilities, nil
   if dynamic and type(dynamic.get) == 'function' then
     registrations = dynamic:get('diagnosticProvider', { bufnr = buf })
       or dynamic:get('textDocument/diagnostic', { bufnr = buf })
   end
   local providers, seen, enumeration = {}, {}, 'static'
-  local function add(capability, registration)
+  local budget = { nodes = 0, bytes = 0 }
+  local function add(capability)
     local identifier
     if type(capability) == 'table' then identifier = capability.identifier end
     if identifier == vim.NIL then identifier = nil end
@@ -94,20 +138,15 @@ local function providers_for(client, buf, r)
       seen[key] = { key = key, identifier = identifier, registrations = {} }
       table.insert(providers, seen[key])
     end
-    -- Public accessors return the registered objects. Use request-local weak
-    -- identity tokens, not tostring(table): a freed Lua address can be reused.
-    local origin = registration or capability
-    if not r.registrationIds[origin] then
-      r.registrationCounter = r.registrationCounter + 1
-      r.registrationIds[origin] = r.registrationCounter
-    end
-    table.insert(seen[key].registrations, r.registrationIds[origin])
+    assert(capability == nil or capability == true or type(capability) == 'table', 'Invalid diagnostic provider options')
+    local signature = option_key(type(capability) == 'table' and capability or vim.empty_dict(), budget, 0)
+    seen[key].registrations[signature] = true
   end
   if registrations then
     enumeration = registrations.method and 'single_match' or 'matching_registrations'
     if registrations.method then registrations = { registrations } end
     assert(#registrations <= 128, 'Diagnostic registration limit exceeded (128 matching registrations)')
-    for _, registration in ipairs(registrations) do add(registration.registerOptions, registration) end
+    for _, registration in ipairs(registrations) do add(registration.registerOptions) end
   else
     local capability = client.server_capabilities.diagnosticProvider
     assert(capability, 'Diagnostic provider registration unavailable; refusing to guess an identifier')
@@ -115,8 +154,9 @@ local function providers_for(client, buf, r)
   end
   assert(#providers > 0, 'Diagnostic provider registration unavailable')
   for _, provider in ipairs(providers) do
-    table.sort(provider.registrations)
-    provider.registrationKey = table.concat(provider.registrations, '|')
+    local signatures = vim.tbl_keys(provider.registrations)
+    table.sort(signatures)
+    provider.registrationKey = table.concat(signatures, '\0') -- JSON cannot contain literal NUL.
   end
   return providers, enumeration
 end
@@ -171,19 +211,25 @@ local function pull_for(r, f, client, provider)
     -- Replace the object as well as its registration identity. A delayed callback
     -- from the retired request must not turn this budget failure into success.
     f.pulls[key] = { client = client, identifier = provider.identifier, done = true, attempts = previous.attempts,
-      registrationKey = provider.registrationKey, sourceTick = f.tick,
+      registrationKey = provider.registrationKey, sourceTick = f.tick, cancelled = false,
+      cancelledAttempts = previous.cancelledAttempts, discardedReplies = previous.discardedReplies,
       error = 'Diagnostic provider changed repeatedly; request attempt limit exhausted' }
     return
   end
   local p = { client = client, identifier = provider.identifier, done = false,
     attempts = previous and previous.attempts + 1 or 1, startedAtMs = elapsed(r), sourceTick = f.tick,
-    registrationKey = provider.registrationKey }
+    registrationKey = provider.registrationKey, cancelled = false,
+    cancelledAttempts = previous and previous.cancelledAttempts or 0,
+    discardedReplies = previous and previous.discardedReplies or 0 }
   f.pulls[key] = p
   local params = { textDocument = { uri = vim.uri_from_bufnr(f.entry.buf) }, identifier = provider.identifier }
   local ok, sent, id = pcall(client.request, client, 'textDocument/diagnostic', params, function(err, result, ctx)
     if M.requests[r.token] ~= r or f.pulls[key] ~= p or p.retired then return end
     p.done, p.completedAtMs, p.documentVersion = true, elapsed(r), ctx and ctx.version
-    if B.state(f) then p.error = 'Buffer changed during diagnostic request'
+    if p.cancelled then
+      p.retryable, p.discardedReplies = true, p.discardedReplies + 1
+      p.error = 'Diagnostic request was cancelled or superseded; response discarded'
+    elseif B.state(f) then p.error = 'Buffer changed during diagnostic request'
     elseif err then p.error = tostring(type(err) == 'table' and err.message or err)
     elseif r.mode == 'check' then retain_reply(r, p, result)
     elseif result then
@@ -196,7 +242,12 @@ local function pull_for(r, f, client, provider)
     else p.error = 'Empty diagnostic response' end
   end, f.entry.buf)
   if not ok or not sent then p.done = true; p.error = tostring(id or sent); p.completedAtMs = elapsed(r)
-  else p.id = id end
+  else
+    p.id = id
+    -- A synchronous LspRequest observer may cancel during Client:request before
+    -- the returned ID was available to our event handler.
+    if client.requests[id] and client.requests[id].type == 'cancel' then cancelled(r, p) end
+  end
 end
 local function observe(r, f, allow_start)
   for _, c in pairs(f.ledger) do c.active = false end
@@ -226,7 +277,7 @@ local function observe(r, f, allow_start)
         if not ok then c.error = tostring(supported)
         elseif not supported then c.state = 'unconfirmed'
         else
-          local resolved, providers, enumeration = pcall(providers_for, client, f.entry.buf, r)
+          local resolved, providers, enumeration = pcall(providers_for, client, f.entry.buf)
           if not resolved then c.error = tostring(providers)
           else
             c.enumeration = enumeration
@@ -304,6 +355,8 @@ function M.snapshot(token, include_diagnostics, allow_start)
             table.insert(row.pulls, { identifier = p.identifier or vim.NIL, requestId = p.id, state = pull_state(p),
               attempts = p.attempts, startedAtMs = p.startedAtMs, completedAtMs = p.completedAtMs,
               responseKind = p.responseKind, responseCount = p.responseCount, documentVersion = p.documentVersion,
+              cancelled = p.cancelled, cancelledAtMs = p.cancelledAtMs,
+              cancelledAttempts = p.cancelledAttempts, discardedReplies = p.discardedReplies,
               sourceTick = p.sourceTick, error = text(p.error, 8192), omittedDiagnostics = p.omittedDiagnostics or 0 })
             if c.active and c.expected[key] and not p.retired then
               if pull_state(p) == 'pending' then out.pendingPulls = out.pendingPulls + 1; pending[row.name] = true

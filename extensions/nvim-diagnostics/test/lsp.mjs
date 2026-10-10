@@ -3,6 +3,7 @@ const mode = process.argv[2];
 const dynamic = mode.startsWith('dynamic');
 const documents = new Map();
 const held = new Set();
+const heldFull = new Map();
 let refreshed = false, registered = false, switched = false;
 let buffer = Buffer.alloc(0);
 function send(value) {
@@ -49,10 +50,13 @@ function message(m) {
     send({ jsonrpc: '2.0', id: 'fixture-replace', method: 'client/registerCapability', params: {
       registrations: [{ id: 'replacement', method: 'textDocument/diagnostic', registerOptions: {
         identifier: mode === 'dynamic-replace' ? 'fixture-dynamic' : 'fixture-replacement',
-        interFileDependencies: false, workspaceDiagnostics: false,
+        interFileDependencies: mode === 'dynamic-replace', workspaceDiagnostics: false,
       } }],
     } });
     reply(null);
+  } else if (m.method === 'fixture/release') {
+    for (const [id, items] of heldFull) send({ jsonrpc: '2.0', id, result: { kind: 'full', items } });
+    heldFull.clear(); reply(null);
   } else if (m.method === 'textDocument/diagnostic') {
     if (mode === 'hang') return;
     if (['dynamic-switch', 'dynamic-replace'].includes(mode) && !switched) { held.add(m.id); return; }
@@ -76,10 +80,14 @@ function message(m) {
     }
     const doc = documents.get(m.params.textDocument.uri);
     let items = mode === 'empty' ? [] : diagnostics(doc?.text ?? '');
+    if (mode === 'cancel-full') { heldFull.set(m.id, items); return; }
     if (mode === 'bad-range' && items.length) items[0].range = { start: { line: 99, character: 0 }, end: { line: 99, character: 1 } };
     if (mode === 'many') items = Array.from({ length: 10001 }, () => diagnostics('BAD')[0]);
     setTimeout(() => reply({ kind: 'full', resultId: String(doc?.version), items }), mode === 'delay' ? 700 : 150);
   } else if (m.method === '$/cancelRequest') {
+    // Cancellation need not produce RequestCancelled: Pyright can return an
+    // ordinary empty full report. The consumer must still reject that response.
+    if (heldFull.delete(m.params.id)) send({ jsonrpc: '2.0', id: m.params.id, result: { kind: 'full', items: [] } });
     if (held.delete(m.params.id)) send({ jsonrpc: '2.0', id: m.params.id, error: { code: -32800, message: 'Request cancelled' } });
   } else if (m.method === 'shutdown') reply(null);
   else if (m.method === 'exit') process.exit(0);

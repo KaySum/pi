@@ -7,7 +7,8 @@ import { normalizeRange } from '../nvim-service/positions.mjs';
 
 export const SEVERITIES = ['error', 'warning', 'info', 'hint'];
 const SETTLE_MS = 400;
-const PROTOCOL = 2;
+const SCHEMA_VERSION = 2;
+const PROTOCOL = 3; // Reject helpers that can accept cancelled replies or misidentify registration aliases.
 const CALL = 'return _G.__pi_diagnostics_v1[...](select(2, ...))';
 const emptyCounts = () => Object.fromEntries(SEVERITIES.map(s => [s, 0]));
 
@@ -198,7 +199,7 @@ export class DiagnosticsClient extends ServiceClient {
       if (rows.some(f => f.conversionTimedOut) || Date.now() >= deadline) { timedOut = true; stopReason = 'deadline'; }
       else if (stopReason === 'deadline' && check.status !== 'complete') timedOut = true;
     }
-    return { schemaVersion: PROTOCOL, requestId, mode: params.mode, requiredClients: params.requiredClients,
+    return { schemaVersion: SCHEMA_VERSION, requestId, mode: params.mode, requiredClients: params.requiredClients,
       service, check, stopReason, timeoutMs: params.timeoutMs, files: rows, timedOut, elapsedMs: Date.now() - started,
       diagnosticSource: params.mode === 'check' ? 'required_client_replies' : 'diagnostic_cache',
       completeness: 'best_effort', columnEncoding: 'utf8-bytes', positions: '1-based, end-exclusive',
@@ -227,7 +228,7 @@ export async function formatReport(report) {
     if (file.providerObservationCurrent === false && file.providers?.length) lines.push('  Provider observations retained from before the source conflict; not reverified.');
     for (const c of file.providers ?? []) {
       lines.push(`  Client ${c.id} ${quote(c.name)}: ${c.state}; attached=${c.attached}; required=${c.required}; initialized=${c.initialized}; first seen=${c.firstSeenMs} ms; root=${quote(c.root)}; registrations=${c.enumeration ?? 'unavailable'}.`);
-      for (const p of c.pulls) lines.push(`    Pull ${quote(p.identifier)}: ${p.state}; request=${p.requestId ?? 'not sent'}; attempts=${p.attempts}; start=${p.startedAtMs ?? 'not started'} ms; reply=${p.completedAtMs ?? 'none'} ms; kind=${p.responseKind ?? 'none'}; items=${p.responseCount ?? 'unavailable'}; source tick=${p.sourceTick ?? 'unavailable'}; document version=${p.documentVersion ?? 'unavailable'}${p.error ? `; error=${quote(p.error)}` : ''}.`);
+      for (const p of c.pulls) lines.push(`    Pull ${quote(p.identifier)}: ${p.state}; request=${p.requestId ?? 'not sent'}; attempts=${p.attempts}; start=${p.startedAtMs ?? 'not started'} ms; reply=${p.completedAtMs ?? 'none'} ms; kind=${p.responseKind ?? 'none'}; items=${p.responseCount ?? 'unavailable'}; source tick=${p.sourceTick ?? 'unavailable'}; document version=${p.documentVersion ?? 'unavailable'}; cancelled=${p.cancelled ?? 'unavailable'}; cancel requested at=${p.cancelledAtMs ?? 'none'} ms; cancelled attempts=${p.cancelledAttempts ?? 'unavailable'}; discarded replies=${p.discardedReplies ?? 'unavailable'}${p.error ? `; error=${quote(p.error)}` : ''}.`);
     }
     if (file.extraClients) lines.push(`  ${file.extraClients} clients omitted by the observation limit.`);
     if (file.pendingPullClients?.length) lines.push(`  Still waiting for diagnostic pulls: ${file.pendingPullClients.map(quote).join(', ')}`);

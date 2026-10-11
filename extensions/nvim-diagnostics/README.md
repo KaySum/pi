@@ -166,10 +166,41 @@ its check: a check 0.6 s after an edit to a TypeScript file takes about 0.45 s, 
 ## Development
 
 ```sh
-node --test --test-timeout=30000 *.test.mjs
+node --test --test-timeout=40000 *.test.mjs
 ../nvim-service/node_modules/.bin/tsc -p .
 ```
 
 The tests run a real Neovim against [`test/lsp.mjs`](test/lsp.mjs), a scriptable language
 server that reproduces the behaviors above. They need `nvim-service`'s dev dependencies
 (`npm ci --prefix ../nvim-service`).
+
+### Sweep against your real servers
+
+The tests cannot know how your language servers behave; every behavior in this document
+was found by running them. The sweep does that on demand:
+
+```sh
+node test/sweep.mjs                  # every case, about three minutes
+node test/sweep.mjs rust python      # only these
+node test/sweep.mjs --rounds=10 --gaps=none,0,300,2000 --keep
+```
+
+It makes a scratch project under `/tmp`, starts Neovim with your normal configuration, and
+for each case writes a broken file, a fixed one, a broken one again, checking after every
+change and once more with nothing changed. It does this without warm-up, and with a
+warm-up some milliseconds before the check (`--gaps`). A check is wrong if it is
+incomplete, misses the problem, or reports one for the fixed file; each wrong check is
+printed with its timeline, and the exit status is 1.
+
+```
+case         result      checks     first   changed   slowest unchanged   sources
+typescript   ok              36      5822      1039      2541         4   tailwindcss silent, vtsls reported
+python       ok              36       950        44       100         7   pyright answered, ruff answered
+rust         ok              36      3617       374       692         7   rust-analyzer answered
+```
+
+Times are in milliseconds. A case whose file gets no language server or linter in your
+setup is shown as `SKIPPED` rather than failed.
+
+To try another language, add an entry to [`test/sweep-cases.mjs`](test/sweep-cases.mjs):
+a file path, contents with and without a problem, and what the problem's line must match.

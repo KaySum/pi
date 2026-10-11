@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../nvim-service/service.mjs';
 import { openNvim } from '../nvim-service/nvim.mjs';
-import { diagnose, status, validate } from './core.mjs';
+import { diagnose, status, validate, warmer } from './core.mjs';
 
 // A file's extension names the fake servers that attach to it: `a.pull`, `b.pull_push`.
 async function fixture(t) {
@@ -268,4 +268,34 @@ test('a long session keeps only the most recently checked buffers, and never unl
   // An unloaded file is simply loaded again when it is next checked.
   assert.deepEqual([...await f.check(['f5.txt'])], ['f5.txt: no language server or linter for this file']);
   assert.equal((await loaded())[5], true);
+});
+
+test('a file checked in the background is ready when it is asked about', async t => {
+  const f = await fixture(t);
+  const warm = warmer(() => f.nvim);
+  const path = name => join(f.directory, name);
+  await f.write('a.phased', 'ERROR slow to arrive');
+  await f.write('b.pull', 'ERROR quick');
+  // Several edits in a row share one background check.
+  const first = warm.add(path('a.phased'));
+  assert.equal(warm.add(path('b.pull')), first);
+  await first;
+  const ready = await f.check(['a.phased', 'b.pull'], { trace: true });
+  assert.deepEqual(ready.slice(0, 4), ['a.phased: 1 error — phased reported', '  1:1 error [E0] slow to arrive (fake)',
+    'b.pull: 1 error — pull answered', '  1:1 error [E0] quick (fake)']);
+  assert.match(ready.text, /a\.phased: unchanged since the last check/);
+  assert.ok(ready.ms < 300, `took ${ready.ms} ms`);
+
+  // Asking while the background check is still waiting gives the same answer, not an early one.
+  await f.write('a.phased', 'ERROR changed');
+  const background = warm.add(path('a.phased'));
+  const during = await f.check(['a.phased'], { trace: true });
+  assert.deepEqual(during.slice(0, 2), ['a.phased: 1 error — phased reported', '  1:1 error [E0] changed (fake)']);
+  assert.match(during.text, /phased published 1 for a\.phased/);
+  await background;
+  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v3.pulls)'), 0);
+
+  // It never fails out loud: a missing file or a stopped service is the real check's to report.
+  await warm.add(path('gone.pull'));
+  await warmer(() => { throw new Error('Neovim service unavailable'); }).add(path('b.pull'));
 });

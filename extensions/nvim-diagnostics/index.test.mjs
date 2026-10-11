@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
 import { openNvim } from '../nvim-service/nvim.mjs';
 
@@ -16,9 +17,9 @@ const source = stripTypeScriptTypes(await readFile(new URL('./index.ts', import.
 const { default: register } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('one tool, connected to the service only through the event bus', async t => {
-  const bus = new EventEmitter(), tools = [], commands = {}, notes = [];
+  const bus = new EventEmitter(), hooks = new EventEmitter(), tools = [], commands = {}, notes = [];
   register({ events: { on: (channel, handler) => bus.on(channel, handler), emit: (channel, data) => bus.emit(channel, data) },
-    on: () => {}, registerTool: tool => tools.push(tool), registerCommand: (name, command) => { commands[name] = command; } });
+    on: (event, handler) => hooks.on(event, handler), registerTool: tool => tools.push(tool), registerCommand: (name, command) => { commands[name] = command; } });
   const [tool] = tools;
   assert.equal(tools.length, 1);
   assert.equal(tool.name, 'nvim_diagnostics');
@@ -42,6 +43,19 @@ test('one tool, connected to the service only through the event bus', async t =>
   // The command shows the servers and what the last check returned; with paths it runs a traced check.
   assert.match(await command(), /^info: No language servers are running.*\n\nLast check \d+ s ago, took \d+ ms:\na\.txt: no language server or linter for this file\nnope\.txt: no such file$/);
   assert.match(await command('a.txt  nope.txt'), /^info: a\.txt: no language server or linter for this file\nnope\.txt: no such file\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: unchanged since the last check$/);
+
+  // Pi's own edits and writes start a background check; other tools and failed edits do not.
+  const edited = input => hooks.emit('tool_result', input, { cwd: directory });
+  await writeFile(join(directory, 'new.txt'), 'text');
+  await writeFile(join(directory, 'other.txt'), 'text');
+  edited({ toolName: 'write', input: { path: 'new.txt' }, isError: false });
+  edited({ toolName: 'edit', input: { path: 'other.txt' }, isError: true });
+  edited({ toolName: 'read', input: { path: 'other.txt' }, isError: false });
+  edited({ toolName: 'bash', input: { command: 'ls' }, isError: false });
+  const loaded = () => nvim.lua('local dir = ...; return { vim.fn.bufloaded(dir .. "/new.txt"), vim.fn.bufloaded(dir .. "/other.txt") }', [directory]);
+  for (let i = 0; i < 50 && (await loaded())[0] === 0; i++) await delay(50);
+  await delay(500);
+  assert.deepEqual(await loaded(), [1, 0]);
 
   await nvim.keys(':echo "one\\ntwo"<CR>');
   await assert.rejects(call({ files: ['a.txt'] }), /waiting at a prompt[^]*one\ntwo\nPress ENTER/);

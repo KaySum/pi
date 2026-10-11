@@ -14,6 +14,8 @@ local clamp = function(value, low, high) return math.min(math.max(value, low), h
 local ATTEMPTS = 10
 -- A client may be created a moment after a buffer loads; much later on a filetype's first use.
 local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
+-- Reloading a buffer can detach its clients for a moment; they are given this long to return.
+local REATTACH_MS = 1000
 -- A push server has no "finished" signal. After new text it is given a window to report,
 -- sized from how long it has taken before, and must then stay quiet briefly.
 local QUIET_MS, MIN_WINDOW_MS, MAX_WINDOW_MS = 300, 1000, 10000
@@ -69,7 +71,11 @@ if not S then
     if b then
       S.seq = S.seq + 1
       S.server(ctx.client_id).reports = true
-      b.pushes[ctx.client_id] = { at = S.seq, time = now(), items = params.diagnostics }
+      -- Servers repeat themselves (vtsls reports again a while after a save). Only a report
+      -- that says something new moves the time it is considered to have finished at.
+      local previous = b.pushes[ctx.client_id]
+      local same = previous and b.epoch and previous.at > b.epoch.at and vim.deep_equal(previous.items, params.diagnostics)
+      b.pushes[ctx.client_id] = { at = S.seq, time = now(), finished = same and previous.finished or now(), items = params.diagnostics }
       S.note(('%s published %d for %s'):format(lsp.get_client_by_id(ctx.client_id).name, #params.diagnostics, vim.fs.basename(name)))
     end
     return publish(err, params, ctx, ...)
@@ -98,7 +104,8 @@ if request.status then
 end
 
 -- With request.trace, a timeline of what was sent and received, for /nvim-diagnostics.
-local trace = request.trace and {} or nil
+-- A check can start while another is still waiting, so the earlier one's is put back after.
+local trace, outer = request.trace and {} or nil, S.note
 function S.note(text)
   if trace then table.insert(trace, ('%5d ms  %s'):format(now() - started, text)) end
 end
@@ -138,10 +145,15 @@ local function learn(b)
       -- project), or one that followed a change to another file (which makes servers like
       -- vtsls report again for every open file).
       local startup = (server.born or 0) >= b.epoch.time
-      local sample = report.time - math.max(b.epoch.time, ready)
-      if startup or report.time > (b.epoch.superseded or math.huge) then server.latency = server.latency or 0
+      local sample = report.finished - math.max(b.epoch.time, ready)
+      if startup or report.finished > (b.epoch.superseded[id] or math.huge) then server.latency = server.latency or 0
       elseif sample < MAX_WINDOW_MS then server.latency = math.max(sample, 0.8 * (server.latency or 0)) end
-    elseif not server.latency then server.mute = server.mute + 1 end
+      server.steady = (server.steady or 0) + 1
+    else
+      -- It let a change pass without a word, so its silence cannot be read as "still coming".
+      server.steady = -math.huge
+      if not server.latency then server.mute = server.mute + 1 end
+    end
   end
 end
 
@@ -165,13 +177,9 @@ local function open(path)
   if loaded and not reload and b.tick == api.nvim_buf_get_changedtick(buf) then
     S.note(('%s: unchanged since the last check'):format(f.name))
   else
-    f.loading, f.saved = reload or not loaded, not f.out.unsaved
     if b.epoch then learn(b) end
-    for _, other in pairs(S.buffers) do
-      if other.epoch then other.epoch.superseded = other.epoch.superseded or now() end
-    end
     S.seq = S.seq + 1
-    b.epoch = { at = S.seq, time = now(), ready = {} }
+    b.epoch = { at = S.seq, time = now(), ready = {}, superseded = {}, loaded = reload or not loaded, saved = not f.out.unsaved }
     if reload then
       local listed = vim.bo[buf].buflisted
       api.nvim_buf_call(buf, function() vim.cmd('silent keepalt keepjumps edit') end)
@@ -246,13 +254,17 @@ end
 local function greet(f, client, server)
   f.b.epoch.ready[client.id] = now()
   server.born = server.born or now()
+  -- From here on, this server's reports for its other files may be about this change.
+  for _, other in pairs(S.buffers) do
+    if other ~= f.b and other.epoch then other.epoch.superseded[client.id] = other.epoch.superseded[client.id] or now() end
+  end
   -- A server that has just started, or is known to show progress, gets a moment to start
   -- showing it before anything it says is believed.
   if server.progressive or not server.busy then server.busy = now() end
   -- The buffer matches the file, which is what "saved" means, and some servers only do
   -- their real checking then: rust-analyzer runs cargo check, eslint can lint on save.
   -- It is said here, not at the reload, because clients may re-attach a moment after it.
-  if f.saved and client:supports_method('textDocument/didSave', f.buf) then
+  if f.b.epoch.saved and client:supports_method('textDocument/didSave', f.buf) then
     local sync = client.server_capabilities.textDocumentSync
     local text = type(sync) == 'table' and type(sync.save) == 'table' and sync.save.includeText
       and table.concat(api.nvim_buf_get_lines(f.buf, 0, -1, false), '\n') .. '\n' or nil
@@ -295,7 +307,12 @@ local function ask(f, client)
 
   local since = math.max(epoch.time, epoch.ready[client.id])
   local cold = not server.reports and now() - server.born < COLD_MS
-  if working or cold or now() - since < window(server) or (fresh and now() - report.time < QUIET_MS) then
+  -- The report that work was leading up to tends to arrive just after its progress ends.
+  local settling = now() - server.busy < SETTLE_MS
+  -- A server that has answered every change so far is running late, not finished, when it
+  -- has not answered this one: it is waited for well past its usual window.
+  local late = not fresh and (server.steady or 0) >= 1 and now() - since < math.min(5 * window(server), MAX_WINDOW_MS)
+  if working or settling or cold or late or now() - since < window(server) or (fresh and now() - report.time < QUIET_MS) then
     return 'busy', fresh and report.items or nil
   end
   -- A server that reported nothing new may simply have nothing new to say (marksman only
@@ -321,9 +338,11 @@ local function observe(f)
       S.note(('%s: %s is %s'):format(f.name, name, status))
     end
   end
+  local epoch, attached = f.b.epoch, {}
   out.clients, out.done = {}, true
   for _, client in ipairs(lsp.get_clients({ bufnr = f.buf, _uninitialized = true })) do
     local status, items = ask(f, client)
+    attached[client.id] = true
     state(client.name, client.id, status)
     for _, d in ipairs(items or {}) do
       local start = type(d.range) == 'table' and d.range.start or {}
@@ -332,8 +351,14 @@ local function observe(f)
       add(start.line or 0, ok and column or start.character or 0, d.severity or 1, d)
     end
   end
-  -- A client may be created a moment after the buffer is (re)loaded.
-  local attached = #out.clients > 0 or not f.loading or now() - started >= (S.filetypes[f.filetype] and ATTACH_MS or FIRST_ATTACH_MS)
+  -- After a (re)load, a client may be created a moment later, and one that was attached
+  -- before may be briefly gone. This is judged from the load, not from this call: another
+  -- check may have loaded the buffer an instant ago.
+  local age = now() - epoch.time
+  local complete = not epoch.loaded or #out.clients > 0 or age >= (S.filetypes[f.filetype] and ATTACH_MS or FIRST_ATTACH_MS)
+  for id in pairs(epoch.loaded and f.b.clients or {}) do
+    if not attached[id] and lsp.get_client_by_id(id) and age < REATTACH_MS then complete = false end
+  end
   local running = package.loaded.lint and package.loaded.lint.get_running(f.buf) or {}
   for _, name in ipairs(f.b.linters) do
     state(name, name, vim.tbl_contains(running, name) and 'linting' or 'linted')
@@ -342,7 +367,8 @@ local function observe(f)
   for _, d in ipairs(vim.diagnostic.get(f.buf)) do
     if not vim.diagnostic.get_namespace(d.namespace).name:match('^n?vim%.lsp%.') then add(d.lnum, d.col, d.severity, d) end
   end
-  out.done = out.done and attached
+  out.done = out.done and complete
+  if out.done then f.b.clients = attached end
   f.found = found
   return out.done
 end
@@ -395,5 +421,6 @@ end
 pcall(prune)
 local timeline = trace
 trace = nil -- Events between calls are not part of any timeline.
+S.note = outer
 if not ok then error(err, 0) end
 return { files = vim.tbl_map(function(f) return f.out end, files), elapsedMs = math.floor(now() - started), trace = timeline }

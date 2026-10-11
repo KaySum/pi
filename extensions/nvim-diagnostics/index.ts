@@ -1,11 +1,20 @@
 import { Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { useNvim } from '../nvim-service/api.mjs';
-import { diagnose, status, SEVERITIES } from './core.mjs';
+import { resolve } from 'node:path';
+import { diagnose, status, warmer, SEVERITIES } from './core.mjs';
 
 export default function (pi: ExtensionAPI) {
   const nvim = useNvim(pi);
+  const warm = warmer(nvim);
   let last: { at: number; ms: number; text: string } | undefined;
+
+  // Pi has just changed a file: start checking it now, unseen, so its language servers
+  // are running and have settled by the time Pi asks. Nothing is added to the conversation.
+  pi.on('tool_result', (event, ctx) => {
+    if ((event.toolName !== 'edit' && event.toolName !== 'write') || event.isError || typeof event.input.path !== 'string') return;
+    void warm.add(resolve(ctx.cwd, event.input.path));
+  });
 
   async function check(params: Parameters<typeof diagnose>[1], cwd: string, signal?: AbortSignal, trace = false) {
     const at = Date.now();

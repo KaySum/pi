@@ -61,3 +61,23 @@ export async function status(nvim, signal) {
     : `push only, ${c.reports ? '' : 'has never reported, '}given ${c.windowMs} ms after a change`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
   return `Language servers in Pi's Neovim:\n${lines.join('\n')}\n${trackedBuffers} checked file${trackedBuffers === 1 ? '' : 's'} kept open${pendingPulls ? `; ${pendingPulls} diagnostic requests still pending` : ''}`;
 }
+
+/**
+ * Checks files in the background and discards the result, so that their servers are
+ * running and settled before anyone asks. `add(path)` queues an absolute path; paths
+ * added while a check is running go into the next one.
+ */
+export function warmer(nvim) {
+  const pending = new Set();
+  let running;
+  async function run() {
+    while (pending.size) {
+      const files = [...pending].slice(0, 32);
+      for (const file of files) pending.delete(file);
+      // Best effort: the service may be down, the file gone, the editor at a prompt.
+      try { await diagnose(nvim(), { files }, '/'); } catch { /* the real check will say why */ }
+    }
+    running = undefined;
+  }
+  return { add(path) { pending.add(path); return running ??= run(); } };
+}

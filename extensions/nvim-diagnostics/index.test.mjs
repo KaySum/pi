@@ -23,6 +23,8 @@ test('one tool, connected to the service only through the event bus', async t =>
   const [tool] = tools;
   assert.equal(tools.length, 1);
   assert.equal(tool.name, 'nvim_diagnostics');
+  // Without a snippet a custom tool is left out of the system prompt's list of available tools.
+  assert.match(tool.promptSnippet, /errors and warnings/);
   assert.equal(tool.parameters.properties.files.maxItems, 32);
   assert.deepEqual(tool.parameters.properties.severity.anyOf.map(option => option.const), ['error', 'warning', 'info', 'hint']);
 

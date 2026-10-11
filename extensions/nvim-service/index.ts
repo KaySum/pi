@@ -132,6 +132,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'nvim_lua',
     label: 'Neovim Lua',
+    promptSnippet: 'Run Lua in your own Neovim to query or drive it (buffers, LSP, plugins, Ex commands)',
     description: 'Run Lua in your own Neovim and get its return value (strings as text, anything else as JSON). `...` receives args. Reaches everything: buffers, windows, options, LSP, diagnostics, plugins, and Ex commands through vim.cmd.',
     promptGuidelines: [
       'You own a private Neovim with the user\'s configuration, plugins and LSP servers; it is not the user\'s editor and does not see their unsaved buffers. Prefer nvim_lua and return only the data you need. Use nvim_keys for interactive flows and to answer prompts. Files it writes are real.',
@@ -151,6 +152,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'nvim_keys',
     label: 'Neovim keys',
+    promptSnippet: 'Type keys into your Neovim and see the resulting state or screen',
     description: 'Type keys into your Neovim as a person would, in Neovim notation (<Esc>, <CR>, <C-w>, <lt> for a literal <). Returns mode, buffer, cursor and the message line. The rendered screen is added when screen is true, and always at a prompt. Empty keys just looks.',
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -169,6 +171,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'nvim_restart',
     label: 'Restart Neovim',
+    promptSnippet: 'Replace your Neovim when it is hung or broken',
     description: 'Replace your Neovim with a fresh instance when it is hung or broken. Unsaved buffers and editor state are lost.',
     executionMode: 'sequential',
     parameters: Type.Object({}),

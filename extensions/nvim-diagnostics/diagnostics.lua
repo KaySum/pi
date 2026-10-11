@@ -16,11 +16,14 @@ local ATTEMPTS = 10
 local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
 -- Reloading a buffer can detach its clients for a moment; they are given this long to return.
 local REATTACH_MS = 1000
--- A push server has no "finished" signal. After new text it is given a window to report,
--- sized from how long it has taken before, and must then stay quiet briefly.
-local QUIET_MS, MIN_WINDOW_MS, MAX_WINDOW_MS = 300, 1000, 10000
--- The window for a server with no record yet, and for one that never reports.
-local UNKNOWN_WINDOW_MS, MUTE_WINDOW_MS = 2500, 500
+-- A push server has no "finished" signal. Once it reports problems it has plainly done the
+-- work, and only has to stay quiet briefly. Until then it is given a window, since "nothing
+-- yet" and "nothing wrong" look the same: twice the longest it has taken to report
+-- problems before plus a margin, within these bounds.
+local QUIET_MS, PACED_MARGIN_MS, MIN_PACED_WINDOW_MS, MAX_WINDOW_MS = 300, 200, 500, 10000
+-- The window for a server that has not yet shown how long problems take it, for one with
+-- no record at all, and for one that never reports.
+local UNPACED_WINDOW_MS, UNKNOWN_WINDOW_MS, MUTE_WINDOW_MS = 1000, 2500, 500
 -- A push server that has only just started may still be loading its project, without
 -- saying so. Until it reports for the first time it is not called silent this early.
 local COLD_MS = 5000
@@ -86,7 +89,8 @@ local started = now()
 
 -- How long a push server gets to report on new text before its silence is believed.
 local function window(server)
-  if server.latency then return clamp(1.5 * server.latency, MIN_WINDOW_MS, MAX_WINDOW_MS) end
+  if server.pace then return clamp(2 * server.pace + PACED_MARGIN_MS, MIN_PACED_WINDOW_MS, MAX_WINDOW_MS) end
+  if server.reports then return UNPACED_WINDOW_MS end
   -- A server that has stayed silent through two changes (tailwindcss outside a Tailwind
   -- project, in-process helpers) is not waited on at length again.
   return server.mute >= 2 and MUTE_WINDOW_MS or UNKNOWN_WINDOW_MS
@@ -98,6 +102,7 @@ if request.status then
     local server = S.server(client.id)
     table.insert(clients, { id = client.id, name = client.name, root = client.root_dir, initialized = client.initialized,
       pull = client.initialized and client:supports_method(PULL) or false, windowMs = math.floor(window(server)),
+      paceMs = server.pace and math.floor(server.pace) or nil,
       reports = server.reports == true, buffers = vim.tbl_count(client.attached_buffers) })
   end
   return { clients = clients, pendingPulls = vim.tbl_count(S.pulls), trackedBuffers = vim.tbl_count(S.buffers) }
@@ -135,24 +140,26 @@ local function prune()
   end
 end
 
--- Learn from the epoch that is ending: how long each push server took to finish reporting
+-- Learn from the epoch that is ending: how long each push server took to report problems
 -- (including reports that arrived after the check returned), and which never reported.
 local function learn(b)
   for id, ready in pairs(b.epoch.ready) do
     local server, report = S.server(id), b.pushes[id]
     if report and report.at > b.epoch.at then
-      -- Not a measure of the server's pace: its first report after starting up (loading the
-      -- project), or one that followed a change to another file (which makes servers like
-      -- vtsls report again for every open file).
+      -- Not a measure of the server's pace: a report of no problems (which may be it merely
+      -- clearing a reopened file), its first report after starting up (loading the project),
+      -- or one that followed a change to another file (which makes servers like vtsls
+      -- report again for every open file).
       local startup = (server.born or 0) >= b.epoch.time
       local sample = report.finished - math.max(b.epoch.time, ready)
-      if startup or report.finished > (b.epoch.superseded[id] or math.huge) then server.latency = server.latency or 0
-      elseif sample < MAX_WINDOW_MS then server.latency = math.max(sample, 0.8 * (server.latency or 0)) end
+      if #report.items > 0 and not startup and report.finished <= (b.epoch.superseded[id] or math.huge) and sample < MAX_WINDOW_MS then
+        server.pace = math.max(sample, 0.95 * (server.pace or 0))
+      end
       server.steady = (server.steady or 0) + 1
     else
       -- It let a change pass without a word, so its silence cannot be read as "still coming".
       server.steady = -math.huge
-      if not server.latency then server.mute = server.mute + 1 end
+      if not server.reports then server.mute = server.mute + 1 end
     end
   end
 end
@@ -312,9 +319,10 @@ local function ask(f, client)
   -- A server that has answered every change so far is running late, not finished, when it
   -- has not answered this one: it is waited for well past its usual window.
   local late = not fresh and (server.steady or 0) >= 1 and now() - since < math.min(5 * window(server), MAX_WINDOW_MS)
-  if working or settling or cold or late or now() - since < window(server) or (fresh and now() - report.time < QUIET_MS) then
-    return 'busy', fresh and report.items or nil
-  end
+  if working or settling or (fresh and now() - report.time < QUIET_MS) then return 'busy', fresh and report.items or nil end
+  -- Problems reported for this text are an answer. Without them, the window has to pass.
+  local conclusive = fresh and #report.items > 0
+  if not conclusive and (cold or late or now() - since < window(server)) then return 'busy', fresh and report.items or nil end
   -- A server that reported nothing new may simply have nothing new to say (marksman only
   -- publishes changes), so its last report is shown rather than dropped.
   return fresh and 'reported' or report and 'no new report' or 'silent', report and report.items

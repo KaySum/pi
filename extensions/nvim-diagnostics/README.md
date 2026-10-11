@@ -94,18 +94,24 @@ file` means nothing attached to it at all.
 A push-only server has no way to say it is finished, and they behave differently: vtsls
 and clangd clear a reopened file at once and send the real result later, marksman only
 publishes when its answer changes, and tailwindcss outside a Tailwind project never
-publishes. So after a change each push server gets a window to report:
+publishes.
 
-- 1.5 times the longest it has taken before in this session (at least 1 s, at most 10 s),
-  not counting its first report after starting or reports set off by a change to another file,
-- 2.5 s if it has not reported yet,
+Once a server has reported problems for the current text it has plainly done the work, and
+only has to stay quiet for 0.3 s. Until then "nothing yet" and "nothing wrong" look the
+same, so it is given a window:
+
+- twice the longest it has taken to report problems in this session, plus 0.2 s (at least
+  0.5 s, at most 10 s). Its first report after starting and reports set off by a change
+  to another file are not counted,
+- 1 s if it has reported but never yet reported problems,
+- 2.5 s if it has not reported at all,
 - 0.5 s once it has stayed silent through two changes.
 
-It must also have no progress showing and be quiet for 0.3 s, and a server that started
-less than 5 s ago is not called `silent` yet. A server that has reported after every
-change so far is waited for up to five times its window before `no new report` is
-believed: it is running late, not finished. A check that takes a server unusually long
-can still be reported too early, so no diagnostics never replaces a build or a test run.
+A server that started less than 5 s ago is not called `silent` yet, and one that has
+reported after every change so far is waited for up to five times its window before
+`no new report` is believed: it is running late, not finished. A check that takes a
+server unusually long can still be reported too early, so no diagnostics never replaces a
+build or a test run.
 
 A server showing progress for more than a moment (loading a project, running
 `cargo check`) is never treated as finished, whichever kind it is, and is given 0.3 s
@@ -151,17 +157,19 @@ exits.
 
 Measured on this machine with Neovim 0.12.6:
 
-| Check | Time |
-| --- | --- |
-| Unchanged file, or one already checked in the background | a few ms |
-| Changed Python, JSON, CMake | 20–90 ms |
-| Changed Rust (rust-analyzer with `cargo check`) | about 0.4 s |
-| Changed TypeScript, C, Lua, YAML, shell, Markdown | about 1 s |
-| First check of a file type in a session | 0.5–6 s |
+| Check after a change | With problems | Without |
+| --- | --- | --- |
+| Python, JSON, CMake | 20–90 ms | 20–90 ms |
+| Rust (rust-analyzer with `cargo check`) | about 0.4 s | about 0.4 s |
+| C, Dockerfile, TOML | about 0.35 s | about 0.5 s |
+| Lua, YAML, Markdown | 0.4–0.6 s | 0.5–0.8 s |
+| TypeScript, shell | 0.8–0.9 s | 1.1–1.3 s |
 
-With warm-up, the times in the last four rows are counted from Pi's edit rather than from
-its check: a check 0.6 s after an edit to a TypeScript file takes about 0.45 s, and one
-3 s after takes a few milliseconds.
+An unchanged file, or one already checked in the background, takes a few milliseconds.
+The first check of a file type in a session takes 0.5–6 s.
+
+With warm-up, these times are counted from Pi's edit rather than from its check, so a
+check a second or more after the edit takes a few milliseconds.
 
 ## Development
 

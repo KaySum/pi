@@ -1,22 +1,26 @@
--- One call checks a batch of files: sync each buffer with disk, ask every attached
--- language server about that text, and return what they said.
+-- One call checks a batch of files: bring each buffer in line with disk, collect what
+-- every language server and linter says about that text, and return it.
 --
--- Neovim's own diagnostic cache is not used: it applies replies to cancelled pulls (which
--- servers may send empty) and then accepts "unchanged" for the text it just cleared.
+-- Neovim's own diagnostic cache is not used for language servers: it applies replies to
+-- cancelled pulls (which servers may send empty) and then accepts "unchanged" for the
+-- text it just cleared.
 local request = ...
 local api, lsp, uv = vim.api, vim.lsp, vim.uv or vim.loop
 local PULL = 'textDocument/diagnostic'
--- A push server has no "finished" signal: it is done once it has reported and gone quiet.
-local QUIET_MS, MAX_QUIET_MS, ATTEMPTS = 1000, 5000, 10
+local ATTEMPTS = 10
 -- A client may be created a moment after a buffer loads; much later on a filetype's first use.
 local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
+-- A push server has no "finished" signal. After new text it is given a window to report,
+-- sized from how long it has taken before, and must then stay quiet briefly.
+local QUIET_MS, MIN_WINDOW_MS, MAX_WINDOW_MS, UNKNOWN_WINDOW_MS, MUTE_WINDOW_MS = 300, 1000, 10000, 2500, 500
 local now = function() return uv.hrtime() / 1e6 end
 
--- Passive observers, installed once per Neovim. `seq` orders publishes against a file's sync.
-local S = _G.__pi_nvim_diagnostics_v1
+-- Kept for the life of this Neovim. `seq` orders reports against a buffer's epoch: the
+-- last time its text changed as far as the servers are concerned.
+local S = _G.__pi_nvim_diagnostics_v2
 if not S then
-  S = { seq = 0, pulls = {}, pushes = {}, synced = {}, gaps = {}, filetypes = {} }
-  _G.__pi_nvim_diagnostics_v1 = S
+  S = { seq = 0, pulls = {}, pushes = {}, reporters = {}, epochs = {}, disk = {}, linters = {}, latency = {}, mute = {}, filetypes = {} }
+  _G.__pi_nvim_diagnostics_v2 = S
   function S.note() end
   api.nvim_create_autocmd('LspRequest', {
     group = api.nvim_create_augroup('PiNvimDiagnostics', {}),
@@ -37,37 +41,31 @@ if not S then
   lsp.diagnostic.on_publish_diagnostics = function(err, params, ctx, ...)
     local name = vim.uri_to_fname(params.uri)
     local buf = vim.fn.bufexists(name) == 1 and vim.fn.bufadd(name) or nil
-    -- A versioned report for text Neovim has since replaced says nothing about the current text.
-    local current = buf and (params.version == nil or params.version == lsp.util.buf_versions[buf])
     if buf then
-      S.note(('%s published %d for %s%s'):format(lsp.get_client_by_id(ctx.client_id).name, #params.diagnostics,
-        vim.fs.basename(name), current and '' or ' (ignored: for older text)'))
-    end
-    if current then
-      local key, time = ctx.client_id .. ':' .. buf, now()
-      local previous = S.pushes[key]
-      -- vtsls clears a reopened file at once and sends the real report about 0.5 s later.
-      -- Remember each server's longest pause between reports for one sync, so the quiet
-      -- period outlasts it.
-      if previous and previous.at > (S.synced[buf] or 0) then
-        S.gaps[ctx.client_id] = math.max(S.gaps[ctx.client_id] or 0, time - previous.time)
-      end
-      S.seq = S.seq + 1
-      S.pushes[key] = { at = S.seq, time = time, items = params.diagnostics }
+      S.seq, S.reporters[ctx.client_id] = S.seq + 1, true
+      S.pushes[ctx.client_id .. ':' .. buf] = { at = S.seq, time = now(), items = params.diagnostics }
+      S.note(('%s published %d for %s'):format(lsp.get_client_by_id(ctx.client_id).name, #params.diagnostics, vim.fs.basename(name)))
     end
     return publish(err, params, ctx, ...)
   end
 end
 
 local started = now()
-local quiet = function(client) return math.min(math.max(QUIET_MS, 2 * (S.gaps[client.id] or 0)), MAX_QUIET_MS) end
+local clamp = function(value, low, high) return math.min(math.max(value, low), high) end
+-- How long a push server gets to report on new text before its silence is believed.
+local function window(id)
+  if S.latency[id] then return clamp(1.5 * S.latency[id], MIN_WINDOW_MS, MAX_WINDOW_MS) end
+  -- A server that has stayed silent through two changes (tailwindcss outside a Tailwind
+  -- project, in-process helpers) is not waited on at length again.
+  return (S.mute[id] or 0) >= 2 and MUTE_WINDOW_MS or UNKNOWN_WINDOW_MS
+end
 
 if request.status then
   local clients = {}
   for _, client in ipairs(lsp.get_clients({ _uninitialized = true })) do
     table.insert(clients, { id = client.id, name = client.name, root = client.root_dir, initialized = client.initialized,
-      pull = client.initialized and client:supports_method(PULL) or false, quietMs = math.floor(quiet(client)),
-      buffers = vim.tbl_count(client.attached_buffers) })
+      pull = client.initialized and client:supports_method(PULL) or false, windowMs = math.floor(window(client.id)),
+      reports = S.reporters[client.id] == true, buffers = vim.tbl_count(client.attached_buffers) })
   end
   return { clients = clients, pendingPulls = vim.tbl_count(S.pulls) }
 end
@@ -78,11 +76,17 @@ function S.note(text)
   if trace then table.insert(trace, ('%5d ms  %s'):format(now() - started, text)) end
 end
 
--- A no-op change: the text goes out under a new document version, so no server can
--- answer from a cache keyed on the old one, and push servers have to report again.
-local function touch(f)
-  pcall(api.nvim_buf_set_lines, f.buf, 0, 1, false, api.nvim_buf_get_lines(f.buf, 0, 1, false))
-  vim.bo[f.buf].modified = f.unsaved
+-- Learn from the epoch that is ending: how long each push server took to finish reporting
+-- (including reports that arrived after the check returned), and which never reported.
+local function learn(buf)
+  local epoch = S.epochs[buf]
+  for id, ready in pairs(epoch and epoch.ready or {}) do
+    local e = S.pushes[id .. ':' .. buf]
+    if e and e.at > epoch.at then
+      local sample = e.time - math.max(epoch.time, ready)
+      if sample < MAX_WINDOW_MS then S.latency[id] = math.max(sample, 0.8 * (S.latency[id] or 0)) end
+    elseif not S.latency[id] then S.mute[id] = (S.mute[id] or 0) + 1 end
+  end
 end
 
 local function open(path)
@@ -91,19 +95,40 @@ local function open(path)
   if not stat or stat.type ~= 'file' then f.error = stat and 'not a regular file' or 'no such file'; return f end
   f.buf = vim.fn.bufadd(path)
   local loaded = api.nvim_buf_is_loaded(f.buf)
-  S.seq = S.seq + 1
-  f.synced, S.synced[f.buf] = S.seq, S.seq
   vim.fn.bufload(f.buf)
   f.unsaved = vim.bo[f.buf].modified
-  if loaded and not f.unsaved then
-    local listed = vim.bo[f.buf].buflisted
-    api.nvim_buf_call(f.buf, function() vim.cmd('silent keepalt keepjumps edit') end)
-    vim.bo[f.buf].buflisted = listed
+  local disk = ('%d:%d:%d'):format(stat.mtime.sec, stat.mtime.nsec, stat.size)
+  local known = S.disk[f.buf]
+  local reload = loaded and not f.unsaved and not (known and known.disk == disk)
+  -- Text the servers already have is left alone: reopening it would only make them clear
+  -- and recompute, and their last word on it still stands.
+  if loaded and not reload and known and known.tick == api.nvim_buf_get_changedtick(f.buf) then
+    S.note(('%s: unchanged since the last check'):format(vim.fs.basename(path)))
+  else
+    f.loading = reload or not loaded
+    learn(f.buf)
+    S.seq = S.seq + 1
+    S.epochs[f.buf] = { at = S.seq, time = now(), ready = {} }
+    if reload then
+      local listed = vim.bo[f.buf].buflisted
+      api.nvim_buf_call(f.buf, function() vim.cmd('silent keepalt keepjumps edit') end)
+      vim.bo[f.buf].buflisted = listed
+    end
+    -- A no-op change sends the text under a new document version, so no server can
+    -- answer from a cache keyed on the old one.
+    pcall(api.nvim_buf_set_lines, f.buf, 0, 1, false, api.nvim_buf_get_lines(f.buf, 0, 1, false))
+    vim.bo[f.buf].modified = f.unsaved
+    S.note(('%s: %s, document version %d'):format(vim.fs.basename(path),
+      f.unsaved and 'unsaved buffer' or reload and 'reloaded from disk' or 'loaded', api.nvim_buf_get_changedtick(f.buf)))
+    -- nvim-lint only lints the buffer a person is looking at, so run it here.
+    local ok, lint = pcall(require, 'lint')
+    if ok and type(lint.try_lint) == 'function' then
+      api.nvim_buf_call(f.buf, function() pcall(lint.try_lint) end)
+      S.linters[f.buf] = lint.get_running(f.buf)
+    end
+    S.disk[f.buf] = { disk = disk, tick = api.nvim_buf_get_changedtick(f.buf) }
   end
-  touch(f)
-  S.note(('%s: %s, document version %d'):format(vim.fs.basename(path),
-    f.unsaved and 'unsaved buffer kept' or loaded and 'reloaded from disk' or 'loaded', api.nvim_buf_get_changedtick(f.buf)))
-  f.filetype = vim.bo[f.buf].filetype
+  f.epoch, f.filetype = S.epochs[f.buf], vim.bo[f.buf].filetype
   return f
 end
 
@@ -153,9 +178,10 @@ local function pull(f, client, identifier)
   return p
 end
 
--- The state of one client for one file, and the diagnostics it has given for the synced text.
+-- The state of one client for one file, and the diagnostics it has given for its text.
 local function ask(f, client)
   if not client.initialized then return 'starting' end
+  f.epoch.ready[client.id] = f.epoch.ready[client.id] or now()
   if client:supports_method(PULL, f.buf) then
     f.pulls[client.id] = f.pulls[client.id] or vim.tbl_map(function(id) return pull(f, client, id) end, identifiers(client, f.buf))
     local items = {}
@@ -167,33 +193,54 @@ local function ask(f, client)
     return 'answered', items
   end
   local e = S.pushes[client.id .. ':' .. f.buf]
-  if not e or e.at <= f.synced then return 'silent' end
-  if next(client.progress.pending) or now() - e.time < quiet(client) then return 'busy', e.items end
-  return 'reported', e.items
+  local fresh = e and e.at > f.epoch.at
+  local since = math.max(f.epoch.time, f.epoch.ready[client.id])
+  if next(client.progress.pending) or now() - since < window(client.id) or (fresh and now() - e.time < QUIET_MS) then
+    return 'busy', fresh and e.items or nil
+  end
+  -- A server that reported nothing new may simply have nothing new to say (marksman only
+  -- publishes changes), so its last report is shown rather than dropped.
+  return fresh and 'reported' or e and 'no new report' or 'silent', e and e.items
 end
 
 local severity = { 'error', 'warning', 'info', 'hint' }
+local settled = { answered = true, reported = true, ['no new report'] = true, silent = true, linted = true }
 local function observe(f)
   local found = {}
+  local function add(line, column, level, d)
+    table.insert(found, { line = line + 1, column = column + 1, level = level, severity = severity[level] or 'error',
+      source = d.source, code = d.code ~= nil and tostring(d.code) or nil, message = tostring(d.message or ''):sub(1, 2000) })
+  end
+  local function state(name, id, status)
+    table.insert(f.clients, { name = name, status = status })
+    f.done = f.done and settled[status] == true
+    if f.seen[id] ~= status then
+      f.seen[id] = status
+      S.note(('%s: %s is %s'):format(vim.fs.basename(f.path), name, status))
+    end
+  end
   f.clients, f.done = {}, true
   for _, client in ipairs(lsp.get_clients({ bufnr = f.buf, _uninitialized = true })) do
     local status, items = ask(f, client)
-    table.insert(f.clients, { name = client.name, status = status })
-    if f.seen[client.id] ~= status then
-      f.seen[client.id] = status
-      S.note(('%s: %s is %s'):format(vim.fs.basename(f.path), client.name, status))
-    end
-    f.done = f.done and (status == 'answered' or status == 'reported')
+    state(client.name, client.id, status)
     for _, d in ipairs(items or {}) do
       local start = type(d.range) == 'table' and d.range.start or {}
-      local line = api.nvim_buf_get_lines(f.buf, start.line or 0, (start.line or 0) + 1, false)[1] or ''
-      local ok, column = pcall(vim.str_byteindex, line, client.offset_encoding, start.character or 0, false)
-      table.insert(found, { line = (start.line or 0) + 1, column = (ok and column or start.character or 0) + 1,
-        level = d.severity or 1, severity = severity[d.severity or 1] or 'error', source = d.source,
-        code = d.code ~= nil and tostring(d.code) or nil, message = tostring(d.message or ''):sub(1, 2000) })
+      local text = api.nvim_buf_get_lines(f.buf, start.line or 0, (start.line or 0) + 1, false)[1] or ''
+      local ok, column = pcall(vim.str_byteindex, text, client.offset_encoding, start.character or 0, false)
+      add(start.line or 0, ok and column or start.character or 0, d.severity or 1, d)
     end
   end
-  if #f.clients == 0 then f.done = now() - started >= (S.filetypes[f.filetype] and ATTACH_MS or FIRST_ATTACH_MS) end
+  -- A client may be created a moment after the buffer is (re)loaded.
+  local attached = #f.clients > 0 or not f.loading or now() - started >= (S.filetypes[f.filetype] and ATTACH_MS or FIRST_ATTACH_MS)
+  local running = package.loaded.lint and package.loaded.lint.get_running(f.buf) or {}
+  for _, name in ipairs(S.linters[f.buf] or {}) do
+    state(name, name, vim.tbl_contains(running, name) and 'linting' or 'linted')
+  end
+  -- Linters and other non-LSP sources write to Neovim's store, where nothing overwrites them.
+  for _, d in ipairs(vim.diagnostic.get(f.buf)) do
+    if not vim.diagnostic.get_namespace(d.namespace).name:match('^n?vim%.lsp%.') then add(d.lnum, d.col, d.severity, d) end
+  end
+  f.done = f.done and attached
   f.found = found
   return f.done
 end
@@ -234,9 +281,9 @@ for _, f in ipairs(files) do
     for _, p in ipairs(pulls) do p.closed = true end -- Late replies and retries are no longer wanted.
   end
   if f.filetype then S.filetypes[f.filetype] = true end
-  f.buf, f.synced, f.pulls, f.found, f.filetype, f.seen = nil, nil, nil, nil, nil, nil
+  f.buf, f.epoch, f.pulls, f.found, f.filetype, f.seen, f.loading = nil, nil, nil, nil, nil, nil, nil
 end
-if not ok then error(err, 0) end
 local timeline = trace
 trace = nil -- Events between calls are not part of any timeline.
+if not ok then error(err, 0) end
 return { files = files, elapsedMs = math.floor(now() - started), trace = timeline }

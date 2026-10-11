@@ -22,7 +22,7 @@ function describe(file, shown, cwd, timeoutMs) {
   const inside = relative(cwd, file.path);
   const name = inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : file.path;
   if (file.error) return [`${name}: ${file.error}`];
-  if (!file.clients.length) return [`${name}: no language server attached`];
+  if (!file.clients.length) return [`${name}: no language server or linter for this file`];
   const counts = SEVERITIES.filter(level => file.counts[level])
     .map(level => `${file.counts[level]} ${level}${file.counts[level] > 1 ? 's' : ''}`).join(', ') || 'no diagnostics';
   const clients = file.clients.map(client => `${client.name} ${STATUS[client.status] ?? client.status}`).join(', ');
@@ -58,6 +58,6 @@ export async function status(nvim, signal) {
   const { clients, pendingPulls } = await nvim.lua(LUA, [{ status: true }], { signal });
   if (!clients.length) return 'No language servers are running. They start when a file is first checked or opened.';
   const lines = clients.map(c => `  ${c.name} (${c.id}): ${!c.initialized ? 'starting' : c.pull ? 'pull, answers are definite'
-    : `push only, done after ${c.quietMs} ms of quiet`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
+    : `push only, ${c.reports ? '' : 'has never reported, '}given ${c.windowMs} ms after a change`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
   return `Language servers in Pi's Neovim:\n${lines.join('\n')}${pendingPulls ? `\n${pendingPulls} diagnostic requests still pending` : ''}`;
 }

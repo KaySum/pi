@@ -12,7 +12,27 @@ async function fixture(t) {
   const directory = await realpath(await mkdtemp('/tmp/pi-diagnostics-test-'));
   const log = join(directory, 'lsp.log'), init = join(directory, 'init.lua');
   const [node, server] = [process.execPath, fileURLToPath(new URL('./test/lsp.mjs', import.meta.url))].map(path => JSON.stringify(path));
-  await writeFile(init, `local known = { pull = 1, push = 1, phased = 1, late = 1, silent = 1, slow = 1, cancel = 1, dynamic = 1, error = 1, stale = 1 }
+  await writeFile(init, `local known = { pull = 1, push = 1, phased = 1, late = 1, silent = 1, slow = 1, cancel = 1, dynamic = 1, error = 1, onchange = 1 }
+-- Stands in for nvim-lint: lints the current buffer, asynchronously, into Neovim's store.
+package.preload.lint = function()
+  local running, ns = {}, vim.api.nvim_create_namespace('fakelint')
+  return {
+    get_running = function(buf) return running[buf] and { 'fakelint' } or {} end,
+    try_lint = function()
+      local buf = vim.api.nvim_get_current_buf()
+      if not vim.api.nvim_buf_get_name(buf):find('lint') then return end
+      running[buf] = true
+      vim.defer_fn(function()
+        local found = {}
+        for i, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+          if line:find('TODO') then table.insert(found, { lnum = i - 1, col = line:find('TODO') - 1, severity = 2, message = 'todo left in', source = 'fakelint', code = 'L1' }) end
+        end
+        vim.diagnostic.set(ns, buf, found)
+        running[buf] = nil
+      end, 200)
+    end,
+  }
+end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   for mode in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
     if known[mode] then
@@ -83,24 +103,65 @@ test('replies to cancelled pulls never count; late pull registration and slow st
     'b.dynamic: 1 error — dynamic answered', '  1:1 error [E0] real (fake)',
     'c.slow: 1 error — slow answered', '  1:1 error [E0] real (fake)',
   ]);
-  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v1.pulls)'), 0);
+  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v2.pulls)'), 0);
   const received = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(received.some(m => m.mode === 'cancel' && m.method === '$/cancelRequest'), 'the cancel server saw its pull cancelled');
   assert.ok(received.some(m => m.mode === 'dynamic' && m.method === 'textDocument/diagnostic' && m.identifier === 'late-provider'));
 });
 
-test('servers that stay silent, fail, or report for old text leave the file incomplete, not clean', async t => {
+test('a failing or unfinished server leaves the file incomplete; a silent one is believed after its window', async t => {
   const f = await fixture(t);
-  for (const name of ['a.silent', 'b.error', 'c.stale', 'd.pull']) await f.write(name, 'ERROR x');
-  const lines = await f.check(['a.silent', 'b.error', 'c.stale', 'd.pull'], { timeoutMs: 800 });
-  assert.deepEqual([...lines], [
-    'a.silent: incomplete after 800 ms: no diagnostics — silent silent',
-    'b.error: incomplete after 800 ms: no diagnostics — error failed: checker crashed',
-    'c.stale: incomplete after 800 ms: no diagnostics — stale silent',
-    'd.pull: 1 error — pull answered',
+  for (const name of ['a.silent', 'b.error', 'c.pull', 'd.slow']) await f.write(name, 'ERROR x');
+  const early = await f.check(['a.silent', 'b.error', 'c.pull', 'd.slow'], { timeoutMs: 400 });
+  assert.deepEqual([...early], [
+    'a.silent: incomplete after 400 ms: no diagnostics — silent still working',
+    'b.error: incomplete after 400 ms: no diagnostics — error failed: checker crashed',
+    'c.pull: 1 error — pull answered',
     '  1:1 error [E0] x (fake)',
+    'd.slow: incomplete after 400 ms: no diagnostics — slow starting',
   ]);
-  assert.ok(lines.ms >= 800 && lines.ms < 1500, `took ${lines.ms} ms`);
+  // Nothing changed, so the wait continues where it left off instead of starting over.
+  const first = await f.check(['a.silent']);
+  assert.deepEqual([...first], ['a.silent: no diagnostics — silent silent']);
+  assert.ok(first.ms > 1500 && first.ms < 2500, `took ${first.ms} ms`);
+  // A server that stays silent through repeated changes stops costing a long wait.
+  for (const text of ['one', 'two']) { await f.write('a.silent', text); await f.check(['a.silent']); }
+  await f.write('a.silent', 'three');
+  const later = await f.check(['a.silent']);
+  assert.deepEqual([...later], ['a.silent: no diagnostics — silent silent']);
+  assert.ok(later.ms < 1000, `took ${later.ms} ms`);
+});
+
+test('unchanged text is not re-sent, and a server with nothing new to say keeps its last report', async t => {
+  const f = await fixture(t);
+  await f.write('a.push', 'ERROR one');
+  await f.write('b.onchange', 'ERROR stays\nfiller');
+  assert.equal((await f.check(['a.push', 'b.onchange'])).length, 4);
+  const sent = async () => (await readFile(f.log, 'utf8')).trim().split('\n').length;
+  const before = await sent();
+  const again = await f.check(['a.push', 'b.onchange']);
+  assert.deepEqual([...again], ['a.push: 1 error — push reported', '  1:1 error [E0] one (fake)',
+    'b.onchange: 1 error — onchange reported', '  1:1 error [E0] stays (fake)']);
+  assert.ok(again.ms < 300, `took ${again.ms} ms`);
+  assert.equal(await sent(), before);
+
+  // The edit does not change this server's answer, so it publishes nothing.
+  await f.write('b.onchange', 'ERROR stays\nedited filler');
+  assert.deepEqual([...await f.check(['b.onchange'])], ['b.onchange: 1 error — onchange no new report', '  1:1 error [E0] stays (fake)']);
+  await f.write('b.onchange', 'fixed');
+  assert.deepEqual([...await f.check(['b.onchange'])], ['b.onchange: no diagnostics — onchange reported']);
+});
+
+test('linters that write to Neovim itself are run for the file and included', async t => {
+  const f = await fixture(t);
+  await f.write('lint.pull', 'ERROR typed\n  TODO later');
+  assert.deepEqual([...await f.check(['lint.pull'])], ['lint.pull: 1 error, 1 warning — pull answered, fakelint linted',
+    '  1:1 error [E0] typed (fake)', '  2:3 warning [L1] todo left in (fakelint)']);
+  await f.write('lint.txt', 'TODO only a linter looks at this');
+  assert.deepEqual([...await f.check(['lint.txt'])], ['lint.txt: 1 warning — fakelint linted', '  1:1 warning [L1] todo left in (fakelint)']);
+  await f.write('lint.txt', 'done');
+  assert.deepEqual([...await f.check(['lint.txt'])], ['lint.txt: no diagnostics — fakelint linted']);
+  assert.match((await f.check(['lint.txt'], { timeoutMs: 100 })).text, /^lint\.txt: no diagnostics — fakelint linted$/);
 });
 
 test('files without a server and unreadable paths are stated plainly', async t => {
@@ -108,8 +169,8 @@ test('files without a server and unreadable paths are stated plainly', async t =
   await f.write('notes.txt', 'ERROR nobody is looking');
   await mkdir(join(f.directory, 'folder'));
   const first = await f.check(['notes.txt', 'missing.pull', 'folder', '/etc/hosts']);
-  assert.deepEqual([...first], ['notes.txt: no language server attached', 'missing.pull: no such file',
-    'folder: not a regular file', '/etc/hosts: no language server attached']);
+  assert.deepEqual([...first], ['notes.txt: no language server or linter for this file', 'missing.pull: no such file',
+    'folder: not a regular file', '/etc/hosts: no language server or linter for this file']);
   // The longer wait for a server to appear is only paid on a filetype's first use.
   assert.ok((await f.check(['notes.txt'])).ms < first.ms / 2);
 });
@@ -134,6 +195,7 @@ test('every check reaches the server under a newer document version, without dis
   const before = await snapshot();
   const versions = [];
   for (let i = 0; i < 3; i++) {
+    await f.write('a.pull', `ok ${i}`);
     await f.check(['a.pull', 'mine.txt']);
     const sent = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(m => m.version !== undefined);
     versions.push(sent.at(-1).version);
@@ -181,5 +243,5 @@ test('the timeline and server status explain what a check did', async t => {
   const servers = await status(f.nvim);
   assert.match(servers, /^Language servers in Pi's Neovim:\n/);
   assert.match(servers, /^  cancel \(\d\): pull, answers are definite; 1 buffer; root \/.*pi-diagnostics-test-/m);
-  assert.match(servers, /^  late \(\d\): push only, done after 1\d\d\d ms of quiet; 1 buffer; root /m);
+  assert.match(servers, /^  late \(\d\): push only, given 2500 ms after a change; 1 buffer; root /m);
 });

@@ -6,6 +6,7 @@ const [mode, log] = process.argv.slice(2);
 const pulls = ['pull', 'slow', 'cancel', 'dynamic', 'error'].includes(mode);
 const documents = new Map();
 const held = new Map();
+const published = new Map();
 let buffer = Buffer.alloc(0), nextId = 1000, storms = 4;
 
 function send(message) {
@@ -24,8 +25,11 @@ const publish = uri => send({ method: 'textDocument/publishDiagnostics', params:
 
 function changed(uri) {
   if (mode === 'push') publish(uri);
-  // A report for text the client has already replaced, labelled with that text's version.
-  if (mode === 'stale') send({ method: 'textDocument/publishDiagnostics', params: { uri, version: documents.get(uri).version - 1, diagnostics: [] } });
+  // Like marksman: say something only when the answer differs from the last one.
+  if (mode === 'onchange' && JSON.stringify(diagnose(uri)) !== published.get(uri)) {
+    published.set(uri, JSON.stringify(diagnose(uri)));
+    publish(uri);
+  }
   if (mode === 'phased') {
     // Like vtsls: clear at once, then report for real after a pause, with progress in between.
     send({ method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } });
@@ -54,7 +58,7 @@ function receive(m) {
     documents.set(uri, { version, text: m.params.textDocument.text ?? m.params.contentChanges[0].text });
     changed(uri);
   } else if (m.method === 'textDocument/didClose') {
-    if (!pulls) send({ method: 'textDocument/publishDiagnostics', params: { uri: m.params.textDocument.uri, diagnostics: [] } });
+    if (!pulls && mode !== 'onchange' && mode !== 'silent') send({ method: 'textDocument/publishDiagnostics', params: { uri: m.params.textDocument.uri, diagnostics: [] } });
   } else if (m.method === 'textDocument/diagnostic') {
     const full = { kind: 'full', items: diagnose(m.params.textDocument.uri) };
     if (mode === 'error') send({ id: m.id, error: { code: -32603, message: 'checker crashed' } });

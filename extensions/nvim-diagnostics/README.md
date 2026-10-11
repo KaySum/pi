@@ -1,6 +1,6 @@
 # nvim-diagnostics
 
-Lets Pi check files with the language servers of its own Neovim. Requires
+Lets Pi check files with the language servers and linters of its own Neovim. Requires
 [`nvim-service`](../nvim-service/README.md); it has no dependencies or install step of
 its own.
 
@@ -17,8 +17,11 @@ its own.
 src/a.py: 1 error, 1 warning — pyright answered, ruff answered
   4:16 error [reportAssignmentType] Type "str" is not assignable to declared type "int" (Pyright)
   5:8 warning [F401] `os` imported but unused (Ruff)
-src/b.ts: no diagnostics — vtsls reported
-notes.txt: no language server attached
+src/b.ts: no diagnostics — tailwindcss silent, vtsls reported
+README.md: 2 warnings — marksman no new report, markdownlint-cli2 linted
+  3:1 warning error MD001/heading-increment Heading levels should only increment by one level at a time (markdownlint)
+  7:1 warning [2] Link to non-existent document './nope.md' (Marksman)
+notes.txt: no language server or linter for this file
 src/c.rs: incomplete after 10000 ms: no diagnostics — rust_analyzer starting
 ```
 
@@ -32,7 +35,7 @@ followed by the output of the most recent check (what Pi last saw):
 ```
 Language servers in Pi's Neovim:
   pyright (1): pull, answers are definite; 1 buffer; root none
-  vtsls (3): push only, done after 1000 ms of quiet; 1 buffer; root /Users/xsv/project
+  vtsls (3): push only, given 1000 ms after a change; 1 buffer; root /Users/xsv/project
 
 Last check 12 s ago, took 1552 ms:
 src/a.py: 1 error — pyright answered
@@ -58,24 +61,34 @@ Timeline (1552 ms):
 
 Paths are split on whitespace, so the command cannot take a path containing spaces.
 
-## What the server statuses mean
+## What the statuses mean
 
 | Status | Meaning |
 | --- | --- |
 | `answered` | The server replied to a diagnostic request for exactly this text. Definite. |
-| `reported` | A push-only server published for this text and then went quiet. Best effort. |
+| `reported` | A push-only server published for this text. Best effort. |
+| `no new report` | A push-only server published nothing after the last change; its previous report is shown. |
+| `silent` | A push-only server has never published anything for this file. |
+| `linted` | A linter run through nvim-lint finished for this text. |
 | `starting` | The server had not finished initializing by the deadline. |
-| `silent` | A push-only server published nothing for this text. |
 | `no answer` | A diagnostic request was still pending at the deadline. |
-| `still working` | A push-only server was still publishing or showing progress. |
+| `still working` | A push-only server was still inside its reporting window or showing progress. |
+| `linting` | A linter was still running at the deadline. |
 | `failed: …` | The server answered the request with an error. |
 
-A file is `incomplete` unless every attached server is `answered` or `reported`.
+A file is `incomplete` only for the last five. `no language server or linter for this
+file` means nothing attached to it at all.
 
-A push-only server has no way to say it is finished. vtsls, for example, clears a file's
-diagnostics at once and sends the real ones about half a second later. The tool waits for
-at least one second of quiet, twice the longest pause it has seen from that server (up to
-five seconds), and for any progress the server shows to end. A check that takes a server
+A push-only server has no way to say it is finished, and they behave differently: vtsls
+and clangd clear a reopened file at once and send the real result later, marksman only
+publishes when its answer changes, and tailwindcss outside a Tailwind project never
+publishes. So after a change each push server gets a window to report:
+
+- 1.5 times the longest it has taken before in this session (at least 1 s, at most 10 s),
+- 2.5 s if it has not reported yet,
+- 0.5 s once it has stayed silent through two changes.
+
+It must also have no progress showing and be quiet for 0.3 s. A check that takes a server
 unusually long can still be reported too early, so no diagnostics never replaces a build
 or a test run.
 
@@ -83,27 +96,37 @@ or a test run.
 
 Everything happens in one Lua call inside Neovim ([`diagnostics.lua`](diagnostics.lua)):
 
-1. Each file's buffer is loaded, or reloaded from disk if it has no unsaved changes, and
-   then touched with a no-op change. The server therefore sees the current text under a
-   new document version, cannot answer from a cache keyed on an old one, and has to
-   report again. A buffer with unsaved changes is checked as it is and marked
-   `(unsaved buffer)`; nothing is ever written.
-2. Servers that support `textDocument/diagnostic` are asked directly, and only a reply to
+1. A file whose text the servers already have (same file on disk, same buffer contents as
+   the last check) is left alone. Its servers' last word still stands, so a repeat check
+   costs a few milliseconds.
+2. Otherwise the buffer is loaded, or reloaded from disk, and touched with a no-op change
+   so the text goes out under a new document version and no server can answer from a
+   cache keyed on the old one. A buffer with unsaved changes is checked as it is and
+   marked `(unsaved buffer)`; nothing is ever written.
+3. Servers that support `textDocument/diagnostic` are asked directly, and only a reply to
    a request that was not cancelled counts. Neovim cancels pending requests whenever it
    refreshes its own, and pyright answers a cancelled request with an empty report, so
    cancelled requests are sent again.
-3. For other servers, `publishDiagnostics` is observed. Reports labelled with an older
-   document version are ignored.
+4. For other servers, `publishDiagnostics` is recorded as it arrives.
+5. If [nvim-lint](https://github.com/mfussenegger/nvim-lint) is installed, its linters
+   are run for the file. By itself it only lints the buffer a person is looking at, so
+   markdownlint, hadolint and the like would otherwise never run here.
 
-Neovim's own diagnostic store (`vim.diagnostic.get`) is deliberately not the source: it
-applies those empty replies to cancelled requests, and can then accept "unchanged" for
-the text it just cleared.
+Neovim's own diagnostic store (`vim.diagnostic.get`) is deliberately not the source for
+language servers: it applies those empty replies to cancelled requests, and can then
+accept "unchanged" for the text it just cleared. It is the source for linters, which
+write nowhere else.
 
 Pi's windows, current buffer and cursor are not touched.
 
-Measured on this machine with Neovim 0.12.6: a Python file with pyright and ruff takes
-about 0.1 s, a TypeScript file with vtsls 1.1–1.7 s, and the first check after startup
-about 2.4 s.
+Measured on this machine with Neovim 0.12.6:
+
+| Check | Time |
+| --- | --- |
+| Unchanged file | a few ms (pull servers are still asked: Python about 35 ms) |
+| Changed Python, JSON, CMake (pull servers) | 20–50 ms |
+| Changed TypeScript, C, Lua, YAML, shell, Markdown (push servers) | about 1 s |
+| First check of a file type in a session | 0.3–3.5 s |
 
 ## Development
 

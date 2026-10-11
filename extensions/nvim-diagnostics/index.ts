@@ -17,9 +17,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: 'nvim_diagnostics',
     label: 'Neovim diagnostics',
-    description: 'Check files with the language servers of your Neovim: errors and warnings for the current contents on disk, plus what each server did (answered, reported, silent, starting). Lines and byte columns are 1-based.',
+    description: 'Check files with the language servers and linters of your Neovim: errors and warnings for the current contents on disk, plus what each source did. Lines and byte columns are 1-based.',
     promptGuidelines: [
-      'After editing code, batch the changed files into nvim_diagnostics. Trust a result only as far as its servers: "answered" is a definite reply for that text, "reported" means a server published and went quiet, and anything else is incomplete. No diagnostics does not replace a build or tests.',
+      'After editing code, batch the changed files into nvim_diagnostics. Read each source\'s status: "answered" is a definite reply for that text; "reported" and "linted" mean it ran on that text; "no new report" shows a server\'s previous report because it published nothing since the change; "silent" means it has never said anything about the file. A file marked incomplete was not fully checked. No diagnostics does not replace a build or tests.',
     ],
     executionMode: 'sequential',
     parameters: Type.Object({

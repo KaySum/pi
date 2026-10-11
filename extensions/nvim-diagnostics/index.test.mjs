@@ -36,12 +36,12 @@ test('one tool, connected to the service only through the event bus', async t =>
   t.after(async () => { nvim.close(); await service.stop(); await rm(directory, { recursive: true, force: true }); });
   bus.emit('nvim-service:ready', nvim);
   await writeFile(join(directory, 'a.txt'), 'text');
-  assert.deepEqual((await call({ files: ['a.txt', 'nope.txt'] })).content, [{ type: 'text', text: 'a.txt: no language server attached\nnope.txt: no such file' }]);
+  assert.deepEqual((await call({ files: ['a.txt', 'nope.txt'] })).content, [{ type: 'text', text: 'a.txt: no language server or linter for this file\nnope.txt: no such file' }]);
   await assert.rejects(call({ files: [] }), /files must be 1-32 paths/);
 
   // The command shows the servers and what the last check returned; with paths it runs a traced check.
-  assert.match(await command(), /^info: No language servers are running.*\n\nLast check \d+ s ago, took \d+ ms:\na\.txt: no language server attached\nnope\.txt: no such file$/);
-  assert.match(await command('a.txt  nope.txt'), /^info: a\.txt: no language server attached\nnope\.txt: no such file\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: reloaded from disk, document version \d+$/);
+  assert.match(await command(), /^info: No language servers are running.*\n\nLast check \d+ s ago, took \d+ ms:\na\.txt: no language server or linter for this file\nnope\.txt: no such file$/);
+  assert.match(await command('a.txt  nope.txt'), /^info: a\.txt: no language server or linter for this file\nnope\.txt: no such file\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: unchanged since the last check$/);
 
   await nvim.keys(':echo "one\\ntwo"<CR>');
   await assert.rejects(call({ files: ['a.txt'] }), /waiting at a prompt[^]*one\ntwo\nPress ENTER/);

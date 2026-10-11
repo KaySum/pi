@@ -16,9 +16,9 @@ const source = stripTypeScriptTypes(await readFile(new URL('./index.ts', import.
 const { default: register } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('one tool, connected to the service only through the event bus', async t => {
-  const bus = new EventEmitter(), tools = [];
+  const bus = new EventEmitter(), tools = [], commands = {}, notes = [];
   register({ events: { on: (channel, handler) => bus.on(channel, handler), emit: (channel, data) => bus.emit(channel, data) },
-    on: () => {}, registerTool: tool => tools.push(tool) });
+    on: () => {}, registerTool: tool => tools.push(tool), registerCommand: (name, command) => { commands[name] = command; } });
   const [tool] = tools;
   assert.equal(tools.length, 1);
   assert.equal(tool.name, 'nvim_diagnostics');
@@ -28,6 +28,8 @@ test('one tool, connected to the service only through the event bus', async t =>
   const directory = await realpath(await mkdtemp('/tmp/pi-diagnostics-test-'));
   const call = params => tool.execute('id', params, undefined, undefined, { cwd: directory });
   await assert.rejects(call({ files: ['a.txt'] }), /Neovim service unavailable/);
+  const command = async (args = '') => { await commands['nvim-diagnostics'].handler(args, { cwd: directory, ui: { notify: (text, type) => notes.push(`${type}: ${text}`) } }); return notes.at(-1); };
+  assert.match(await command(), /^warning: nvim-diagnostics: Neovim service unavailable/);
 
   const service = launch({ cwd: directory, init: 'NONE', graceMs: 100, killMs: 300 });
   const nvim = await openNvim(await service.ready);
@@ -36,6 +38,10 @@ test('one tool, connected to the service only through the event bus', async t =>
   await writeFile(join(directory, 'a.txt'), 'text');
   assert.deepEqual((await call({ files: ['a.txt', 'nope.txt'] })).content, [{ type: 'text', text: 'a.txt: no language server attached\nnope.txt: no such file' }]);
   await assert.rejects(call({ files: [] }), /files must be 1-32 paths/);
+
+  // The command shows the servers and what the last check returned; with paths it runs a traced check.
+  assert.match(await command(), /^info: No language servers are running.*\n\nLast check \d+ s ago, took \d+ ms:\na\.txt: no language server attached\nnope\.txt: no such file$/);
+  assert.match(await command('a.txt  nope.txt'), /^info: a\.txt: no language server attached\nnope\.txt: no such file\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: reloaded from disk, document version \d+$/);
 
   await nvim.keys(':echo "one\\ntwo"<CR>');
   await assert.rejects(call({ files: ['a.txt'] }), /waiting at a prompt[^]*one\ntwo\nPress ENTER/);

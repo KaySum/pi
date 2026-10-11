@@ -17,6 +17,7 @@ local S = _G.__pi_nvim_diagnostics_v1
 if not S then
   S = { seq = 0, pulls = {}, pushes = {}, synced = {}, gaps = {}, filetypes = {} }
   _G.__pi_nvim_diagnostics_v1 = S
+  function S.note() end
   api.nvim_create_autocmd('LspRequest', {
     group = api.nvim_create_augroup('PiNvimDiagnostics', {}),
     callback = function(ev)
@@ -24,7 +25,7 @@ if not S then
       if not pull then return end
       -- Neovim cancels every pending pull on a buffer when it refreshes its own, and
       -- servers may answer a cancelled pull with an empty report. Such a reply never counts.
-      if ev.data.request.type == 'cancel' then pull.cancelled = true end
+      if ev.data.request.type == 'cancel' then pull.cancelled = true; S.note(pull.label .. ' cancelled by Neovim') end
       if ev.data.request.type == 'complete' then
         -- A cancellation acknowledgement completes the request without calling its handler.
         vim.schedule(function() if not pull.replied then pull.finish() end end)
@@ -37,7 +38,12 @@ if not S then
     local name = vim.uri_to_fname(params.uri)
     local buf = vim.fn.bufexists(name) == 1 and vim.fn.bufadd(name) or nil
     -- A versioned report for text Neovim has since replaced says nothing about the current text.
-    if buf and (params.version == nil or params.version == lsp.util.buf_versions[buf]) then
+    local current = buf and (params.version == nil or params.version == lsp.util.buf_versions[buf])
+    if buf then
+      S.note(('%s published %d for %s%s'):format(lsp.get_client_by_id(ctx.client_id).name, #params.diagnostics,
+        vim.fs.basename(name), current and '' or ' (ignored: for older text)'))
+    end
+    if current then
       local key, time = ctx.client_id .. ':' .. buf, now()
       local previous = S.pushes[key]
       -- vtsls clears a reopened file at once and sends the real report about 0.5 s later.
@@ -54,6 +60,23 @@ if not S then
 end
 
 local started = now()
+local quiet = function(client) return math.min(math.max(QUIET_MS, 2 * (S.gaps[client.id] or 0)), MAX_QUIET_MS) end
+
+if request.status then
+  local clients = {}
+  for _, client in ipairs(lsp.get_clients({ _uninitialized = true })) do
+    table.insert(clients, { id = client.id, name = client.name, root = client.root_dir, initialized = client.initialized,
+      pull = client.initialized and client:supports_method(PULL) or false, quietMs = math.floor(quiet(client)),
+      buffers = vim.tbl_count(client.attached_buffers) })
+  end
+  return { clients = clients, pendingPulls = vim.tbl_count(S.pulls) }
+end
+
+-- With request.trace, a timeline of what was sent and received, for /nvim-diagnostics.
+local trace = request.trace and {} or nil
+function S.note(text)
+  if trace then table.insert(trace, ('%5d ms  %s'):format(now() - started, text)) end
+end
 
 -- A no-op change: the text goes out under a new document version, so no server can
 -- answer from a cache keyed on the old one, and push servers have to report again.
@@ -63,7 +86,7 @@ local function touch(f)
 end
 
 local function open(path)
-  local f = { path = path, pulls = {} }
+  local f = { path = path, pulls = {}, seen = {} }
   local stat = uv.fs_stat(path)
   if not stat or stat.type ~= 'file' then f.error = stat and 'not a regular file' or 'no such file'; return f end
   f.buf = vim.fn.bufadd(path)
@@ -78,6 +101,8 @@ local function open(path)
     vim.bo[f.buf].buflisted = listed
   end
   touch(f)
+  S.note(('%s: %s, document version %d'):format(vim.fs.basename(path),
+    f.unsaved and 'unsaved buffer kept' or loaded and 'reloaded from disk' or 'loaded', api.nvim_buf_get_changedtick(f.buf)))
   f.filetype = vim.bo[f.buf].filetype
   return f
 end
@@ -106,6 +131,9 @@ local function pull(f, client, identifier)
       if attempt.replied or p.closed then return end
       attempt.replied = true
       if key then S.pulls[key] = nil end
+      S.note(('%s: %s'):format(attempt.label, attempt.cancelled and 'reply discarded (cancelled)'
+        or err and 'error ' .. tostring(err.message or err.code) or not result and 'no reply (cancellation acknowledged)'
+        or ('%s, %d diagnostics'):format(tostring(result.kind), #(result.items or {}))))
       -- ServerCancelled is the server asking to be asked again.
       if attempt.cancelled or not (err or result) or (err and err.code == -32802) then
         if p.attempts < ATTEMPTS then send() else p.error = 'cancelled repeatedly' end
@@ -117,7 +145,9 @@ local function pull(f, client, identifier)
     local ok, sent, id = pcall(client.request, client, PULL, params, attempt.finish, f.buf)
     if not ok or not sent then p.error = 'request not sent'; return end
     key = client.id .. ':' .. id
+    attempt.label = ('%s pull #%d for %s'):format(client.name, id, vim.fs.basename(f.path))
     S.pulls[key] = attempt
+    S.note(('%s sent%s'):format(attempt.label, p.attempts > 1 and ' (attempt ' .. p.attempts .. ')' or ''))
   end
   send()
   return p
@@ -138,8 +168,7 @@ local function ask(f, client)
   end
   local e = S.pushes[client.id .. ':' .. f.buf]
   if not e or e.at <= f.synced then return 'silent' end
-  local quiet = math.min(math.max(QUIET_MS, 2 * (S.gaps[client.id] or 0)), MAX_QUIET_MS)
-  if next(client.progress.pending) or now() - e.time < quiet then return 'busy', e.items end
+  if next(client.progress.pending) or now() - e.time < quiet(client) then return 'busy', e.items end
   return 'reported', e.items
 end
 
@@ -150,6 +179,10 @@ local function observe(f)
   for _, client in ipairs(lsp.get_clients({ bufnr = f.buf, _uninitialized = true })) do
     local status, items = ask(f, client)
     table.insert(f.clients, { name = client.name, status = status })
+    if f.seen[client.id] ~= status then
+      f.seen[client.id] = status
+      S.note(('%s: %s is %s'):format(vim.fs.basename(f.path), client.name, status))
+    end
     f.done = f.done and (status == 'answered' or status == 'reported')
     for _, d in ipairs(items or {}) do
       local start = type(d.range) == 'table' and d.range.start or {}
@@ -201,7 +234,9 @@ for _, f in ipairs(files) do
     for _, p in ipairs(pulls) do p.closed = true end -- Late replies and retries are no longer wanted.
   end
   if f.filetype then S.filetypes[f.filetype] = true end
-  f.buf, f.synced, f.pulls, f.found, f.filetype = nil, nil, nil, nil, nil
+  f.buf, f.synced, f.pulls, f.found, f.filetype, f.seen = nil, nil, nil, nil, nil, nil
 end
 if not ok then error(err, 0) end
-return { files = files, elapsedMs = math.floor(now() - started) }
+local timeline = trace
+trace = nil -- Events between calls are not part of any timeline.
+return { files = files, elapsedMs = math.floor(now() - started), trace = timeline }

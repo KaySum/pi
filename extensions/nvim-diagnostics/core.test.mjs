@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../nvim-service/service.mjs';
 import { openNvim } from '../nvim-service/nvim.mjs';
-import { diagnose, validate } from './core.mjs';
+import { diagnose, status, validate } from './core.mjs';
 
 // A file's extension names the fake servers that attach to it: `a.pull`, `b.pull_push`.
 async function fixture(t) {
@@ -27,7 +27,8 @@ end })`);
     write: (name, text) => writeFile(join(directory, name), text),
     async check(files, options = {}, signal) {
       const started = Date.now();
-      const text = await diagnose(nvim, { files, ...options }, directory, signal);
+      const { trace, ...params } = options;
+      const text = await diagnose(nvim, { files, ...params }, directory, signal, { trace });
       return Object.assign(text.split('\n'), { text, ms: Date.now() - started });
     },
   };
@@ -151,4 +152,34 @@ test('long results are capped per file, and a caller can give up', async t => {
   assert.equal(lines.at(-1), '  +10 more');
   await f.write('a.silent', 'x');
   await assert.rejects(f.check(['a.silent'], {}, AbortSignal.timeout(200)), { name: 'TimeoutError' });
+});
+
+test('the timeline and server status explain what a check did', async t => {
+  const f = await fixture(t);
+  assert.match(await status(f.nvim), /^No language servers are running/);
+  await f.write('a.cancel', 'ERROR real');
+  await f.write('b.late', 'ok');
+  const { text } = await f.check(['a.cancel', 'b.late'], { trace: true });
+  const [result, timeline] = text.split('\n\nTimeline ');
+  assert.equal(result, 'a.cancel: 1 error — cancel answered\n  1:1 error [E0] real (fake)\nb.late: no diagnostics — late reported');
+  for (const line of [
+    /^\(\d+ ms\):$/m,
+    /^ +\d+ ms  a\.cancel: loaded, document version \d+$/m,
+    /ms  a\.cancel: cancel is starting$/m,
+    /ms  cancel pull #\d+ for a\.cancel sent$/m,
+    /ms  cancel pull #\d+ for a\.cancel cancelled by Neovim$/m,
+    /ms  cancel pull #\d+ for a\.cancel: reply discarded \(cancelled\)$/m,
+    /ms  cancel pull #\d+ for a\.cancel sent \(attempt \d\)$/m,
+    /ms  cancel pull #\d+ for a\.cancel: full, 1 diagnostics$/m,
+    /ms  a\.cancel: cancel is answered$/m,
+    /ms  late published 0 for b\.late$/m,
+    /ms  b\.late: late is busy$/m,
+    /ms  b\.late: late is reported$/m,
+  ]) assert.match(timeline, line);
+  assert.equal((await f.check(['a.cancel'])).text.includes('Timeline'), false);
+
+  const servers = await status(f.nvim);
+  assert.match(servers, /^Language servers in Pi's Neovim:\n/);
+  assert.match(servers, /^  cancel \(\d\): pull, answers are definite; 1 buffer; root \/.*pi-diagnostics-test-/m);
+  assert.match(servers, /^  late \(\d\): push only, done after 1\d\d\d ms of quiet; 1 buffer; root /m);
 });

@@ -35,6 +35,8 @@ test('loading registers tools and a command but starts nothing', async t => {
   const f = fakePi(t);
   assert.deepEqual(Object.keys(f.tools), ['nvim_lua', 'nvim_keys', 'nvim_restart']);
   for (const tool of Object.values(f.tools)) assert.equal(tool.executionMode, 'sequential');
+  // Without a snippet a custom tool is left out of the system prompt's list of available tools.
+  for (const tool of Object.values(f.tools)) assert.match(tool.promptSnippet, /Neovim/);
   assert.throws(f.early, /Neovim service unavailable/);
   await assert.rejects(f.call('nvim_lua', { code: 'return 1' }), /Neovim is not running\. Use nvim_restart/);
   assert.equal(await f.command(), 'warning: Neovim service is not running. Run /nvim-service restart.');

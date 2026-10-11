@@ -65,7 +65,7 @@ Paths are split on whitespace, so the command cannot take a path containing spac
 
 | Status | Meaning |
 | --- | --- |
-| `answered` | The server replied to a diagnostic request for exactly this text. Definite. |
+| `answered` | The server replied to a diagnostic request for this text while idle. What it also published for this text is included. |
 | `reported` | A push-only server published for this text. Best effort. |
 | `no new report` | A push-only server published nothing after the last change; its previous report is shown. |
 | `silent` | A push-only server has never published anything for this file. |
@@ -88,9 +88,13 @@ publishes. So after a change each push server gets a window to report:
 - 2.5 s if it has not reported yet,
 - 0.5 s once it has stayed silent through two changes.
 
-It must also have no progress showing and be quiet for 0.3 s. A check that takes a server
-unusually long can still be reported too early, so no diagnostics never replaces a build
-or a test run.
+It must also have no progress showing and be quiet for 0.3 s, and a server that started
+less than 5 s ago is not called `silent` yet. A check that takes a server unusually long
+can still be reported too early, so no diagnostics never replaces a build or a test run.
+
+A server showing progress (loading a project, running `cargo check`) is never treated as
+finished, whichever kind it is. rust-analyzer shows why this matters for request-capable
+servers too: it answers with an empty result while its project is still loading.
 
 ## How a check works
 
@@ -103,12 +107,15 @@ Everything happens in one Lua call inside Neovim ([`diagnostics.lua`](diagnostic
    so the text goes out under a new document version and no server can answer from a
    cache keyed on the old one. A buffer with unsaved changes is checked as it is and
    marked `(unsaved buffer)`; nothing is ever written.
-3. Servers that support `textDocument/diagnostic` are asked directly, and only a reply to
-   a request that was not cancelled counts. Neovim cancels pending requests whenever it
-   refreshes its own, and pyright answers a cancelled request with an empty report, so
-   cancelled requests are sent again.
-4. For other servers, `publishDiagnostics` is recorded as it arrives.
-5. If [nvim-lint](https://github.com/mfussenegger/nvim-lint) is installed, its linters
+3. Each server is told the file was saved, since the buffer now matches the file. Some
+   only do their real checking then: rust-analyzer runs `cargo check` on save.
+4. Servers that support `textDocument/diagnostic` are asked directly once they are idle,
+   and only a reply to a request that was not cancelled counts. Neovim cancels pending
+   requests whenever it refreshes its own, and pyright answers a cancelled request with
+   an empty report, so cancelled requests are sent again.
+5. `publishDiagnostics` is recorded as it arrives, from every server. rust-analyzer
+   answers requests for its own analysis but publishes the compiler's errors.
+6. If [nvim-lint](https://github.com/mfussenegger/nvim-lint) is installed, its linters
    are run for the file. By itself it only lints the buffer a person is looking at, so
    markdownlint, hadolint and the like would otherwise never run here.
 
@@ -123,10 +130,13 @@ Measured on this machine with Neovim 0.12.6:
 
 | Check | Time |
 | --- | --- |
-| Unchanged file | a few ms (pull servers are still asked: Python about 35 ms) |
-| Changed Python, JSON, CMake (pull servers) | 20–50 ms |
-| Changed TypeScript, C, Lua, YAML, shell, Markdown (push servers) | about 1 s |
-| First check of a file type in a session | 0.3–3.5 s |
+| Unchanged file | a few ms |
+| Changed JSON, CMake | 20–60 ms |
+| Changed Python (pyright, ruff) | 0.1–0.9 s |
+| Changed Rust (rust-analyzer with `cargo check`) | about 0.7 s |
+| Changed C, Lua, YAML, shell, Markdown | about 1 s |
+| Changed TypeScript (vtsls) | 1.2 s, up to 4 s after it has been slow on a large file |
+| First check of a file type in a session | 0.5–6 s |
 
 ## Development
 

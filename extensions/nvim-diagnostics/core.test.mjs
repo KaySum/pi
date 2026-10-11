@@ -112,18 +112,19 @@ test('replies to cancelled pulls never count; late pull registration and slow st
 test('a failing or unfinished server leaves the file incomplete; a silent one is believed after its window', async t => {
   const f = await fixture(t);
   for (const name of ['a.silent', 'b.error', 'c.pull', 'd.slow']) await f.write(name, 'ERROR x');
-  const early = await f.check(['a.silent', 'b.error', 'c.pull', 'd.slow'], { timeoutMs: 400 });
+  const early = await f.check(['a.silent', 'b.error', 'c.pull', 'd.slow'], { timeoutMs: 600 });
   assert.deepEqual([...early], [
-    'a.silent: incomplete after 400 ms: no diagnostics — silent still working',
-    'b.error: incomplete after 400 ms: no diagnostics — error failed: checker crashed',
+    'a.silent: incomplete after 600 ms: no diagnostics — silent still working',
+    'b.error: incomplete after 600 ms: no diagnostics — error failed: checker crashed',
     'c.pull: 1 error — pull answered',
     '  1:1 error [E0] x (fake)',
-    'd.slow: incomplete after 400 ms: no diagnostics — slow starting',
+    'd.slow: incomplete after 600 ms: no diagnostics — slow starting',
   ]);
   // Nothing changed, so the wait continues where it left off instead of starting over.
   const first = await f.check(['a.silent']);
   assert.deepEqual([...first], ['a.silent: no diagnostics — silent silent']);
-  assert.ok(first.ms > 1500 && first.ms < 2500, `took ${first.ms} ms`);
+  // A server this new is not called silent until it has had five seconds to start reporting.
+  assert.ok(first.ms > 3000 && first.ms < 5500, `took ${first.ms} ms`);
   // A server that stays silent through repeated changes stops costing a long wait.
   for (const text of ['one', 'two']) { await f.write('a.silent', text); await f.check(['a.silent']); }
   await f.write('a.silent', 'three');

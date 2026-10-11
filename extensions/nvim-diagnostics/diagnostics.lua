@@ -13,13 +13,20 @@ local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
 -- A push server has no "finished" signal. After new text it is given a window to report,
 -- sized from how long it has taken before, and must then stay quiet briefly.
 local QUIET_MS, MIN_WINDOW_MS, MAX_WINDOW_MS, UNKNOWN_WINDOW_MS, MUTE_WINDOW_MS = 300, 1000, 10000, 2500, 500
+-- A server showing progress (loading a project, running cargo check) is not finished, and
+-- an answer it gives meanwhile may be empty. It must be idle this long before one counts.
+local SETTLE_MS = 300
+-- A push server that has only just started may still be loading its project, without
+-- saying so. Until it reports for the first time it is not called silent this early.
+local COLD_MS = 5000
 local now = function() return uv.hrtime() / 1e6 end
 
 -- Kept for the life of this Neovim. `seq` orders reports against a buffer's epoch: the
 -- last time its text changed as far as the servers are concerned.
 local S = _G.__pi_nvim_diagnostics_v2
 if not S then
-  S = { seq = 0, pulls = {}, pushes = {}, reporters = {}, epochs = {}, disk = {}, linters = {}, latency = {}, mute = {}, filetypes = {} }
+  S = { seq = 0, pulls = {}, pushes = {}, reporters = {}, epochs = {}, disk = {}, linters = {}, latency = {}, mute = {}, filetypes = {},
+    busy = {}, progressive = {}, born = {} }
   _G.__pi_nvim_diagnostics_v2 = S
   function S.note() end
   api.nvim_create_autocmd('LspRequest', {
@@ -120,6 +127,7 @@ local function open(path)
     vim.bo[f.buf].modified = f.unsaved
     S.note(('%s: %s, document version %d'):format(vim.fs.basename(path),
       f.unsaved and 'unsaved buffer' or reload and 'reloaded from disk' or 'loaded', api.nvim_buf_get_changedtick(f.buf)))
+    f.saved = not f.unsaved
     -- nvim-lint only lints the buffer a person is looking at, so run it here.
     local ok, lint = pcall(require, 'lint')
     if ok and type(lint.try_lint) == 'function' then
@@ -181,8 +189,34 @@ end
 -- The state of one client for one file, and the diagnostics it has given for its text.
 local function ask(f, client)
   if not client.initialized then return 'starting' end
-  f.epoch.ready[client.id] = f.epoch.ready[client.id] or now()
+  if not f.epoch.ready[client.id] then
+    f.epoch.ready[client.id] = now()
+    S.born[client.id] = S.born[client.id] or now()
+    -- A server that has just started, or is known to show progress, gets a moment to start
+    -- showing it before anything it says is believed.
+    if S.progressive[client.id] or not S.busy[client.id] then S.busy[client.id] = now() end
+    -- The buffer matches the file, which is what "saved" means, and some servers only do
+    -- their real checking then: rust-analyzer runs cargo check, eslint can lint on save.
+    -- It is said here, not at the reload, because clients may re-attach a moment after it.
+    if f.saved and client:supports_method('textDocument/didSave', f.buf) then
+      local sync = client.server_capabilities.textDocumentSync
+      local text = type(sync) == 'table' and type(sync.save) == 'table' and sync.save.includeText
+        and table.concat(api.nvim_buf_get_lines(f.buf, 0, -1, false), '\n') .. '\n' or nil
+      client:notify('textDocument/didSave', { textDocument = { uri = vim.uri_from_bufnr(f.buf) }, text = text })
+      S.note(('%s told %s was saved'):format(client.name, vim.fs.basename(f.path)))
+    end
+  end
+  local working = next(client.progress.pending) ~= nil
+  if working then S.busy[client.id], S.progressive[client.id] = now(), true end
+  local e = S.pushes[client.id .. ':' .. f.buf]
+  local fresh = e and e.at > f.epoch.at
   if client:supports_method(PULL, f.buf) then
+    if working or now() - S.busy[client.id] < SETTLE_MS then
+      -- Whatever it answered while busy is not to be trusted; ask again once it is idle.
+      for _, p in ipairs(f.pulls[client.id] or {}) do p.closed = true end
+      f.pulls[client.id] = nil
+      return 'busy'
+    end
     f.pulls[client.id] = f.pulls[client.id] or vim.tbl_map(function(id) return pull(f, client, id) end, identifiers(client, f.buf))
     local items = {}
     for _, p in ipairs(f.pulls[client.id]) do
@@ -190,12 +224,13 @@ local function ask(f, client)
       if not p.items then return 'pending' end
       vim.list_extend(items, p.items)
     end
-    return 'answered', items
+    -- Some servers answer for their own analysis and publish the rest (rust-analyzer
+    -- publishes cargo check's errors), so what they published for this text counts too.
+    return 'answered', fresh and vim.list_extend(items, e.items) or items
   end
-  local e = S.pushes[client.id .. ':' .. f.buf]
-  local fresh = e and e.at > f.epoch.at
   local since = math.max(f.epoch.time, f.epoch.ready[client.id])
-  if next(client.progress.pending) or now() - since < window(client.id) or (fresh and now() - e.time < QUIET_MS) then
+  local cold = not S.reporters[client.id] and now() - S.born[client.id] < COLD_MS
+  if working or cold or now() - since < window(client.id) or (fresh and now() - e.time < QUIET_MS) then
     return 'busy', fresh and e.items or nil
   end
   -- A server that reported nothing new may simply have nothing new to say (marksman only
@@ -252,10 +287,16 @@ local function collect(f)
     return a.column < b.column
   end)
   f.counts, f.diagnostics = { error = 0, warning = 0, info = 0, hint = 0 }, {}
-  for i, d in ipairs(f.found) do
-    f.counts[d.severity] = f.counts[d.severity] + 1
-    d.level = nil
-    if i <= 500 then table.insert(f.diagnostics, d) end
+  local seen = {}
+  for _, d in ipairs(f.found) do
+    -- A server that both answers and publishes may say the same thing twice.
+    local key = table.concat({ d.line, d.column, d.severity, d.code or '', d.message }, '\0')
+    if not seen[key] then
+      seen[key] = true
+      f.counts[d.severity] = f.counts[d.severity] + 1
+      d.level = nil
+      if #f.diagnostics < 500 then table.insert(f.diagnostics, d) end
+    end
   end
 end
 
@@ -281,7 +322,7 @@ for _, f in ipairs(files) do
     for _, p in ipairs(pulls) do p.closed = true end -- Late replies and retries are no longer wanted.
   end
   if f.filetype then S.filetypes[f.filetype] = true end
-  f.buf, f.epoch, f.pulls, f.found, f.filetype, f.seen, f.loading = nil, nil, nil, nil, nil, nil, nil
+  f.buf, f.epoch, f.pulls, f.found, f.filetype, f.seen, f.loading, f.saved = nil, nil, nil, nil, nil, nil, nil, nil
 end
 local timeline = trace
 trace = nil -- Events between calls are not part of any timeline.

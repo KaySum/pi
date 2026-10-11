@@ -16,6 +16,9 @@ local QUIET_MS, MIN_WINDOW_MS, MAX_WINDOW_MS, UNKNOWN_WINDOW_MS, MUTE_WINDOW_MS 
 -- A server showing progress (loading a project, running cargo check) is not finished, and
 -- an answer it gives meanwhile may be empty. It must be idle this long before one counts.
 local SETTLE_MS = 300
+-- Progress shorter than this is a server ticking over (pyright flashes one after every
+-- answer), not work whose result has to be waited for.
+local SUSTAINED_MS = 150
 -- A push server that has only just started may still be loading its project, without
 -- saying so. Until it reports for the first time it is not called silent this early.
 local COLD_MS = 5000
@@ -26,7 +29,7 @@ local now = function() return uv.hrtime() / 1e6 end
 local S = _G.__pi_nvim_diagnostics_v2
 if not S then
   S = { seq = 0, pulls = {}, pushes = {}, reporters = {}, epochs = {}, disk = {}, linters = {}, latency = {}, mute = {}, filetypes = {},
-    busy = {}, progressive = {}, born = {} }
+    busy = {}, progressive = {}, born = {}, working = {} }
   _G.__pi_nvim_diagnostics_v2 = S
   function S.note() end
   api.nvim_create_autocmd('LspRequest', {
@@ -91,7 +94,12 @@ local function learn(buf)
     local e = S.pushes[id .. ':' .. buf]
     if e and e.at > epoch.at then
       local sample = e.time - math.max(epoch.time, ready)
-      if sample < MAX_WINDOW_MS then S.latency[id] = math.max(sample, 0.8 * (S.latency[id] or 0)) end
+      -- Not a measure of the server's pace: its first report after starting up (loading the
+      -- project), or one that followed a change to another file (which makes servers like
+      -- vtsls report again for every open file).
+      local startup = (S.born[id] or 0) >= epoch.time
+      if startup or e.time > (epoch.superseded or math.huge) then S.latency[id] = S.latency[id] or 0
+      elseif sample < MAX_WINDOW_MS then S.latency[id] = math.max(sample, 0.8 * (S.latency[id] or 0)) end
     elseif not S.latency[id] then S.mute[id] = (S.mute[id] or 0) + 1 end
   end
 end
@@ -114,6 +122,7 @@ local function open(path)
   else
     f.loading = reload or not loaded
     learn(f.buf)
+    for _, epoch in pairs(S.epochs) do epoch.superseded = epoch.superseded or now() end
     S.seq = S.seq + 1
     S.epochs[f.buf] = { at = S.seq, time = now(), ready = {} }
     if reload then
@@ -207,16 +216,19 @@ local function ask(f, client)
     end
   end
   local working = next(client.progress.pending) ~= nil
-  if working then S.busy[client.id], S.progressive[client.id] = now(), true end
+  S.working[client.id] = working and (S.working[client.id] or now()) or nil
+  local sustained = working and now() - S.working[client.id] >= SUSTAINED_MS
+  if sustained then S.busy[client.id], S.progressive[client.id] = now(), true end
   local e = S.pushes[client.id .. ':' .. f.buf]
   local fresh = e and e.at > f.epoch.at
   if client:supports_method(PULL, f.buf) then
-    if working or now() - S.busy[client.id] < SETTLE_MS then
+    if sustained or now() - S.busy[client.id] < SETTLE_MS then
       -- Whatever it answered while busy is not to be trusted; ask again once it is idle.
       for _, p in ipairs(f.pulls[client.id] or {}) do p.closed = true end
       f.pulls[client.id] = nil
       return 'busy'
     end
+    if working then return 'busy' end
     f.pulls[client.id] = f.pulls[client.id] or vim.tbl_map(function(id) return pull(f, client, id) end, identifiers(client, f.buf))
     local items = {}
     for _, p in ipairs(f.pulls[client.id]) do

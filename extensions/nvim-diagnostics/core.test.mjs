@@ -103,7 +103,7 @@ test('replies to cancelled pulls never count; late pull registration and slow st
     'b.dynamic: 1 error — dynamic answered', '  1:1 error [E0] real (fake)',
     'c.slow: 1 error — slow answered', '  1:1 error [E0] real (fake)',
   ]);
-  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v2.pulls)'), 0);
+  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v3.pulls)'), 0);
   const received = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(received.some(m => m.mode === 'cancel' && m.method === '$/cancelRequest'), 'the cancel server saw its pull cancelled');
   assert.ok(received.some(m => m.mode === 'dynamic' && m.method === 'textDocument/diagnostic' && m.identifier === 'late-provider'));
@@ -243,6 +243,29 @@ test('the timeline and server status explain what a check did', async t => {
 
   const servers = await status(f.nvim);
   assert.match(servers, /^Language servers in Pi's Neovim:\n/);
+  assert.match(servers, /\n2 checked files kept open$/);
   assert.match(servers, /^  cancel \(\d\): pull, answers are definite; 1 buffer; root \/.*pi-diagnostics-test-/m);
   assert.match(servers, /^  late \(\d\): push only, given 2500 ms after a change; 1 buffer; root /m);
+});
+
+test('a long session keeps only the most recently checked buffers, and never unloads someone else\'s', async t => {
+  const f = await fixture(t);
+  const names = Array.from({ length: 80 }, (_, i) => `f${i}.txt`);
+  for (const name of names) await f.write(name, 'text');
+  const loaded = () => f.nvim.lua('return vim.tbl_map(function(n) local b = vim.fn.bufnr(n); return b > 0 and vim.api.nvim_buf_is_loaded(b) end, ...)', [names.map(name => join(f.directory, name))]);
+  // Claims on three of the oldest: one is listed, one has unsaved changes, one was open before the tool saw it.
+  await f.nvim.lua('vim.fn.bufload(vim.fn.bufadd(...))', [join(f.directory, 'f2.txt')]);
+  await f.check(names.slice(0, 16));
+  await f.nvim.lua(`local dir = ...
+    vim.bo[vim.fn.bufnr(dir .. '/f0.txt')].buflisted = true
+    vim.api.nvim_buf_set_lines(vim.fn.bufnr(dir .. '/f1.txt'), 0, -1, false, { 'unsaved' })`, [f.directory]);
+  for (let i = 16; i < 80; i += 32) await f.check(names.slice(i, i + 32));
+  const state = await loaded();
+  assert.deepEqual(state.slice(0, 3), [true, true, true]);
+  assert.equal(state.slice(3, 16).every(isLoaded => !isLoaded), true);
+  assert.equal(state.slice(16).every(Boolean), true);
+  assert.equal(await f.nvim.lua('return vim.tbl_count(_G.__pi_nvim_diagnostics_v3.buffers)'), 67);
+  // An unloaded file is simply loaded again when it is next checked.
+  assert.deepEqual([...await f.check(['f5.txt'])], ['f5.txt: no language server or linter for this file']);
+  assert.equal((await loaded())[5], true);
 });

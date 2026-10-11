@@ -24,6 +24,40 @@ src/c.rs: incomplete after 10000 ms: no diagnostics — rust_analyzer starting
 
 Lines and byte columns are 1-based. At most 50 diagnostics are listed per file.
 
+## Debugging: `/nvim-diagnostics`
+
+Without arguments it lists the language servers in Pi's Neovim and how each is treated,
+followed by the output of the most recent check (what Pi last saw):
+
+```
+Language servers in Pi's Neovim:
+  pyright (1): pull, answers are definite; 1 buffer; root none
+  vtsls (3): push only, done after 1000 ms of quiet; 1 buffer; root /Users/xsv/project
+
+Last check 12 s ago, took 1552 ms:
+src/a.py: 1 error — pyright answered
+  ...
+```
+
+With paths (`/nvim-diagnostics src/a.py src/b.ts`) it checks them at every severity and
+adds a timeline of each sync, request, cancellation, reply and report:
+
+```
+Timeline (1552 ms):
+   30 ms  a.py: reloaded from disk, document version 6
+   63 ms  pyright pull #13 for a.py sent
+   72 ms  pyright pull #13 for a.py cancelled by Neovim
+  138 ms  vtsls published 0 for b.ts
+  168 ms  pyright pull #13 for a.py: reply discarded (cancelled)
+  168 ms  pyright pull #16 for a.py sent (attempt 2)
+  170 ms  pyright pull #16 for a.py: full, 1 diagnostics
+  170 ms  a.py: pyright is answered
+  552 ms  vtsls published 1 for b.ts
+ 1552 ms  b.ts: vtsls is reported
+```
+
+Paths are split on whitespace, so the command cannot take a path containing spaces.
+
 ## What the server statuses mean
 
 | Status | Meaning |

@@ -37,14 +37,27 @@ function describe(file, shown, cwd, timeoutMs) {
   return lines;
 }
 
-/** Check files through the language servers of the Pi-owned Neovim; returns text for the model. */
-export async function diagnose(nvim, input, cwd, signal) {
+/**
+ * Check files through the language servers of the Pi-owned Neovim; returns text for the model.
+ * With `trace`, a timeline of every request, reply and report follows the result.
+ */
+export async function diagnose(nvim, input, cwd, signal, { trace = false } = {}) {
   const params = validate(input);
   const files = [...new Set(params.files.map(file => resolve(cwd, file)))];
   // Neovim enforces the deadline itself; the margin only covers an editor that stopped answering.
   const limit = AbortSignal.timeout(params.timeoutMs + 3000);
-  const report = await nvim.lua(LUA, [{ files, timeoutMs: params.timeoutMs }], { signal: signal ? AbortSignal.any([signal, limit]) : limit });
+  const report = await nvim.lua(LUA, [{ files, timeoutMs: params.timeoutMs, trace }], { signal: signal ? AbortSignal.any([signal, limit]) : limit });
   const shown = SEVERITIES.slice(0, SEVERITIES.indexOf(params.severity) + 1);
   const text = report.files.flatMap(file => describe(file, shown, cwd, params.timeoutMs)).join('\n');
+  if (trace) return `${text}\n\nTimeline (${report.elapsedMs} ms):\n${report.trace.join('\n')}`;
   return text.length > OUTPUT_LIMIT ? `${text.slice(0, OUTPUT_LIMIT)}\n[Truncated: check fewer files or raise severity.]` : text;
+}
+
+/** What the checks have to work with: every language server in the editor and how it is treated. */
+export async function status(nvim, signal) {
+  const { clients, pendingPulls } = await nvim.lua(LUA, [{ status: true }], { signal });
+  if (!clients.length) return 'No language servers are running. They start when a file is first checked or opened.';
+  const lines = clients.map(c => `  ${c.name} (${c.id}): ${!c.initialized ? 'starting' : c.pull ? 'pull, answers are definite'
+    : `push only, done after ${c.quietMs} ms of quiet`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
+  return `Language servers in Pi's Neovim:\n${lines.join('\n')}${pendingPulls ? `\n${pendingPulls} diagnostic requests still pending` : ''}`;
 }

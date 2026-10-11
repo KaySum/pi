@@ -1,8 +1,0 @@
-{
-  "enabled": true,
-  "compactAtContextRatio": 0.5,
-  "compactAgainWhenBelowContextRatio": 0.4,
-  "minContextTokens": 20000,
-  "customInstructions": "",
-  "notify": true
-}

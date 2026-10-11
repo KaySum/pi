@@ -19,33 +19,6 @@ npm --prefix ~/.pi/agent/extensions/nvim-diagnostics ci --omit=dev --ignore-scri
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.
 
-## Pi-owned Neovim
-
-`extensions/nvim-service/` starts a private headless Neovim for each Pi runtime.
-An independent supervisor cleans it up even if Pi crashes or is killed, including
-when Neovim is unresponsive. Run `/reload` to activate and `/nvim-service` to
-inspect it. Other extensions can use `PI_NVIM_SOCKET` or its discovery events;
-your editor's `$NVIM` is unchanged.
-
-See [configuration, extension API, and shutdown guarantees](extensions/nvim-service/README.md).
-
-`extensions/nvim-diagnostics/` adds the `nvim_diagnostics` tool. Pi can request a
-batch of disk files, optionally filter severities, and receive Neovim diagnostics
-with explicit coverage/freshness status. Modified service buffers are never
-overwritten; missing providers and timeouts are not presented as clean results.
-See [setup, tool parameters, limits, and tests](extensions/nvim-diagnostics/README.md).
-
-## Session cleanup
-
-The local `extensions/session-cleanup/` extension expires inactive sessions after
-30 days and cleans configured plugin metadata for manually deleted transcripts.
-It runs only at session start or by explicit command—never by polling. Edit `session-cleanup.json` to change retention or add declarative
-file, SQLite, or command cleanup rules—no extension code changes needed.
-
-Run `/session-cleanup preview` to inspect candidates. See
-[configuration, safety limits, and plugin coverage](extensions/session-cleanup/README.md).
-Reload all running Pi instances before relying on active-session protection.
-
 ## Update and sync extensions
 
 Update the versions of configured extensions with:

@@ -27,6 +27,17 @@ src/c.rs: incomplete after 10000 ms: no diagnostics — rust_analyzer starting
 
 Lines and byte columns are 1-based. At most 50 diagnostics are listed per file.
 
+## Warm-up
+
+When Pi edits or writes a file with its own tools, the extension starts checking that
+file in the background and throws the result away. Nothing is added to the conversation.
+By the time Pi calls `nvim_diagnostics`, the servers are running and have already
+reported, so the check finds the text unchanged and returns in a few milliseconds. A
+check that arrives while the background one is still waiting simply waits for the same
+servers; it never returns earlier or with less.
+
+The cost is that language servers start for files Pi edits but never checks.
+
 ## Debugging: `/nvim-diagnostics`
 
 Without arguments it lists the language servers in Pi's Neovim and how each is treated,
@@ -91,7 +102,9 @@ publishes. So after a change each push server gets a window to report:
 - 0.5 s once it has stayed silent through two changes.
 
 It must also have no progress showing and be quiet for 0.3 s, and a server that started
-less than 5 s ago is not called `silent` yet. A check that takes a server unusually long
+less than 5 s ago is not called `silent` yet. A server that has reported after every
+change so far is waited for up to five times its window before `no new report` is
+believed: it is running late, not finished. A check that takes a server unusually long
 can still be reported too early, so no diagnostics never replaces a build or a test run.
 
 A server showing progress for more than a moment (loading a project, running
@@ -140,11 +153,15 @@ Measured on this machine with Neovim 0.12.6:
 
 | Check | Time |
 | --- | --- |
-| Unchanged file | a few ms |
+| Unchanged file, or one already checked in the background | a few ms |
 | Changed Python, JSON, CMake | 20–90 ms |
 | Changed Rust (rust-analyzer with `cargo check`) | about 0.4 s |
 | Changed TypeScript, C, Lua, YAML, shell, Markdown | about 1 s |
 | First check of a file type in a session | 0.5–6 s |
+
+With warm-up, the times in the last four rows are counted from Pi's edit rather than from
+its check: a check 0.6 s after an edit to a TypeScript file takes about 0.45 s, and one
+3 s after takes a few milliseconds.
 
 ## Development
 

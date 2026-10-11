@@ -92,7 +92,8 @@ test('a push server that clears first and reports later is not mistaken for clea
   const lines = await f.check(['a.late', 'b.phased']);
   assert.equal(lines[0], 'a.late: 1 error — late reported');
   assert.equal(lines[2], 'b.phased: 1 error — phased reported');
-  assert.ok(lines.ms >= 2500, `waited ${lines.ms} ms`);
+  // No longer than it takes: once the problems are in, the rest of the window is not waited out.
+  assert.ok(lines.ms >= 1500 && lines.ms < 2400, `waited ${lines.ms} ms`);
 });
 
 test('replies to cancelled pulls never count; late pull registration and slow starts are waited for', async t => {
@@ -245,7 +246,7 @@ test('the timeline and server status explain what a check did', async t => {
   assert.match(servers, /^Language servers in Pi's Neovim:\n/);
   assert.match(servers, /\n2 checked files kept open$/);
   assert.match(servers, /^  cancel \(\d\): pull, answers are definite; 1 buffer; root \/.*pi-diagnostics-test-/m);
-  assert.match(servers, /^  late \(\d\): push only, given 2500 ms after a change; 1 buffer; root /m);
+  assert.match(servers, /^  late \(\d\): push only, given 1000 ms after a change; 1 buffer; root /m);
 });
 
 test('a long session keeps only the most recently checked buffers, and never unloads someone else\'s', async t => {

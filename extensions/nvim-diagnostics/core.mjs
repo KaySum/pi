@@ -58,7 +58,7 @@ export async function status(nvim, signal) {
   const { clients, pendingPulls, trackedBuffers } = await nvim.lua(LUA, [{ status: true }], { signal });
   if (!clients.length) return 'No language servers are running. They start when a file is first checked or opened.';
   const lines = clients.map(c => `  ${c.name} (${c.id}): ${!c.initialized ? 'starting' : c.pull ? 'pull, answers are definite'
-    : `push only, ${c.reports ? '' : 'has never reported, '}given ${c.windowMs} ms after a change`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
+    : `push only, ${c.reports ? '' : 'has never reported, '}given ${c.windowMs} ms after a change${c.paceMs === undefined ? '' : ` (reports problems within ${c.paceMs} ms)`}`}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}`);
   return `Language servers in Pi's Neovim:\n${lines.join('\n')}\n${trackedBuffers} checked file${trackedBuffers === 1 ? '' : 's'} kept open${pendingPulls ? `; ${pendingPulls} diagnostic requests still pending` : ''}`;
 }
 

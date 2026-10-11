@@ -85,6 +85,7 @@ publishes when its answer changes, and tailwindcss outside a Tailwind project ne
 publishes. So after a change each push server gets a window to report:
 
 - 1.5 times the longest it has taken before in this session (at least 1 s, at most 10 s),
+  not counting its first report after starting or reports set off by a change to another file,
 - 2.5 s if it has not reported yet,
 - 0.5 s once it has stayed silent through two changes.
 
@@ -92,8 +93,10 @@ It must also have no progress showing and be quiet for 0.3 s, and a server that 
 less than 5 s ago is not called `silent` yet. A check that takes a server unusually long
 can still be reported too early, so no diagnostics never replaces a build or a test run.
 
-A server showing progress (loading a project, running `cargo check`) is never treated as
-finished, whichever kind it is. rust-analyzer shows why this matters for request-capable
+A server showing progress for more than a moment (loading a project, running
+`cargo check`) is never treated as finished, whichever kind it is, and is given 0.3 s
+after each change to start showing it. Progress shorter than 150 ms is ignored: pyright
+flashes one after every answer. rust-analyzer shows why this matters for request-capable
 servers too: it answers with an empty result while its project is still loading.
 
 ## How a check works
@@ -131,11 +134,9 @@ Measured on this machine with Neovim 0.12.6:
 | Check | Time |
 | --- | --- |
 | Unchanged file | a few ms |
-| Changed JSON, CMake | 20–60 ms |
-| Changed Python (pyright, ruff) | 0.1–0.9 s |
-| Changed Rust (rust-analyzer with `cargo check`) | about 0.7 s |
-| Changed C, Lua, YAML, shell, Markdown | about 1 s |
-| Changed TypeScript (vtsls) | 1.2 s, up to 4 s after it has been slow on a large file |
+| Changed Python, JSON, CMake | 20–90 ms |
+| Changed Rust (rust-analyzer with `cargo check`) | about 0.4 s |
+| Changed TypeScript, C, Lua, YAML, shell, Markdown | about 1 s |
 | First check of a file type in a session | 0.5–6 s |
 
 ## Development

@@ -97,6 +97,9 @@ test('disk edits with preserved mtime/size refresh LSP text; canonical aliases r
   const fixed = await f.query({ operation: 'hover' });
   assert.equal(fixed.refreshed, true);
   assert.notEqual(JSON.parse(items(first)[0].contents[0].text).text, JSON.parse(items(fixed)[0].contents[0].text).text);
+  const opened = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(r => r.method === 'textDocument/didOpen');
+  assert.equal(new Set(opened.map(r => r.params.textDocument.version)).size, 2, 'each disk state needs its own LSP document version');
+  assert.equal(await f.lua('return vim.bo[vim.fn.bufnr(...)].buflisted', [f.file]), false);
   await symlink(f.file, join(f.directory, 'alias.lsp'));
   const alias = await f.query({ file: 'alias.lsp', operation: 'hover' });
   assert.equal(alias.path, f.file); assert.equal(alias.refreshed, false);

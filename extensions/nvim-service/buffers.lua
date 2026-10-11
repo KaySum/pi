@@ -76,10 +76,15 @@ local function prepare(input, f)
   f.refreshed = not loaded or e.hash ~= input.hash or e.tick ~= api.nvim_buf_get_changedtick(e.buf)
   if f.refreshed then
     e.refreshEvents = e.events
+    -- Neovim reopens a (re)loaded document at its old LSP version, 0 if never edited.
+    -- Servers caching by version (vtsls symbols) would keep answering for the old text.
+    vim.lsp.util.buf_versions[e.buf] = M.clock
     if loaded then
+      local listed = vim.bo[e.buf].buflisted
       api.nvim_buf_call(e.buf, function()
         api.nvim_cmd({ cmd = 'edit', mods = { silent = true, keepalt = true, keepjumps = true } }, {})
       end)
+      vim.bo[e.buf].buflisted = listed -- :edit lists the buffer, which would exempt it from pruning.
     else vim.fn.bufload(e.buf) end
     assert(api.nvim_buf_is_loaded(e.buf), 'Buffer failed to load')
     if vim.bo[e.buf].modified then f.status = 'buffer_modified'; return end

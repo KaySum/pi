@@ -1,0 +1,50 @@
+import { readFileSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
+
+export const SEVERITIES = ['error', 'warning', 'info', 'hint'];
+const LUA = readFileSync(new URL('./diagnostics.lua', import.meta.url), 'utf8');
+const PER_FILE = 50;
+const OUTPUT_LIMIT = 16384;
+const STATUS = { pending: 'no answer', busy: 'still working' };
+
+export function validate(params) {
+  const { files, severity = 'warning', timeoutMs = 10000 } = params ?? {};
+  if (!Array.isArray(files) || !files.length || files.length > 32 ||
+      files.some(file => typeof file !== 'string' || !file || file.length > 4096 || file.includes('\0'))) {
+    throw new Error('files must be 1-32 paths');
+  }
+  if (!SEVERITIES.includes(severity)) throw new Error(`severity must be one of ${SEVERITIES.join(', ')}`);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60000) throw new Error('timeoutMs must be an integer from 100 to 60000');
+  return { files, severity, timeoutMs };
+}
+
+function describe(file, shown, cwd, timeoutMs) {
+  const inside = relative(cwd, file.path);
+  const name = inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : file.path;
+  if (file.error) return [`${name}: ${file.error}`];
+  if (!file.clients.length) return [`${name}: no language server attached`];
+  const counts = SEVERITIES.filter(level => file.counts[level])
+    .map(level => `${file.counts[level]} ${level}${file.counts[level] > 1 ? 's' : ''}`).join(', ') || 'no diagnostics';
+  const clients = file.clients.map(client => `${client.name} ${STATUS[client.status] ?? client.status}`).join(', ');
+  const listed = file.diagnostics.filter(d => shown.includes(d.severity));
+  const total = shown.reduce((sum, level) => sum + file.counts[level], 0);
+  const lines = [`${name}: ${file.done ? '' : `incomplete after ${timeoutMs} ms: `}${counts}${file.unsaved ? ' (unsaved buffer)' : ''} — ${clients}`];
+  for (const d of listed.slice(0, PER_FILE)) {
+    const message = d.message.replace(/\s+/g, ' ').trim().slice(0, 500);
+    lines.push(`  ${d.line}:${d.column} ${d.severity}${d.code ? ` [${d.code}]` : ''} ${message}${d.source ? ` (${d.source})` : ''}`);
+  }
+  if (total > PER_FILE) lines.push(`  +${total - PER_FILE} more`);
+  return lines;
+}
+
+/** Check files through the language servers of the Pi-owned Neovim; returns text for the model. */
+export async function diagnose(nvim, input, cwd, signal) {
+  const params = validate(input);
+  const files = [...new Set(params.files.map(file => resolve(cwd, file)))];
+  // Neovim enforces the deadline itself; the margin only covers an editor that stopped answering.
+  const limit = AbortSignal.timeout(params.timeoutMs + 3000);
+  const report = await nvim.lua(LUA, [{ files, timeoutMs: params.timeoutMs }], { signal: signal ? AbortSignal.any([signal, limit]) : limit });
+  const shown = SEVERITIES.slice(0, SEVERITIES.indexOf(params.severity) + 1);
+  const text = report.files.flatMap(file => describe(file, shown, cwd, params.timeoutMs)).join('\n');
+  return text.length > OUTPUT_LIMIT ? `${text.slice(0, OUTPUT_LIMIT)}\n[Truncated: check fewer files or raise severity.]` : text;
+}

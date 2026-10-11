@@ -36,6 +36,7 @@ followed by the output of the most recent check (what Pi last saw):
 Language servers in Pi's Neovim:
   pyright (1): pull, answers are definite; 1 buffer; root none
   vtsls (3): push only, given 1000 ms after a change; 1 buffer; root /Users/xsv/project
+2 checked files kept open
 
 Last check 12 s ago, took 1552 ms:
 src/a.py: 1 error — pyright answered
@@ -128,6 +129,12 @@ accept "unchanged" for the text it just cleared. It is the source for linters, w
 write nowhere else.
 
 Pi's windows, current buffer and cursor are not touched.
+
+Checked files stay loaded so their servers keep their state. Past 64, the least recently
+checked ones are unloaded, which also closes them in the servers. Only buffers this tool
+loaded itself are unloaded, and never one that is shown in a window, listed, or has
+unsaved changes. What the tool has learned about a server is dropped when that server
+exits.
 
 Measured on this machine with Neovim 0.12.6:
 

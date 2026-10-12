@@ -62,20 +62,23 @@ explicit request, not a save.
   is still starting is waited for, and a file just loaded is given 0.3 s for its server
   to attach (2 s the first time a file type is seen). So the first `no formatter for
   this file` of a file type takes 2 s.
+- **A server that is loading is not asked.** A language server answers about its own
+  copy of the file, and edits made for an older text ruin this one. rust-analyzer takes
+  in no changes while it scans a project: asked then, it formats the file as it was
+  before, and says nothing of it. So a server is asked only once it has shown no
+  progress for 0.5 s, and its answer is dropped, and the file tried again, if it showed
+  any before the answer came. A server that goes on loading past the time allowed is
+  reported as `timeout while it was loading`, and the file is left alone. The first
+  request to each server in a session waits those 0.5 s too.
+- **This rests on the server saying that it is loading.** The protocol has no way to ask
+  a server what text it holds. A formatter that conform runs itself is given the text
+  directly and has no such weakness: where one exists (rustfmt, clang-format), setting
+  it in `formatters_by_ft` is both safer and faster than leaving it to the server.
 - **The whole batch is opened first**, so a server hears of every file as it starts.
-- **A server that is not ready is asked again.** rust-analyzer fails requests about a
-  file it was shown while still loading its project. An error from a server that is
-  showing progress, or that says its state changed under the request, is not taken as
-  final: the file is tried again from the start, up to four more times, 0.3 s apart,
-  within the time allowed. Any other error is reported at once.
-- **A server is sent the file before it is asked, and believed at its second word.** It
-  answers about its own copy of the text, and edits made for another text ruin this one.
-  rust-analyzer's copy can miss a change made while it loads a project, and can be
-  overwritten with what it read from disk earlier. So each server gets the buffer afresh,
-  as on a reload, just before the request, and edits are applied only once it has given
-  the same ones twice; if they differ, the file is tried again. The protocol has no way
-  to ask a server what text it holds, so this makes a stale answer very unlikely, not
-  impossible. A file that needs changes costs two requests instead of one.
+- **A server whose state changed is asked again.** An error that says so
+  (`ContentModified`, `ServerCancelled`), or that came as the server began loading, is
+  not taken as final: the file is tried again from the start, up to four more times,
+  0.3 s apart, within the time allowed. Any other error is reported at once.
 - **Language-server formatting gets the right file.** Neovim builds the request from the
   current buffer, so each file is made current for the call. Pi's windows and cursor are not touched.
 - **Read-only files are refused up front.** With `confirm` set, as LazyVim has it,

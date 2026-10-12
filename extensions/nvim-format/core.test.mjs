@@ -42,13 +42,21 @@ package.preload.conform = function()
 end`;
 // Language servers inside Neovim, attaching a moment after a file loads and named by its
 // extension (`a.server`, `b.server_error`): `server` upper-cases the file it is asked
-// about, `plain` cannot format, `error` answers with an error, `flaky` says twice that its state changed
-// before formatting, `loading` fails once while showing progress, `hang` never answers,
-// `once` answers its first request as if for some other text,
-// and `stale` upper-cases the text it was last sent on opening, missing every change since.
+// about, `plain` cannot format, `error` answers with an error, `flaky` says twice that its
+// state changed before formatting, and `hang` never answers. Two answer as if for some
+// other text while they show progress: `frozen` does so for a while after starting, and
+// `relapse` starts when it is first asked.
 const SERVERS = `local function server(kind)
-  return function()
-    local closing, asked, opened = false, 0, {}
+  return function(dispatchers)
+    local closing, asked, busy = false, 0, false
+    local other = { { range = { start = { line = 0, character = 2 }, ['end'] = { line = 0, character = 3 } }, newText = '  {\\n' } }
+    -- It goes on answering wrongly for a moment after it has stopped saying that it is loading.
+    local function load(ms)
+      busy = true
+      dispatchers.notification('$/progress', { token = 'load', value = { kind = 'begin', title = 'Loading' } })
+      vim.defer_fn(function() dispatchers.notification('$/progress', { token = 'load', value = { kind = 'end' } }) end, ms)
+      vim.defer_fn(function() busy = false end, ms + 200)
+    end
     return {
       request = function(method, params, callback)
         if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = kind ~= 'plain', textDocumentSync = { openClose = true, change = 2 } } })
@@ -57,26 +65,19 @@ const SERVERS = `local function server(kind)
         elseif method == 'textDocument/formatting' and kind == 'flaky' and asked < 2 then
           asked = asked + 1
           callback({ code = -32801, message = 'content modified' })
-        elseif method == 'textDocument/formatting' and kind == 'loading' and asked < 1 then
+        elseif method == 'textDocument/formatting' and kind == 'relapse' and asked < 1 then
           asked = asked + 1
-          local id = vim.lsp.get_clients({ name = 'loading' })[1].id
-          vim.lsp.get_client_by_id(id).progress.pending.load = 'Loading'
-          vim.defer_fn(function() vim.lsp.get_client_by_id(id).progress.pending.load = nil end, 100)
-          callback({ code = -32603, message = 'not ready' })
-        elseif method == 'textDocument/formatting' and kind == 'once' and asked < 1 then
-          asked = asked + 1
-          callback(nil, { { range = { start = { line = 0, character = 2 }, ['end'] = { line = 0, character = 3 } }, newText = '  {\\n' } })
-        elseif method == 'textDocument/formatting' and kind == 'stale' then
-          local text = opened[params.textDocument.uri]
-          callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = select(2, text:gsub('\\n', '')), character = 0 } }, newText = text:upper() } })
+          load(150)
+          callback(nil, other)
+        elseif method == 'textDocument/formatting' and busy then callback(nil, other)
         elseif method == 'textDocument/formatting' then
           local lines = vim.api.nvim_buf_get_lines(vim.uri_to_bufnr(params.textDocument.uri), 0, -1, false)
           callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = #lines, character = 0 } }, newText = table.concat(lines, '\\n'):upper() .. '\\n' } })
         else callback(nil, vim.NIL) end
         return true, 1
       end,
-      notify = function(method, params)
-        if method == 'textDocument/didOpen' then opened[params.textDocument.uri] = params.textDocument.text end
+      notify = function(method)
+        if method == 'initialized' and kind == 'frozen' then vim.schedule(function() load(400) end) end
         return true
       end,
       is_closing = function() return closing end,
@@ -87,7 +88,7 @@ end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   vim.defer_fn(function()
     for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
-      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1, once = 1, stale = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+      if ({ server = 1, plain = 1, error = 1, flaky = 1, hang = 1, frozen = 1, relapse = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
     end
   end, 150)
 end })`;
@@ -184,30 +185,19 @@ for (const [setup, init] of [['with conform', undefined], ['no conform', SERVERS
     assert.deepEqual(await f.run(['a.server']), ['a.server: already formatted — server']);
 
     // A server that is not ready yet is asked again, starting over from the file as it was.
-    for (const kind of ['flaky', 'loading']) {
+    // Or that is loading, when it answers about the file as it was: it is waited for, and
+    // an answer that came as it began loading is dropped.
+    for (const kind of ['flaky', 'frozen', 'relapse']) {
       await f.write(`f.server_${kind}`, 'text\n');
       assert.deepEqual(await f.run([`f.server_${kind}`]), [`f.server_${kind}: formatted, lines 1 changed — server, ${kind}`]);
       assert.equal(await f.read(`f.server_${kind}`), 'TEXT\n');
     }
 
-    // A server answers about its own copy of the file, which may have missed a change
-    // (rust-analyzer's does, while it loads a project): it is sent the text first.
-    await f.write('g.stale', 'one\n');
-    assert.deepEqual(await f.run(['g.stale']), ['g.stale: formatted, lines 1 changed — stale']);
-    await f.nvim.lua('local b = vim.fn.bufadd(...); vim.api.nvim_buf_set_lines(b, 0, -1, false, { "ONE", "two", "three" }); vim.api.nvim_buf_call(b, function() vim.cmd("silent noautocmd write") end)', [join(f.directory, 'g.stale')]);
-    assert.deepEqual(await f.run(['g.stale']), ['g.stale: formatted, lines 2-3 changed — stale']);
-    assert.equal(await f.read('g.stale'), 'ONE\nTWO\nTHREE\n');
-
-    // Nor is it believed at its first word: edits are applied once it has given them twice.
-    await f.write('h.server_once', 'text\n');
-    assert.deepEqual(await f.run(['h.server_once']), ['h.server_once: formatted, lines 1 changed — server, once']);
-    assert.equal(await f.read('h.server_once'), 'TEXT\n');
-
     // A server that fails or never answers is a failure, and undoes what one before it did.
     for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');
     assert.deepEqual(await f.run(['c.error', 'd.server_error']), ['c.error: failed: error: cannot format this — error',
       'd.server_error: failed: error: cannot format this — server, error']);
-    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: hang: timeout — hang$/);
+    assert.match((await f.run(['e.hang'], { timeoutMs: 1000 }))[0], /^e\.hang: failed: hang: timeout — hang$/);
     for (const name of ['c.error', 'd.server_error', 'e.hang']) assert.equal(await f.read(name), 'text\n');
   });
 }

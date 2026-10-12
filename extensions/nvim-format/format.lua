@@ -6,13 +6,27 @@ local now = function() return uv.hrtime() / 1e6 end
 -- With no formatter of its own, a file is formatted by a language server, and a client may
 -- be created a moment after a buffer loads; much later on a filetype's first use.
 local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
+-- A server showing progress is loading, and may answer about the file as it was before:
+-- rust-analyzer takes in no changes while it scans a project, and edits made for an older
+-- text ruin this one. So a server is only asked once it has shown no progress for this
+-- long, and its answer is dropped if it showed any before the answer came.
+local CALM_MS = 500
 -- A server's error is not final if it says its state changed under the request
--- (ContentModified, ServerCancelled), or if the server is showing progress, as one loading
--- its project does: the file is tried again, this often and this far apart.
+-- (ContentModified, ServerCancelled) or it began loading meanwhile: the file is tried
+-- again, this often and this far apart.
 local TRANSIENT, ATTEMPTS, RETRY_MS = { [-32801] = true, [-32802] = true }, 5, 300
 
-local S = _G.__pi_nvim_format_v1 or { filetypes = {} }
-_G.__pi_nvim_format_v1 = S
+-- Remembered for the life of this Neovim: the file types seen, and when each language
+-- server last reported progress.
+local S = _G.__pi_nvim_format_v2
+if not S then
+  S = { filetypes = {}, progress = {} }
+  _G.__pi_nvim_format_v2 = S
+  api.nvim_create_autocmd('LspProgress', {
+    group = api.nvim_create_augroup('PiNvimFormat', {}),
+    callback = function(ev) S.progress[ev.data.client_id] = uv.hrtime() / 1e6 end,
+  })
+end
 local started = now()
 local left = function() return math.max(0, request.timeoutMs - (now() - started)) end
 local has_conform, conform = pcall(require, 'conform')
@@ -34,23 +48,20 @@ end
 -- Ask one server how to format the current buffer: its edits, or nil, what went wrong and
 -- whether asking again may help.
 local function ask(client, buf)
-  -- A server answers about its own copy of the file, and edits made for another text ruin
-  -- this one. rust-analyzer's copy can miss a change made while it loads a project, so the
-  -- server is sent the buffer afresh, as on a reload, before it is asked.
-  local uri = vim.uri_from_bufnr(buf)
-  client:notify('textDocument/didClose', { textDocument = { uri = uri } })
-  client:notify('textDocument/didOpen', { textDocument = { uri = uri, version = lsp.util.buf_versions[buf],
-    languageId = client.get_language_id(buf, vim.bo[buf].filetype), text = lsp._buf_get_full_text(buf) } })
-  -- A reopened file makes some servers publish its diagnostics anew; a no-op change gives
-  -- the text a new version, by which nvim-diagnostics knows to wait for them.
-  local modified = vim.bo[buf].modified
-  api.nvim_buf_set_lines(buf, 0, 1, false, api.nvim_buf_get_lines(buf, 0, 1, false))
-  vim.bo[buf].modified = modified
+  -- What a server did before it was first seen here is unknown, so it starts out as busy.
+  S.progress[client.id] = S.progress[client.id] or now()
+  local busy = function() return next(client.progress.pending) ~= nil end
+  if not vim.wait(left(), function() return not busy() and now() - S.progress[client.id] >= CALM_MS end, 20) then
+    return nil, client.name .. ': timeout while it was loading'
+  end
+  local asked = now()
   -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
   local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
+  local moved = busy() or S.progress[client.id] >= asked
   local err = reply and reply.err
-  if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or next(client.progress.pending) ~= nil end
+  if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or moved end
   if not reply then return nil, ('%s: %s'):format(client.name, silence) end
+  if moved then return nil, client.name .. ' began loading while it was asked', true end
   return type(reply.result) == 'table' and reply.result or {}
 end
 
@@ -67,13 +78,7 @@ local function run(buf)
   end
   for _, client in ipairs(clients) do
     local edits, problem, again = ask(client, buf)
-    -- Even a copy just sent can be overwritten before the request is read (rust-analyzer
-    -- does it with what it read from disk earlier), so edits are only applied once the
-    -- server has given the same ones twice, having been sent the file each time.
-    local second
-    if edits and #edits > 0 then second, problem, again = ask(client, buf) end
     if problem then return problem, again end
-    if second and not vim.deep_equal(edits, second) then return client.name .. ': gave different edits when asked again', true end
     lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
   end
 end

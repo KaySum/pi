@@ -6,6 +6,10 @@ local now = function() return uv.hrtime() / 1e6 end
 -- With no formatter of its own, a file is formatted by a language server, and a client may
 -- be created a moment after a buffer loads; much later on a filetype's first use.
 local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
+-- A server's error is not final if it says its state changed under the request
+-- (ContentModified, ServerCancelled), or if the server is showing progress, as one loading
+-- its project does: the file is tried again, this often and this far apart.
+local TRANSIENT, ATTEMPTS, RETRY_MS = { ContentModified = -32801, ServerCancelled = -32802 }, 5, 300
 
 local S = _G.__pi_nvim_format_v1 or { filetypes = {} }
 _G.__pi_nvim_format_v1 = S
@@ -28,12 +32,62 @@ local function formatters(buf)
   return names
 end
 
--- Ask one server how to format the current buffer: its edits, or nil and what went wrong.
+local function loading(client) return next(client.progress.pending) ~= nil end
+
+-- Ask one server how to format the current buffer: its edits, or nil, what went wrong and
+-- whether asking again may help.
 local function ask(client, buf)
   local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
   local err = reply and reply.err
-  if err or not reply then return nil, ('%s: %s'):format(client.name, err and (err.message or err.code) or silence) end
+  if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), vim.tbl_contains(vim.tbl_values(TRANSIENT), err.code) or loading(client) end
+  if not reply then return nil, ('%s: %s'):format(client.name, silence) end
   return type(reply.result) == 'table' and reply.result or {}
+end
+
+-- Format the current buffer without writing it; returns what went wrong, if anything, and
+-- whether trying again may help.
+local function run(buf)
+  if has_conform then
+    local failure
+    conform.format({ bufnr = buf, async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
+    -- A language server's failure, as conform words it.
+    local name = type(failure) == 'string' and failure:match('^%[LSP%]%[(.-)%] ')
+    if not name then return failure end
+    local again = false
+    for code in pairs(TRANSIENT) do again = again or failure:find(code, 1, true) ~= nil end
+    for _, client in ipairs(lsp.get_clients({ bufnr = buf, name = name, method = FORMATTING })) do
+      again = again or loading(client)
+      -- conform prints an error that is a plain table as "table: 0x…", so that server is
+      -- asked again for what it said. If it has no complaint any more, so is conform.
+      if failure:find('table: 0x', 1, true) then
+        local _, problem, more = ask(client, buf)
+        failure, again = problem or failure, again or more or not problem
+      end
+    end
+    return failure, again
+  end
+  -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
+  local clients = lsp.get_clients({ bufnr = buf, method = FORMATTING })
+  -- Putting a buffer back after a failure can detach its servers for a moment.
+  if #clients == 0 then return 'its language servers are not attached', true end
+  for _, client in ipairs(clients) do
+    local edits, problem, again = ask(client, buf)
+    if problem then return problem, again end
+    lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
+  end
+end
+
+-- The whole batch is opened before any of it is formatted, so that a server hears of every
+-- file as it starts. rust-analyzer fails requests about a file it was shown while still
+-- loading its project.
+local opened = {}
+for _, path in ipairs(request.files) do
+  local stat = uv.fs_stat(path)
+  local buf = stat and stat.type == 'file' and vim.fn.bufadd(path)
+  if buf and not api.nvim_buf_is_loaded(buf) then
+    vim.fn.bufload(buf)
+    opened[buf] = now()
+  end
 end
 
 local function format(path)
@@ -41,8 +95,7 @@ local function format(path)
   local stat = uv.fs_stat(path)
   if not stat or stat.type ~= 'file' then out.error = stat and 'not a regular file' or 'no such file'; return out end
   local buf = vim.fn.bufadd(path)
-  local fresh = not api.nvim_buf_is_loaded(buf)
-  vim.fn.bufload(buf)
+  local fresh = opened[buf] ~= nil
   -- Formatting it would write those changes to the file along with the formatting.
   if vim.bo[buf].modified then out.error = "not formatted: its buffer in Pi's Neovim has unsaved changes"; return out end
   -- Asked to write one anyway, an editor with 'confirm' set stops at a dialog.
@@ -53,7 +106,7 @@ local function format(path)
   vim.cmd('silent checktime ' .. buf)
   fresh = fresh or tick ~= api.nvim_buf_get_changedtick(buf)
 
-  local loaded, filetype = now(), vim.bo[buf].filetype
+  local loaded, filetype = opened[buf] or now(), vim.bo[buf].filetype
   vim.wait(left(), function()
     out.formatters = formatters(buf)
     if #out.formatters > 0 then return true end
@@ -73,37 +126,27 @@ local function format(path)
     file:close()
     return bytes
   end
-  local before, failure, written = read(), nil, false
-  -- With the buffer current: language-server formatting asks about the current buffer,
-  -- whichever one it was given.
-  local ok, err = pcall(api.nvim_buf_call, buf, function()
-    if has_conform then
-      conform.format({ bufnr = buf, async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
-      -- conform prints a server's error as "table: 0x…", so that server is asked again for
-      -- what it said.
-      local name = type(failure) == 'string' and failure:match('^%[LSP%]%[(.-)%] table: 0x')
-      for _, client in ipairs(name and lsp.get_clients({ bufnr = buf, name = name, method = FORMATTING }) or {}) do
-        failure = select(2, ask(client, buf)) or failure
+  local before, written, failure, again = read(), false, nil, nil
+  for attempt = 1, ATTEMPTS do
+    -- With the buffer current: language-server formatting asks about the current buffer,
+    -- whichever one it was given.
+    local ok, err = pcall(api.nvim_buf_call, buf, function()
+      failure, again = run(buf)
+      -- Checked here too: conform gives each language server the whole of the time left.
+      if not failure and left() == 0 then failure, again = 'timeout', false end
+      if not failure and vim.bo[buf].modified then
+        vim.cmd('silent noautocmd write')
+        written = true
       end
-    else
-      -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
-      for _, client in ipairs(lsp.get_clients({ bufnr = buf, method = FORMATTING })) do
-        local edits, problem = ask(client, buf)
-        if problem then failure = problem; break end
-        lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
-      end
-    end
-    -- Checked here too: conform gives each language server the whole of the time left.
-    if not failure and left() == 0 then failure = 'timeout' end
-    if not failure and vim.bo[buf].modified then
-      vim.cmd('silent noautocmd write')
-      written = true
-    end
-  end)
-  failure = failure or (not ok and err)
-  if failure then
+    end)
+    if not ok then failure, again = err, false end
+    if not failure then break end
     -- A formatter that failed part-way must not leave a half-formatted buffer behind.
     if vim.bo[buf].modified then pcall(api.nvim_buf_call, buf, function() vim.cmd('silent keepalt keepjumps edit!') end) end
+    if not again or attempt == ATTEMPTS or left() <= RETRY_MS then break end
+    vim.wait(RETRY_MS)
+  end
+  if failure then
     out.error = 'failed: ' .. vim.trim(tostring(failure):gsub('\nstack traceback:.*', '')):gsub('%s+', ' '):sub(1, 500)
     return out
   end

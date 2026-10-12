@@ -52,15 +52,25 @@ package.preload.conform = function()
 end`;
 // Language servers inside Neovim, attaching a moment after a file loads and named by its
 // extension (`a.server`, `b.server_error`): `server` upper-cases the file it is asked
-// about, `plain` cannot format, `error` answers with an error and `hang` never answers.
+// about, `plain` cannot format, `error` answers with an error, `flaky` says twice that its state changed
+// before formatting, `loading` fails once while showing progress, and `hang` never answers.
 const SERVERS = `local function server(kind)
   return function()
-    local closing = false
+    local closing, asked = false, 0
     return {
       request = function(method, params, callback)
         if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = kind ~= 'plain' } })
         elseif method == 'textDocument/formatting' and kind == 'hang' then
         elseif method == 'textDocument/formatting' and kind == 'error' then callback({ code = -32603, message = 'cannot format this' })
+        elseif method == 'textDocument/formatting' and kind == 'flaky' and asked < 2 then
+          asked = asked + 1
+          callback({ code = -32801, message = 'content modified' })
+        elseif method == 'textDocument/formatting' and kind == 'loading' and asked < 1 then
+          asked = asked + 1
+          local id = vim.lsp.get_clients({ name = 'loading' })[1].id
+          vim.lsp.get_client_by_id(id).progress.pending.load = 'Loading'
+          vim.defer_fn(function() vim.lsp.get_client_by_id(id).progress.pending.load = nil end, 100)
+          callback({ code = -32603, message = 'not ready' })
         elseif method == 'textDocument/formatting' then
           local lines = vim.api.nvim_buf_get_lines(vim.uri_to_bufnr(params.textDocument.uri), 0, -1, false)
           callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = #lines, character = 0 } }, newText = table.concat(lines, '\\n'):upper() .. '\\n' } })
@@ -76,7 +86,7 @@ end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   vim.defer_fn(function()
     for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
-      if ({ server = 1, plain = 1, error = 1, hang = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
     end
   end, 150)
 end })`;
@@ -171,6 +181,13 @@ for (const [setup, init] of [['conform falling back to them', undefined], ['no c
     await f.write('a.server', 'ONE\nmore\n');
     assert.deepEqual(await f.run(['a.server']), ['a.server: formatted, lines 2 changed — server']);
     assert.deepEqual(await f.run(['a.server']), ['a.server: already formatted — server']);
+
+    // A server that is not ready yet is asked again, starting over from the file as it was.
+    for (const kind of ['flaky', 'loading']) {
+      await f.write(`f.server_${kind}`, 'text\n');
+      assert.deepEqual(await f.run([`f.server_${kind}`]), [`f.server_${kind}: formatted, lines 1 changed — server, ${kind}`]);
+      assert.equal(await f.read(`f.server_${kind}`), 'TEXT\n');
+    }
 
     // A server that fails or never answers is a failure, and undoes what one before it did.
     // What the server said is passed on, though conform itself loses it.

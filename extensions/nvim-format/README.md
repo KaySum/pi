@@ -58,6 +58,12 @@ explicit request, not a save.
   is still starting is waited for, and a file just loaded is given 0.3 s for its server
   to attach (2 s the first time a file type is seen). So the first `no formatter for
   this file` of a file type takes 2 s.
+- **The whole batch is opened first**, so a server hears of every file as it starts.
+- **A server that is not ready is asked again.** rust-analyzer fails requests about a
+  file it was shown while still loading its project. An error from a server that is
+  showing progress, or that says its state changed under the request, is not taken as
+  final: the file is tried again from the start, up to four more times, 0.3 s apart,
+  within the time allowed. Any other error is reported at once.
 - **Language-server formatting gets the right file.** Both conform and Neovim build the
   request from the current buffer, whichever buffer they were given, so each file is
   made current for the call. Pi's windows and cursor are not touched.

@@ -10,7 +10,7 @@ import { format, validate } from './core.mjs';
 // `b.upper_trim`); with none, it falls back to the language servers.
 const CONFORM = `vim.o.confirm = true
 package.preload.conform = function()
-  local run = { upper = string.upper, trim = vim.trim }
+  local run = { upper = string.upper, trim = vim.trim, slow = string.upper }
   local function names(buf)
     local list = {}
     for name in vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ':e'):gmatch('[^_]+') do
@@ -29,6 +29,7 @@ package.preload.conform = function()
       local lines = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
       for _, formatter in ipairs(list) do
         if formatter.name == 'eol' then vim.bo[opts.bufnr].endofline = true; vim.bo[opts.bufnr].modified = true; return callback() end
+        if formatter.name == 'slow' then vim.wait(250) end
         if not run[formatter.name] then
           vim.api.nvim_buf_set_lines(opts.bufnr, 0, 1, false, { 'half done' })
           return callback('broken exited with\\n  code 1')
@@ -128,6 +129,13 @@ test('a formatter that fails, a read-only file and an unsaved buffer change noth
   assert.equal(await f.read('a.upper_broken'), 'text\n');
   const buffer = name => f.nvim.lua('local b = vim.fn.bufadd(...); return { vim.api.nvim_buf_get_lines(b, 0, -1, false), vim.bo[b].modified }', [join(f.directory, name)]);
   assert.deepEqual(await buffer('a.upper_broken'), [['text'], false]);
+
+  // Finishing after the time allowed is not finishing: nothing is written late.
+  await f.write('late.slow', 'text\n');
+  assert.deepEqual(await f.run(['late.slow'], { timeoutMs: 100 }), ['late.slow: failed: timeout — slow']);
+  assert.equal(await f.read('late.slow'), 'text\n');
+  assert.deepEqual(await buffer('late.slow'), [['text'], false]);
+  assert.deepEqual(await f.run(['late.slow']), ['late.slow: formatted, lines 1 changed — slow']);
 
   await f.write('locked.upper', 'text\n');
   await chmod(join(f.directory, 'locked.upper'), 0o444);

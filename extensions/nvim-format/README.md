@@ -11,6 +11,7 @@ its own.
 
 - `files`: 1–32 paths, relative to cwd or absolute.
 - `timeoutMs`: how long all the files together may take; default 10000, at most 60000.
+  A file whose formatting finishes later than that is not written.
 
 ```
 src/a.lua: formatted, lines 1-2, 14 changed — stylua

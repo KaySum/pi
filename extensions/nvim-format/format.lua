@@ -80,6 +80,8 @@ local function format(path)
         if type(reply.result) == 'table' then lsp.util.apply_text_edits(reply.result, buf, client.offset_encoding) end
       end
     end
+    -- Checked here too: conform gives each language server the whole of the time left.
+    if not failure and left() == 0 then failure = 'timeout' end
     if not failure and vim.bo[buf].modified then
       vim.cmd('silent noautocmd write')
       written = true

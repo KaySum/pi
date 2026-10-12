@@ -67,7 +67,9 @@ function M.ask(client, method, params, buf, ms)
   -- those of the buffer it is about: a server asked about a project needs them all.
   if lsp._changetracking then lsp._changetracking.flush(client) end
   local asked = now()
-  local reply, silence = client:request_sync(method, params, left(), buf)
+  -- A server that a plugin runs inside Neovim fails by raising an error (crates.nvim).
+  local ok, reply, silence = pcall(client.request_sync, client, method, params, left(), buf)
+  if not ok then return nil, ('%s: %s'):format(client.name, vim.trim(tostring(reply):gsub('\nstack traceback:.*', '')):gsub('%s+', ' '):sub(1, 300)) end
   local moved = busy() or S.progress[client.id] >= asked
   local err = reply and reply.err
   if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or moved end

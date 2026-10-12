@@ -95,7 +95,7 @@ const LUA = withServers("local edits, problem, again = servers.ask(client, 'text
 
 | `servers.` | Behavior |
 | --- | --- |
-| `ask(client, method, params, buf, ms)` | The answer; or `nil`, what went wrong, and whether asking again may help. The server is only asked once it has shown no progress for 0.5 s (so the first request to each server in a session waits that long), and its answer is dropped if it showed any before the answer came. It is first sent the pending changes of every buffer, not only of `buf`: Neovim holds them back for 150 ms. |
+| `ask(client, method, params, buf, ms)` | The answer; or `nil`, what went wrong (an error raised by a server that runs inside Neovim included), and whether asking again may help. The server is only asked once it has shown no progress for 0.5 s (so the first request to each server in a session waits that long), and its answer is dropped if it showed any before the answer came. It is first sent the pending changes of every buffer, not only of `buf`: Neovim holds them back for 150 ms. |
 | `attached(buf, loaded?)` | True once no more servers are to be expected for the buffer and those it has are running. `loaded` is when it was (re)loaded, if only just: it is then given 0.3 s, or 2 s for the first file of a type. |
 | `saved(buf)` | Tell the buffer's servers it was written, after a write without autocommands. clangd only then rereads a header for the sources that include it. |
 | `seen(buf)` | Call once a buffer's servers have been waited for, so the next file of its type is not given the 2 s. |

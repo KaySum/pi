@@ -90,7 +90,10 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
 - **What cannot be run is not offered.** Besides the actions a server marks as disabled,
   some are commands that only the server's own editor plugin knows how to run: jsonls
   lists "Sort JSON", which VS Code carries out itself. Those are counted, not listed, and
-  naming one gets the reason.
+  naming one gets the reason. An action is asked about again once the server has said
+  what it does. If it then has an edit and such a command, the edit is applied and the
+  command left out, as Neovim does, and the result says so: vtsls adds one of its
+  plugin's own to "Organize Imports".
 - **One failing server does not take the others with it.** Its error is noted beside the
   actions the rest offer; crates.nvim raises one for a `Cargo.toml` it has not read yet.
 - **The servers are told of the save**, once every file is on disk. Without it clangd

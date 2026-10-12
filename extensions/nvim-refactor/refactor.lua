@@ -323,14 +323,20 @@ local function change(edit, command, client)
   return { files = files, moved = moved }
 end
 
--- Why an action cannot be applied, if it cannot: the server says so, or it is a command
--- that only the server's own editor plugin knows how to run (jsonls: "Sort JSON").
+-- Whether a command can be run at all: by a plugin in the editor, or by the server, going
+-- by what it says it takes, as Neovim does.
+local function runnable(client, name)
+  local provider = client.server_capabilities.executeCommandProvider
+  return client.commands[name] or lsp.commands[name] or vim.list_contains(type(provider) == 'table' and provider.commands or {}, name)
+end
+
+-- Why an action cannot be applied, if it cannot: the server says so, or all there is to it
+-- is a command that only the server's own editor plugin knows how to run (jsonls: "Sort JSON").
 local function unusable(entry)
   local action, client = entry.action, entry.client
   if action.disabled then return action.disabled.reason or '' end
   local name = type(action.command) == 'table' and action.command.command or action.command
-  local provider = client.server_capabilities.executeCommandProvider
-  if name and not (client.commands[name] or lsp.commands[name] or vim.list_contains(type(provider) == 'table' and provider.commands or {}, name)) then
+  if name and not action.edit and not runnable(client, name) then
     return ('needs the command %s, which neither Neovim nor %s can run'):format(name, client.name)
   end
 end
@@ -374,18 +380,23 @@ local function run()
     return out
   end
   local action, client = matches[1].action, matches[1].client
-  local reason = unusable(matches[1])
-  if reason then return nil, ('"%s" cannot be applied here: %s'):format(action.title, reason ~= '' and reason or 'the server gives no reason') end
   -- A server may leave out what an action does until it is chosen. A bare command has no more to give.
-  if type(action.command) ~= 'string' and not (action.edit and action.command) and client:supports_method('codeAction/resolve', buf) then
+  if not unusable(matches[1]) and type(action.command) ~= 'string' and not (action.edit and action.command) and client:supports_method('codeAction/resolve', buf) then
     local resolved, problem
     resolved, problem, again = servers.ask(client, 'codeAction/resolve', action, buf, left())
     if resolved then action = resolved elseif not (action.edit or action.command) then return nil, problem, again end
   end
+  -- Asked again of what it turned out to be: the command may only have come with the rest.
+  local reason = unusable({ action = action, client = client })
+  if reason then return nil, ('"%s" cannot be applied here: %s'):format(action.title, reason ~= '' and reason or 'the server gives no reason') end
+  -- With an edit, a command that cannot be run is left out, as Neovim leaves it out: it is
+  -- the editor plugin's own business (vtsls: "_typescript.didOrganizeImports").
+  local command = type(action.command) == 'table' and action.command or action.command and action
+  local skipped = command and not runnable(client, command.command) and command.command or nil
   local done, problem
-  done, problem, again = change(action.edit, type(action.command) == 'table' and action.command or action.command and action, client)
+  done, problem, again = change(action.edit, not skipped and command or nil, client)
   if not done then return nil, problem, again end
-  done.title, done.server = action.title, client.name
+  done.title, done.server, done.skipped = action.title, client.name, skipped
   return done
 end
 

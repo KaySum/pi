@@ -68,7 +68,8 @@ function describe(report, params, cwd) {
     const ranges = file.changed.slice(0, RANGES).map(([first, last]) => first === last ? first : `${first}-${last}`).join(', ');
     return `${show(file.path)}: lines ${ranges}${file.changed.length > RANGES ? `, +${file.changed.length - RANGES} more` : ''} changed`;
   }).concat(report.moved.map(op => `${op.kind}d ${op.from ? `${show(op.from)} to ` : ''}${show(op.path)}`));
-  if (!lines.length) return `${head} — ${report.server}: it changed no files`;
+  if (report.skipped) lines.push(`not run: its command ${report.skipped}, which neither Neovim nor ${report.server} can run`);
+  if (!report.files.length && !report.moved.length) return `${head} — ${report.server}: it changed no files`;
   const count = report.files.length;
   return `${head}${count ? ` in ${count} file${count === 1 ? '' : 's'}` : ''} — ${report.server}\n${lines.join('\n')}`;
 }

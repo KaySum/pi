@@ -25,7 +25,16 @@ package.preload.conform = function()
     end,
     format = function(opts, callback)
       local list = names(opts.bufnr)
-      if #list == 0 then vim.lsp.buf.format({ bufnr = opts.bufnr, async = false, timeout_ms = opts.timeout_ms }); return callback() end
+      if #list == 0 then
+        -- As conform does it, down to printing a server's error object as it stands.
+        for _, client in ipairs(vim.lsp.get_clients({ bufnr = opts.bufnr, method = 'textDocument/formatting' })) do
+          local reply, silence = client:request_sync('textDocument/formatting', vim.lsp.util.make_formatting_params(), opts.timeout_ms, opts.bufnr)
+          local problem = (reply and reply.err) or silence
+          if reply and reply.result then vim.lsp.util.apply_text_edits(reply.result, opts.bufnr, client.offset_encoding)
+          elseif problem then return callback(string.format('[LSP][%s] %s', client.name, problem)) end
+        end
+        return callback()
+      end
       local lines = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
       for _, formatter in ipairs(list) do
         if formatter.name == 'eol' then vim.bo[opts.bufnr].endofline = true; vim.bo[opts.bufnr].modified = true; return callback() end
@@ -164,12 +173,11 @@ for (const [setup, init] of [['conform falling back to them', undefined], ['no c
     assert.deepEqual(await f.run(['a.server']), ['a.server: already formatted — server']);
 
     // A server that fails or never answers is a failure, and undoes what one before it did.
-    // Not asked of the stand-in for conform, which would only be answering for itself.
-    if (init === undefined) return;
+    // What the server said is passed on, though conform itself loses it.
     for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');
     assert.deepEqual(await f.run(['c.error', 'd.server_error']), ['c.error: failed: error: cannot format this — error',
       'd.server_error: failed: error: cannot format this — server, error']);
-    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: hang: timeout — hang$/);
+    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: (hang:|\[LSP\]\[hang\]) timeout — hang$/);
     for (const name of ['c.error', 'd.server_error', 'e.hang']) assert.equal(await f.read(name), 'text\n');
   });
 }

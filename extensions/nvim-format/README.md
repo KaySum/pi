@@ -52,7 +52,8 @@ explicit request, not a save.
 - **Nothing is half done.** If a formatter fails, or a language server answers with an
   error or not at all, the buffer is put back and the file is not written, whatever an
   earlier formatter in the chain had already done. Syntax errors are the usual cause, and
-  the formatter's message says where.
+  the formatter's message says where. conform reports a server's error without its
+  message, so that server is asked once more for what it said.
 - **Language servers are waited for.** When only a server can format the file, one that
   is still starting is waited for, and a file just loaded is given 0.3 s for its server
   to attach (2 s the first time a file type is seen). So the first `no formatter for

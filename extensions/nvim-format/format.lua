@@ -28,6 +28,14 @@ local function formatters(buf)
   return names
 end
 
+-- Ask one server how to format the current buffer: its edits, or nil and what went wrong.
+local function ask(client, buf)
+  local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
+  local err = reply and reply.err
+  if err or not reply then return nil, ('%s: %s'):format(client.name, err and (err.message or err.code) or silence) end
+  return type(reply.result) == 'table' and reply.result or {}
+end
+
 local function format(path)
   local out = { path = path }
   local stat = uv.fs_stat(path)
@@ -71,13 +79,18 @@ local function format(path)
   local ok, err = pcall(api.nvim_buf_call, buf, function()
     if has_conform then
       conform.format({ bufnr = buf, async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
+      -- conform prints a server's error as "table: 0x…", so that server is asked again for
+      -- what it said.
+      local name = type(failure) == 'string' and failure:match('^%[LSP%]%[(.-)%] table: 0x')
+      for _, client in ipairs(name and lsp.get_clients({ bufnr = buf, name = name, method = FORMATTING }) or {}) do
+        failure = select(2, ask(client, buf)) or failure
+      end
     else
       -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
       for _, client in ipairs(lsp.get_clients({ bufnr = buf, method = FORMATTING })) do
-        local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
-        local problem = reply and reply.err and (reply.err.message or reply.err.code) or silence
-        if problem then failure = ('%s: %s'):format(client.name, problem); break end
-        if type(reply.result) == 'table' then lsp.util.apply_text_edits(reply.result, buf, client.offset_encoding) end
+        local edits, problem = ask(client, buf)
+        if problem then failure = problem; break end
+        lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
       end
     end
     -- Checked here too: conform gives each language server the whole of the time left.

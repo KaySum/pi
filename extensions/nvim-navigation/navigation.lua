@@ -112,7 +112,7 @@ end
 local filetype = vim.bo[buf].filetype
 
 -- The position asked about: a symbol's text on the line is easier to give than a column.
-local position, symbol
+local position, symbol, asked
 if request.line then
   local text = api.nvim_buf_get_lines(buf, request.line - 1, request.line, false)[1]
   if not text then error(('line %d is past the end of the file (%d lines)'):format(request.line, api.nvim_buf_line_count(buf)), 0) end
@@ -135,6 +135,7 @@ if request.line then
   if column > #text then error(('column %d is past the end of line %d'):format(column + 1, request.line), 0) end
   symbol = request.symbol or text:sub(column + 1):match('^[%w_]+') or text:sub(column + 1, column + 1)
   position = function(encoding) return { line = request.line - 1, character = vim.str_utfindex(text, encoding, column, false) } end
+  asked = { line = request.line, column = column + 1 }
   note(('asking about %s at %d:%d'):format(vim.inspect(symbol), request.line, column + 1))
 end
 
@@ -326,5 +327,12 @@ for _, entry in ipairs(servers) do
       add(item, table.concat({ item.path, item.line or 0, item.column or 0 }, '\0'))
     end
   end
+end
+-- A server that knows of nowhere else answers "where is this defined?" with the place it
+-- was asked about (clangd, for a declaration whose definition it has not indexed). That
+-- is an answer, but not the one it looks like, so it is marked.
+if asked and request.action ~= 'references' and request.action ~= 'hover' and #out.items == 1 then
+  local item = out.items[1]
+  out.same = item.line == asked.line and item.column == asked.column and uv.fs_realpath(item.path) == uv.fs_realpath(path)
 end
 return out

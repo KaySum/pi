@@ -37,7 +37,8 @@ function format(report, action, cwd) {
   const what = count => action === 'symbols' ? `${symbols(count)} in ${show(report.path)}` : action === 'workspace_symbols' ? `${symbols(count)} matching ${JSON.stringify(report.query ?? '')}`
     : action === 'hover' ? `hover information${of}` : `${LABEL[action][count === 1 ? 0 : 1]}${of}`;
   if (!report.servers.length) return `No language server for ${show(report.path)}.`;
-  const note = `${others.length ? ` (${others.join(', ')})` : ''}${report.loading ? ' (servers were still loading; ask again)' : ''}${report.unsaved ? ' (unsaved buffer)' : ''}`;
+  const note = `${others.length ? ` (${others.join(', ')})` : ''}${report.loading ? ' (servers were still loading; ask again)' : ''}${report.unsaved ? ' (unsaved buffer)' : ''}`
+    + (report.same ? ' (this is the place asked about; the server knows of no other)' : '');
   if (!answered.length && !others.length) return `No server for ${show(report.path)} supports this: ${report.servers.map(server => server.name).join(', ')}.`;
   if (!report.items.length) return `No ${what(0)} — ${answered.join(', ') || 'no server answered'}${note}`;
 

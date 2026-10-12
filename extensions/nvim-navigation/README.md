@@ -116,6 +116,12 @@ spaces.
   duplicates. One that failed is named in the header; one that does not support the
   action is left out.
 
+- **An answer that only points back is marked.** Asked where something is defined, a
+  server that knows of nowhere else returns the place it was asked about. clangd does
+  this for a declaration whose definition it has not indexed yet. The header then says
+  `(this is the place asked about; the server knows of no other)`; `references`, or
+  opening a source file that includes the header, usually finds the rest.
+
 If the header says servers were still loading, the answer may be incomplete: ask again.
 An empty result from a server that answered is real.
 

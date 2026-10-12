@@ -64,6 +64,9 @@ test('definitions, references, hover and symbols, pointed at by the text on a li
   assert.deepEqual([...await f.ask('workspace_symbols', 'use.normal', { query: 'e' })], [
     '3 symbols matching "e" — normal', '  function Other  lib.normal:4', '  function greet  lib.normal:1', '  method inner  lib.normal:2']); // The server's own ranking is kept.
   assert.equal((await f.ask('definition', 'use.normal', { line: 2, symbol: 'call' })).text, 'No definitions for call — normal');
+  // Asked where a definition is defined, the server can only point back at it: said, not left to look like a finding.
+  assert.deepEqual([...await f.ask('definition', 'lib.normal', { line: 1, symbol: 'greet' })], [
+    '1 definition for greet — normal (this is the place asked about; the server knows of no other)', 'lib.normal', '  1:5  def greet']);
   assert.equal((await f.ask('type', 'use.normal', { line: 2, symbol: 'greet' })).text, 'No server for use.normal supports this: normal.');
 });
 

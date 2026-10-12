@@ -12,6 +12,7 @@ _G.__pi_nvim_format_v1 = S
 local started = now()
 local left = function() return math.max(0, request.timeoutMs - (now() - started)) end
 local has_conform, conform = pcall(require, 'conform')
+local FORMATTING = 'textDocument/formatting'
 
 -- What would format the buffer right now, by name.
 local function formatters(buf)
@@ -21,8 +22,8 @@ local function formatters(buf)
     list, servers = conform.list_formatters_to_run(buf)
     for _, formatter in ipairs(list) do table.insert(names, formatter.name) end
   end
-  for _, client in ipairs(servers and lsp.get_clients({ bufnr = buf }) or {}) do
-    if client:supports_method('textDocument/formatting', buf) then table.insert(names, client.name) end
+  for _, client in ipairs(servers and lsp.get_clients({ bufnr = buf, method = FORMATTING }) or {}) do
+    table.insert(names, client.name)
   end
   return names
 end
@@ -58,17 +59,31 @@ local function format(path)
   if #out.formatters == 0 then return out end
   if left() == 0 then out.error = 'not formatted: out of time'; return out end
 
-  local before = api.nvim_buf_get_lines(buf, 0, -1, false)
+  local function read()
+    local file = assert(io.open(path, 'rb'))
+    local bytes = file:read('*a')
+    file:close()
+    return bytes
+  end
+  local before, failure, written = read(), nil, false
   -- With the buffer current: language-server formatting asks about the current buffer,
   -- whichever one it was given.
-  local failure
   local ok, err = pcall(api.nvim_buf_call, buf, function()
     if has_conform then
       conform.format({ bufnr = buf, async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
     else
-      lsp.buf.format({ bufnr = buf, async = false, timeout_ms = left() })
+      -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
+      for _, client in ipairs(lsp.get_clients({ bufnr = buf, method = FORMATTING })) do
+        local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
+        local problem = reply and reply.err and (reply.err.message or reply.err.code) or silence
+        if problem then failure = ('%s: %s'):format(client.name, problem); break end
+        if type(reply.result) == 'table' then lsp.util.apply_text_edits(reply.result, buf, client.offset_encoding) end
+      end
     end
-    if not failure and vim.bo[buf].modified then vim.cmd('silent noautocmd write') end
+    if not failure and vim.bo[buf].modified then
+      vim.cmd('silent noautocmd write')
+      written = true
+    end
   end)
   failure = failure or (not ok and err)
   if failure then
@@ -77,10 +92,10 @@ local function format(path)
     out.error = 'failed: ' .. vim.trim(tostring(failure):gsub('\nstack traceback:.*', '')):gsub('%s+', ' '):sub(1, 500)
     return out
   end
-  -- Where the text changed, as line ranges of the file as it is now.
-  local text = function(lines) return table.concat(lines, '\n') .. '\n' end
+  -- Where the file changed, as line ranges of what it holds now. Its bytes are compared, not
+  -- the buffer's lines: a formatter may change only line endings or the final newline.
   out.changed = {}
-  for _, hunk in ipairs(vim.diff(text(before), text(api.nvim_buf_get_lines(buf, 0, -1, false)), { result_type = 'indices' })) do
+  for _, hunk in ipairs(written and vim.diff(before, read(), { result_type = 'indices' }) or {}) do
     local first = math.max(hunk[3], 1)
     table.insert(out.changed, { first, first + math.max(hunk[4], 1) - 1 })
   end

@@ -22,7 +22,8 @@ vendor/e.lua: not formatted: the file is read-only
 ```
 
 The lines are those of the file as it is now, so Pi knows where what it last read no
-longer holds. At most 12 ranges are listed per file.
+longer holds. The file's bytes are compared, so a change of line endings or of the final
+newline counts. At most 12 ranges are listed per file.
 
 Pi calls it when it has finished editing, not after every edit: its edits match text
 exactly, and a file reformatted in between would no longer contain what it expects.
@@ -37,7 +38,7 @@ containing spaces.
   `conform.format()` would run for the buffer, with your options: the formatters of
   `formatters_by_ft`, and the language servers where `lsp_format` says so (LazyVim sets
   `fallback`, so a server formats what has no formatter of its own).
-- Without it, the file's language servers, through `vim.lsp.buf.format()`.
+- Without it, each of the file's language servers that can format, in turn.
 
 Format-on-save settings (`vim.g.autoformat` and the like) are not consulted: this is an
 explicit request, not a save.
@@ -47,8 +48,10 @@ explicit request, not a save.
 - **The file on disk is what is formatted.** A buffer that no longer matches its file is
   reloaded first. One with unsaved changes is refused, since writing it would put those
   changes into the file along with the formatting.
-- **Nothing is half done.** If a formatter fails, the buffer is put back and the file is
-  not written. Syntax errors are the usual cause, and the formatter's message says where.
+- **Nothing is half done.** If a formatter fails, or a language server answers with an
+  error or not at all, the buffer is put back and the file is not written, whatever an
+  earlier formatter in the chain had already done. Syntax errors are the usual cause, and
+  the formatter's message says where.
 - **Language servers are waited for.** When only a server can format the file, one that
   is still starting is waited for, and a file just loaded is given 0.3 s for its server
   to attach (2 s the first time a file type is seen). So the first `no formatter for
@@ -63,6 +66,9 @@ explicit request, not a save.
   its next check.
 
 Formatted files stay loaded, so their servers keep their state.
+
+Cancelling a call stops Pi waiting, not Neovim working: the call runs to its end inside
+the editor, so files may still be formatted and written after it.
 
 Measured on this machine with Neovim 0.12.6 and files already loaded: 20–60 ms a file
 for stylua, prettier, shfmt and ruff. The first file of a type in a session takes as long

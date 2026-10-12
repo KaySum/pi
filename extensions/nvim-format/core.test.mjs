@@ -14,7 +14,7 @@ package.preload.conform = function()
   local function names(buf)
     local list = {}
     for name in vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ':e'):gmatch('[^_]+') do
-      if run[name] or name == 'broken' then table.insert(list, { name = name }) end
+      if run[name] or name == 'broken' or name == 'eol' then table.insert(list, { name = name }) end
     end
     return list
   end
@@ -28,6 +28,7 @@ package.preload.conform = function()
       if #list == 0 then vim.lsp.buf.format({ bufnr = opts.bufnr, async = false, timeout_ms = opts.timeout_ms }); return callback() end
       local lines = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
       for _, formatter in ipairs(list) do
+        if formatter.name == 'eol' then vim.bo[opts.bufnr].endofline = true; vim.bo[opts.bufnr].modified = true; return callback() end
         if not run[formatter.name] then
           vim.api.nvim_buf_set_lines(opts.bufnr, 0, 1, false, { 'half done' })
           return callback('broken exited with\\n  code 1')
@@ -39,14 +40,17 @@ package.preload.conform = function()
     end,
   }
 end`;
-// A language server inside Neovim that upper-cases the file it is asked about for
-// `.server` files, attaching a moment after they load, and one that cannot format for `.plain` files.
-const SERVERS = `local function server(formats)
+// Language servers inside Neovim, attaching a moment after a file loads and named by its
+// extension (`a.server`, `b.server_error`): `server` upper-cases the file it is asked
+// about, `plain` cannot format, `error` answers with an error and `hang` never answers.
+const SERVERS = `local function server(kind)
   return function()
     local closing = false
     return {
       request = function(method, params, callback)
-        if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = formats } })
+        if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = kind ~= 'plain' } })
+        elseif method == 'textDocument/formatting' and kind == 'hang' then
+        elseif method == 'textDocument/formatting' and kind == 'error' then callback({ code = -32603, message = 'cannot format this' })
         elseif method == 'textDocument/formatting' then
           local lines = vim.api.nvim_buf_get_lines(vim.uri_to_bufnr(params.textDocument.uri), 0, -1, false)
           callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = #lines, character = 0 } }, newText = table.concat(lines, '\\n'):upper() .. '\\n' } })
@@ -60,9 +64,11 @@ const SERVERS = `local function server(formats)
   end
 end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
-  local kind = vim.fn.fnamemodify(ev.file, ':e')
-  if kind ~= 'server' and kind ~= 'plain' then return end
-  vim.defer_fn(function() vim.lsp.start({ name = kind, cmd = server(kind == 'server') }, { bufnr = ev.buf }) end, 150)
+  vim.defer_fn(function()
+    for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
+      if ({ server = 1, plain = 1, error = 1, hang = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+    end
+  end, 150)
 end })`;
 
 async function fixture(t, init = `${CONFORM}\n${SERVERS}`) {
@@ -105,6 +111,11 @@ test('formats files on disk, says which lines changed, and leaves the rest alone
   assert.equal(await f.read('a.upper'), 'ONE\nNEW\n');
   assert.deepEqual(await f.run(['a.upper']), ['a.upper: already formatted — upper']);
 
+  // A change that leaves every line as it was is still a change to the file.
+  await f.write('end.eol', 'ONE');
+  assert.deepEqual(await f.run(['end.eol']), ['end.eol: formatted, lines 1 changed — eol']);
+  assert.equal(await f.read('end.eol'), 'ONE\n');
+
   const many = Array.from({ length: 40 }, (_, i) => i % 2 ? `x${i}` : `X${i}`).join('\n');
   await f.write('many.upper', many);
   assert.deepEqual(await f.run(['many.upper']), [`many.upper: formatted, lines ${Array.from({ length: 12 }, (_, i) => 2 * i + 2).join(', ')}, +8 more changed — upper`]);
@@ -143,5 +154,14 @@ for (const [setup, init] of [['conform falling back to them', undefined], ['no c
     await f.write('a.server', 'ONE\nmore\n');
     assert.deepEqual(await f.run(['a.server']), ['a.server: formatted, lines 2 changed — server']);
     assert.deepEqual(await f.run(['a.server']), ['a.server: already formatted — server']);
+
+    // A server that fails or never answers is a failure, and undoes what one before it did.
+    // Not asked of the stand-in for conform, which would only be answering for itself.
+    if (init === undefined) return;
+    for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');
+    assert.deepEqual(await f.run(['c.error', 'd.server_error']), ['c.error: failed: error: cannot format this — error',
+      'd.server_error: failed: error: cannot format this — server, error']);
+    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: hang: timeout — hang$/);
+    for (const name of ['c.error', 'd.server_error', 'e.hang']) assert.equal(await f.read(name), 'text\n');
   });
 }

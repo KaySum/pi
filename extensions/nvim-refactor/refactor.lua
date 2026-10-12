@@ -6,9 +6,14 @@ local now = function() return uv.hrtime() / 1e6 end
 -- A server's error is not final if it says its state changed under the request or it
 -- began loading meanwhile: the request is made again, this often and this far apart.
 local ATTEMPTS, RETRY_MS = 5, 300
--- An edit that a command has the server send may arrive just after the command's reply. One
--- that arrives later still is refused, for as long as the server may yet send it.
+-- The edits that a command has the server send may arrive after the command's reply: they
+-- are taken until none has come for COMMAND_MS, and refused for LATE_MS after that.
 local COMMAND_MS, LATE_MS = 300, 10000
+local APPLY = 'workspace/applyEdit'
+-- Remembered for the life of this Neovim: for each server a command was lately run in,
+-- what is done with the edits it sends.
+local G = _G.__pi_nvim_refactor_v1 or {}
+_G.__pi_nvim_refactor_v1 = G
 -- Buffers that were put back are given this long for their servers to return.
 local REATTACH_MS = 1000
 local METHOD = request.action == 'rename' and 'textDocument/rename' or 'textDocument/codeAction'
@@ -210,24 +215,41 @@ end
 
 -- Run a command: in the editor if a plugin defines it there, otherwise in the server, which
 -- sends back the edits to make. Those are held to the same rules as any other, not left to
--- Neovim. Returns what went wrong, if anything.
+-- Neovim, for as long as they keep coming; later ones are refused. Returns what went wrong,
+-- if anything.
 local function execute(command, client, moved)
   local here = client.commands[command.command] or lsp.commands[command.command]
   if here then return here(command, { bufnr = buf, client_id = client.id }) end
-  local APPLY = 'workspace/applyEdit'
-  local open, edits, problem, original = true, 0, nil, client.handlers[APPLY]
-  local function handler(_, params)
-    if not open then return { applied = false, failureReason = 'the command that asked for this edit has ended' } end
-    edits = edits + 1
+  -- One handler per server, put in place of the server's own until LATE_MS after the last
+  -- command: what it does with an edit is up to the guard, which each command takes over.
+  local guard = G[client.id]
+  if not guard then
+    guard = { runs = 0, before = client.handlers[APPLY] }
+    G[client.id] = guard
+    client.handlers[APPLY] = function(_, params)
+      if guard.accept then return guard.accept(params) end
+      return { applied = false, failureReason = 'the command that asked for this edit has ended' }
+    end
+  end
+  guard.runs = guard.runs + 1
+  local run = guard.runs
+  local problem, last
+  function guard.accept(params)
+    last = now()
     local ok, objected = pcall(apply, params.edit, client, moved)
     problem = problem or objected
     return { applied = ok and not objected, failureReason = objected }
   end
-  client.handlers[APPLY] = handler
-  local reply, silence = client:request_sync('workspace/executeCommand', { command = command.command, arguments = command.arguments }, left(), buf)
-  if reply and not reply.err then vim.wait(math.min(COMMAND_MS, left()), function() return edits > 0 end, 20) end
-  open = false
-  vim.defer_fn(function() if client.handlers[APPLY] == handler then client.handlers[APPLY] = original end end, LATE_MS)
+  local ok, reply, silence = pcall(client.request_sync, client, 'workspace/executeCommand', { command = command.command, arguments = command.arguments }, left(), buf)
+  if ok and reply and not reply.err then
+    last = now()
+    vim.wait(left(), function() return now() - last >= COMMAND_MS end, 20)
+  end
+  guard.accept = nil
+  vim.defer_fn(function()
+    if guard.runs == run then client.handlers[APPLY], G[client.id] = guard.before, nil end
+  end, LATE_MS)
+  if not ok then error(reply, 0) end
   return problem or not reply and ('%s: %s'):format(client.name, silence) or reply.err and ('%s: %s'):format(client.name, reply.err.message or reply.err.code) or nil
 end
 
@@ -266,6 +288,10 @@ local function change(edit, command, client)
   for _, b in ipairs(changed) do
     local file = api.nvim_buf_get_name(b)
     local before = read(file)
+    -- To Neovim an empty file is one empty line, so text put into it that ends its last
+    -- line is followed by another.
+    local count = api.nvim_buf_line_count(b)
+    if before == '' and count > 1 and api.nvim_buf_get_lines(b, -2, -1, false)[1] == '' then api.nvim_buf_set_lines(b, count - 1, count, false, {}) end
     -- An edit may put back what was there: Neovim calls the buffer changed all the same.
     if uv.fs_stat(file) and same(b, file) then
       vim.bo[b].modified = false
@@ -288,6 +314,8 @@ local function change(edit, command, client)
     end
   end
   table.sort(files, function(a, b) return a.path < b.path end)
+  -- Once all of them are on disk: a server may read one file while looking at another.
+  for _, b in ipairs(changed) do servers.saved(b) end
   return { files = files, moved = moved }
 end
 

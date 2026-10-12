@@ -12,7 +12,7 @@ import { parse, refactor, validate } from './core.mjs';
 // offers the code actions below. `stale` answers the first rename for a version of the
 // file it no longer has, `error` fails it, `outside` wants to change a file elsewhere,
 // and `plain` can do neither. `store` renames in the texts it was sent. `odd` offers actions that are hard to get right: its
-// commands reply first and send their edit 50 ms later, `late` 500 ms later.
+// commands reply first and send their edits afterwards.
 const SERVERS = `vim.o.confirm = true
 local function utf16(line, byte) return vim.str_utfindex(line, 'utf-16', byte, false) end
 local function span(l1, c1, l2, c2) return { start = { line = l1, character = c1 }, ['end'] = { line = l2, character = c2 } } end
@@ -70,7 +70,7 @@ local function server(kind)
         { title = 'Reverse the lines', command = 'reverse', arguments = { uri } },
         { title = 'Move the line to notes', kind = 'refactor.move', edit = { documentChanges = {
           { kind = 'create', uri = uri .. '.notes' },
-          { textDocument = { uri = uri .. '.notes', version = vim.NIL }, edits = { { range = span(0, 0, 0, 0), newText = line } } },
+          { textDocument = { uri = uri .. '.notes', version = vim.NIL }, edits = { { range = span(0, 0, 0, 0), newText = line .. '\\n' } } },
           { textDocument = { uri = uri, version = vim.lsp.util.buf_versions[vim.uri_to_bufnr(uri)] }, edits = { { range = span(row, 0, row + 1, 0), newText = '' } } },
         } } },
         { title = 'Inline the line', kind = 'refactor.inline', disabled = { reason = 'nothing to inline' } },
@@ -87,6 +87,7 @@ local function server(kind)
         { title = 'Elsewhere', command = 'edit', arguments = { 50, first(vim.uri_from_fname('/etc/hosts'), 'Y') } },
         { title = 'Other', command = 'edit', arguments = { 50, first(other, 'Y') } },
         { title = 'Late', command = 'edit', arguments = { 500, first(other, 'Y') } },
+        { title = 'Twice', command = 'edit', arguments = { 20, first(uri, 'Y'), 200, first(other, 'Z') } },
         { title = 'Both', edit = first(uri, 'Y'), command = { title = 'Both', command = 'edit', arguments = { 50, first(other, 'Y') } } },
       }
     end
@@ -120,7 +121,9 @@ local function server(kind)
         elseif method == 'textDocument/rename' then callback(nil, { changes = rename(params) })
         elseif method == 'textDocument/codeAction' then callback(nil, kind == 'odd' and odd(params) or actions(params))
         elseif method == 'workspace/executeCommand' and params.command == 'edit' then
-          vim.defer_fn(function() dispatchers.server_request('workspace/applyEdit', { edit = params.arguments[2] }) end, params.arguments[1])
+          for i = 1, #params.arguments, 2 do
+            vim.defer_fn(function() dispatchers.server_request('workspace/applyEdit', { edit = params.arguments[i + 1] }) end, params.arguments[i])
+          end
           callback(nil, vim.NIL)
         elseif method == 'codeAction/resolve' then
           local d = params.data
@@ -316,6 +319,11 @@ test('edits a command has the server send are held to the same rules', async t =
   // The action's own edit and the one its command sends afterwards are both written.
   assert.deepEqual(await apply('Both'), ['Applied "Both" in 2 files — odd', 'a.odd: lines 1 changed', 'a.odd.other: lines 1 changed']);
   assert.equal(await f.read('a.odd.other'), 'Y\n');
+  await reset();
+
+  // A command may send several edits: they are taken until none has come for a while.
+  assert.deepEqual(await apply('Twice'), ['Applied "Twice" in 2 files — odd', 'a.odd: lines 1 changed', 'a.odd.other: lines 1 changed']);
+  assert.equal(await f.read('a.odd.other'), 'Z\n');
   await reset();
 
   await assert.rejects(apply('Elsewhere'), /^Error: \/etc\/hosts is outside the project$/);

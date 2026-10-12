@@ -68,7 +68,8 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
   server is asked again. The exception is an edit that creates, renames or deletes
   files: Neovim does that on disk as it goes.
 - **Only what changed is written.** A file whose edit puts back what was there is neither
-  written nor listed, and one without a final newline is not given one.
+  written nor listed, one without a final newline is not given one, and text put into an
+  empty file is not followed by the blank line Neovim would add.
 - **Nothing outside the project.** An edit that reaches a file outside Pi's working
   directory and the server's own workspace is refused.
 - **A server that is loading is not asked**, and its answer is dropped if it began
@@ -79,10 +80,14 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
   from every source. So [`nvim-diagnostics`](../nvim-diagnostics/README.md) comes first:
   it is what makes the servers report on the file as it is now.
 - **Actions are resolved and their commands run.** A command is sent to the server, and
-  the edits it sends back are held to every rule above before they are applied. One that
-  arrives more than 0.3 s after the command's reply is refused, and the server told so,
-  rather than left unsaved in a buffer. A command that a plugin defines in the editor
-  runs there instead, and is trusted as the plugin is.
+  the edits it sends back are held to every rule above before they are applied. They are
+  taken until none has come for 0.3 s after the command's reply, so a command adds that
+  much to a call. One that arrives later is refused, and the server told so, rather than
+  left unsaved in a buffer; 10 s after the last command the server's edits are Neovim's
+  to handle again. A command that a plugin defines in the editor runs there instead, and
+  is trusted as the plugin is.
+- **The servers are told of the save**, once every file is on disk. Without it clangd
+  goes on reading the old header for the sources that include it.
 - **The server is sent every change first.** Neovim holds back the changes to a buffer
   for a moment, and a request only sends on those of the file it is about; asked to
   rename straight after another rename, pyright would miss the files that one changed.
@@ -96,8 +101,15 @@ say when that picture is partial.
 
 - clangd without a `compile_commands.json` has no index: it renames within the file
   asked about, leaves the header and the other sources alone, and reports success.
+- clangd with an index rebuilds what includes a changed header in the background, and
+  does not say when it is done. A rename that follows another at once, or half a second
+  later, has missed a source file; a second apart none did, in 48 renames tried here.
+  There is nothing to wait on.
 - TypeScript, asked to rename an imported name where it is used, keeps the export and
   writes `import { greet as welcome }`. Pointed at the definition, it renames everywhere.
+
+Nor is an action known to be right because it applied: clangd's "Move function body to
+declaration", in C, leaves an `inline` definition in the header that does not link.
 
 So the files listed are worth a glance, and `nvim_diagnostics` on them afterwards shows
 what a partial rename broke.

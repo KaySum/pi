@@ -1,0 +1,64 @@
+import { Type } from '@earendil-works/pi-ai';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { useNvim } from '../nvim-service/api.mjs';
+import { resolve } from 'node:path';
+import { diagnose, status, warmer, SEVERITIES } from './core.mjs';
+
+export default function (pi: ExtensionAPI) {
+  const nvim = useNvim(pi);
+  const warm = warmer(nvim);
+  let last: { at: number; ms: number; text: string } | undefined;
+
+  // Pi has just changed a file: start checking it now, unseen, so its language servers
+  // are running and have settled by the time Pi asks. Nothing is added to the conversation.
+  pi.on('tool_result', (event, ctx) => {
+    if ((event.toolName !== 'edit' && event.toolName !== 'write') || event.isError || typeof event.input.path !== 'string') return;
+    void warm.add(resolve(ctx.cwd, event.input.path));
+  });
+
+  async function check(params: Parameters<typeof diagnose>[1], cwd: string, signal?: AbortSignal, trace = false) {
+    const at = Date.now();
+    const text = await diagnose(nvim(), params, cwd, signal, { trace });
+    last = { at, ms: Date.now() - at, text };
+    return text;
+  }
+
+  pi.registerTool({
+    name: 'nvim_diagnostics',
+    label: 'Neovim diagnostics',
+    promptSnippet: 'Check files for errors and warnings with language servers and linters',
+    description: 'Check files with the language servers and linters of your Neovim: errors and warnings for the current contents on disk, plus what each source did. Lines and byte columns are 1-based.',
+    promptGuidelines: [
+      'After editing code, batch the changed files into nvim_diagnostics. Read each source\'s status: "answered" is a definite reply for that text; "reported" and "linted" mean it ran on that text; "no new report" shows a server\'s previous report because it published nothing since the change; "silent" means it has never said anything about the file. A file marked incomplete was not fully checked. No diagnostics does not replace a build or tests.',
+    ],
+    executionMode: 'sequential',
+    parameters: Type.Object({
+      files: Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { minItems: 1, maxItems: 32, description: 'Paths, relative to cwd or absolute.' }),
+      severity: Type.Optional(Type.Union(SEVERITIES.map(level => Type.Literal(level)), { description: 'Least severe level to list. Default warning; counts always include all levels.' })),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 60000, description: 'How long to wait for the servers. Default 10000.' })),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      try {
+        return { content: [{ type: 'text', text: await check(params, ctx.cwd, signal) }], details: {} };
+      } catch (error) {
+        // A prompt in the editor blocks every request; show it so it can be answered.
+        const screen = (error as { screen?: string }).screen;
+        throw screen ? new Error(`${(error as Error).message}\n${screen}`) : error;
+      }
+    },
+  });
+
+  pi.registerCommand('nvim-diagnostics', {
+    description: 'Show the language servers and the last check; with file paths, check them and show a timeline',
+    handler: async (args, ctx) => {
+      const files = args.split(/\s+/).filter(Boolean);
+      try {
+        if (files.length) return ctx.ui.notify(await check({ files, severity: 'hint' }, ctx.cwd, undefined, true), 'info');
+        const recent = last && `Last check ${Math.round((Date.now() - last.at) / 1000)} s ago, took ${last.ms} ms:\n${last.text}`;
+        ctx.ui.notify(`${await status(nvim())}\n\n${recent ?? 'No check has run in this session.'}`, 'info');
+      } catch (error) {
+        ctx.ui.notify(`nvim-diagnostics: ${error instanceof Error ? error.message : String(error)}`, 'warning');
+      }
+    },
+  });
+}

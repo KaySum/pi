@@ -13,8 +13,16 @@ Install the extensions declared in `settings.json` using the sync command:
 
 ```sh
 node ~/.pi/agent/scripts/sync-packages.mjs
-npm --prefix ~/.pi/agent/extensions/nvim-diagnostics ci --omit=dev --ignore-scripts
 ```
+
+Install the one dependency of the local [`nvim-service`](extensions/nvim-service/README.md)
+extension, which gives each Pi instance its own Neovim:
+
+```sh
+npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
+```
+
+[`nvim-diagnostics`](extensions/nvim-diagnostics/README.md) builds on it and needs no install.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

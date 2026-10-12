@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { withServers } from '../nvim-service/api.mjs';
 
-const LUA = readFileSync(new URL('./format.lua', import.meta.url), 'utf8');
+const LUA = withServers(readFileSync(new URL('./format.lua', import.meta.url), 'utf8'));
 const RANGES = 12;
 
 export function validate(params) {

@@ -81,6 +81,27 @@ rather than keeping the old one. Extensions that prefer not to import can use th
 contract on `pi.events`: `nvim-service:ready` (handle), `nvim-service:stopped` (`info`),
 and `nvim-service:get` with `{ reply }` to ask for the current handle.
 
+### Having language servers change files
+
+A language server answers about its own copy of a file, and edits made for an older text
+ruin the present one: rust-analyzer takes in no changes while it scans a project, and
+says nothing of it. Lua that asks servers for edits gets the precautions with
+`withServers`:
+
+```js
+import { withServers } from '../nvim-service/api.mjs';
+const LUA = withServers("local edits, problem, again = servers.ask(client, 'textDocument/formatting', params, buf, 5000) ...");
+```
+
+| `servers.` | Behavior |
+| --- | --- |
+| `ask(client, method, params, buf, ms)` | The answer; or `nil`, what went wrong, and whether asking again may help. The server is only asked once it has shown no progress for 0.5 s (so the first request to each server in a session waits that long), and its answer is dropped if it showed any before the answer came. |
+| `attached(buf, loaded?)` | True once no more servers are to be expected for the buffer and those it has are running. `loaded` is when it was (re)loaded, if only just: it is then given 0.3 s, or 2 s for the first file of a type. |
+| `seen(buf)` | Call once a buffer's servers have been waited for, so the next file of its type is not given the 2 s. |
+
+This rests on the server saying that it is loading: the protocol has no way to ask a
+server what text it holds.
+
 ## Lifetime
 
 ```

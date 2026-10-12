@@ -67,6 +67,8 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
   made for another version of a file than the one it now has is not applied, and the
   server is asked again. The exception is an edit that creates, renames or deletes
   files: Neovim does that on disk as it goes.
+- **Only what changed is written.** A file whose edit puts back what was there is neither
+  written nor listed, and one without a final newline is not given one.
 - **Nothing outside the project.** An edit that reaches a file outside Pi's working
   directory and the server's own workspace is refused.
 - **A server that is loading is not asked**, and its answer is dropped if it began
@@ -76,8 +78,14 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
 - **Quick fixes are told of the diagnostics**, the ones Neovim holds for those lines,
   from every source. So [`nvim-diagnostics`](../nvim-diagnostics/README.md) comes first:
   it is what makes the servers report on the file as it is now.
-- **Actions are resolved and their commands run.** A command a plugin defines in the
-  editor runs there; any other is sent to the server, whose edits are then written too.
+- **Actions are resolved and their commands run.** A command is sent to the server, and
+  the edits it sends back are held to every rule above before they are applied. One that
+  arrives more than 0.3 s after the command's reply is refused, and the server told so,
+  rather than left unsaved in a buffer. A command that a plugin defines in the editor
+  runs there instead, and is trusted as the plugin is.
+- **The server is sent every change first.** Neovim holds back the changes to a buffer
+  for a moment, and a request only sends on those of the file it is about; asked to
+  rename straight after another rename, pyright would miss the files that one changed.
 - **The write runs no autocommands**, so format-on-save does not reformat files that
   were only renamed in. Changed files stay loaded.
 

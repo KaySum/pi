@@ -55,7 +55,7 @@ function describe(report, params, cwd) {
     if (params.action === 'apply') {
       // Nothing was applied: the model has to choose, so this is an error with the choices in it.
       const asked = params.title ? `"${params.title}" in ${report.matches.length > 1 ? 'their' : 'its'} title` : `kind ${params.kind}`;
-      throw new Error(report.matches.length ? `${report.matches.length} code actions for ${where} have ${asked}; give the full title of one:\n${listed(report.matches, true)}`
+      throw new Error(report.matches.length ? `${report.matches.length} code actions for ${where} have ${asked}; give the full title of one, or a kind that only one has:\n${listed(report.matches, true)}`
         : report.actions.length ? `No code action for ${where} has ${asked}. There are:\n${list}` : `No code actions${of} for ${where}${failed}`);
     }
     if (!report.actions.length) return `No code actions${of} for ${where}${failed}`;

@@ -7,7 +7,7 @@ import { openNvim } from '../nvim-service/nvim.mjs';
 import { format, validate } from './core.mjs';
 
 // Stands in for conform.nvim: a file's extension names its formatters (`a.upper`,
-// `b.upper_trim`); with none, it falls back to the language servers.
+// `b.upper_trim`); with none, it leaves the file to the language servers.
 const CONFORM = `vim.o.confirm = true
 package.preload.conform = function()
   local run = { upper = string.upper, trim = vim.trim, slow = string.upper }
@@ -25,16 +25,6 @@ package.preload.conform = function()
     end,
     format = function(opts, callback)
       local list = names(opts.bufnr)
-      if #list == 0 then
-        -- As conform does it, down to printing a server's error object as it stands.
-        for _, client in ipairs(vim.lsp.get_clients({ bufnr = opts.bufnr, method = 'textDocument/formatting' })) do
-          local reply, silence = client:request_sync('textDocument/formatting', vim.lsp.util.make_formatting_params(), opts.timeout_ms, opts.bufnr)
-          local problem = (reply and reply.err) or silence
-          if reply and reply.result then vim.lsp.util.apply_text_edits(reply.result, opts.bufnr, client.offset_encoding)
-          elseif problem then return callback(string.format('[LSP][%s] %s', client.name, problem)) end
-        end
-        return callback()
-      end
       local lines = vim.api.nvim_buf_get_lines(opts.bufnr, 0, -1, false)
       for _, formatter in ipairs(list) do
         if formatter.name == 'eol' then vim.bo[opts.bufnr].endofline = true; vim.bo[opts.bufnr].modified = true; return callback() end
@@ -170,7 +160,7 @@ test('a formatter that fails, a read-only file and an unsaved buffer change noth
   assert.equal((await f.nvim.state()).blocking, false);
 });
 
-for (const [setup, init] of [['conform falling back to them', undefined], ['no conform', SERVERS]]) {
+for (const [setup, init] of [['with conform', undefined], ['no conform', SERVERS]]) {
   test(`language servers format what has no formatter of its own: ${setup}`, async t => {
     const f = await fixture(t, init);
     await f.write('a.server', 'one\ntwo\n');
@@ -190,11 +180,10 @@ for (const [setup, init] of [['conform falling back to them', undefined], ['no c
     }
 
     // A server that fails or never answers is a failure, and undoes what one before it did.
-    // What the server said is passed on, though conform itself loses it.
     for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');
     assert.deepEqual(await f.run(['c.error', 'd.server_error']), ['c.error: failed: error: cannot format this — error',
       'd.server_error: failed: error: cannot format this — server, error']);
-    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: (hang:|\[LSP\]\[hang\]) timeout — hang$/);
+    assert.match((await f.run(['e.hang'], { timeoutMs: 300 }))[0], /^e\.hang: failed: hang: timeout — hang$/);
     for (const name of ['c.error', 'd.server_error', 'e.hang']) assert.equal(await f.read(name), 'text\n');
   });
 }

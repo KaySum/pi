@@ -35,11 +35,16 @@ containing spaces.
 
 ## What does the formatting
 
-- With [conform.nvim](https://github.com/stevearc/conform.nvim) installed, whatever
-  `conform.format()` would run for the buffer, with your options: the formatters of
-  `formatters_by_ft`, and the language servers where `lsp_format` says so (LazyVim sets
-  `fallback`, so a server formats what has no formatter of its own).
+- With [conform.nvim](https://github.com/stevearc/conform.nvim) installed, the formatters
+  conform would run for the buffer, and the file's language servers where its
+  `lsp_format` says so (LazyVim sets `fallback`, so a server formats what has no
+  formatter of its own).
 - Without it, each of the file's language servers that can format, in turn.
+
+conform decides whether language servers take part, but they are asked from here, after
+its own formatters: that way their errors arrive whole and they share the time allowed.
+So conform's `lsp_format = "first"` runs them last, and a client filter or formatting
+options set in conform do not apply.
 
 Format-on-save settings (`vim.g.autoformat` and the like) are not consulted: this is an
 explicit request, not a save.
@@ -52,8 +57,7 @@ explicit request, not a save.
 - **Nothing is half done.** If a formatter fails, or a language server answers with an
   error or not at all, the buffer is put back and the file is not written, whatever an
   earlier formatter in the chain had already done. Syntax errors are the usual cause, and
-  the formatter's message says where. conform reports a server's error without its
-  message, so that server is asked once more for what it said.
+  the formatter's message says where.
 - **Language servers are waited for.** When only a server can format the file, one that
   is still starting is waited for, and a file just loaded is given 0.3 s for its server
   to attach (2 s the first time a file type is seen). So the first `no formatter for
@@ -64,9 +68,8 @@ explicit request, not a save.
   showing progress, or that says its state changed under the request, is not taken as
   final: the file is tried again from the start, up to four more times, 0.3 s apart,
   within the time allowed. Any other error is reported at once.
-- **Language-server formatting gets the right file.** Both conform and Neovim build the
-  request from the current buffer, whichever buffer they were given, so each file is
-  made current for the call. Pi's windows and cursor are not touched.
+- **Language-server formatting gets the right file.** Neovim builds the request from the
+  current buffer, so each file is made current for the call. Pi's windows and cursor are not touched.
 - **Read-only files are refused up front.** With `confirm` set, as LazyVim has it,
   writing one would stop the editor at a dialog.
 - **The write runs no autocommands**, so format-on-save does not format a second time.

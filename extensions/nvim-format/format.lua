@@ -9,7 +9,7 @@ local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
 -- A server's error is not final if it says its state changed under the request
 -- (ContentModified, ServerCancelled), or if the server is showing progress, as one loading
 -- its project does: the file is tried again, this often and this far apart.
-local TRANSIENT, ATTEMPTS, RETRY_MS = { ContentModified = -32801, ServerCancelled = -32802 }, 5, 300
+local TRANSIENT, ATTEMPTS, RETRY_MS = { [-32801] = true, [-32802] = true }, 5, 300
 
 local S = _G.__pi_nvim_format_v1 or { filetypes = {} }
 _G.__pi_nvim_format_v1 = S
@@ -18,62 +18,37 @@ local left = function() return math.max(0, request.timeoutMs - (now() - started)
 local has_conform, conform = pcall(require, 'conform')
 local FORMATTING = 'textDocument/formatting'
 
--- What would format the buffer right now, by name.
-local function formatters(buf)
-  local names, servers = {}, not has_conform
+-- What would format the buffer right now: conform's own formatters, by name, and the
+-- language servers that follow them. The servers are always asked from here, not through
+-- conform, which passes on their errors as text and gives each the whole time allowed.
+local function plan(buf)
+  local names, servers = {}, true
   if has_conform then
     local list
     list, servers = conform.list_formatters_to_run(buf)
     for _, formatter in ipairs(list) do table.insert(names, formatter.name) end
   end
-  for _, client in ipairs(servers and lsp.get_clients({ bufnr = buf, method = FORMATTING }) or {}) do
-    table.insert(names, client.name)
-  end
-  return names
-end
-
-local function loading(client) return next(client.progress.pending) ~= nil end
-
--- Ask one server how to format the current buffer: its edits, or nil, what went wrong and
--- whether asking again may help.
-local function ask(client, buf)
-  local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
-  local err = reply and reply.err
-  if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), vim.tbl_contains(vim.tbl_values(TRANSIENT), err.code) or loading(client) end
-  if not reply then return nil, ('%s: %s'):format(client.name, silence) end
-  return type(reply.result) == 'table' and reply.result or {}
+  return names, servers and lsp.get_clients({ bufnr = buf, method = FORMATTING }) or {}
 end
 
 -- Format the current buffer without writing it; returns what went wrong, if anything, and
 -- whether trying again may help.
 local function run(buf)
-  if has_conform then
-    local failure
-    conform.format({ bufnr = buf, async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
-    -- A language server's failure, as conform words it.
-    local name = type(failure) == 'string' and failure:match('^%[LSP%]%[(.-)%] ')
-    if not name then return failure end
-    local again = false
-    for code in pairs(TRANSIENT) do again = again or failure:find(code, 1, true) ~= nil end
-    for _, client in ipairs(lsp.get_clients({ bufnr = buf, name = name, method = FORMATTING })) do
-      again = again or loading(client)
-      -- conform prints an error that is a plain table as "table: 0x…", so that server is
-      -- asked again for what it said. If it has no complaint any more, so is conform.
-      if failure:find('table: 0x', 1, true) then
-        local _, problem, more = ask(client, buf)
-        failure, again = problem or failure, again or more or not problem
-      end
-    end
-    return failure, again
-  end
-  -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
-  local clients = lsp.get_clients({ bufnr = buf, method = FORMATTING })
+  local names, clients = plan(buf)
   -- Putting a buffer back after a failure can detach its servers for a moment.
-  if #clients == 0 then return 'its language servers are not attached', true end
+  if #names + #clients == 0 then return 'its language servers are not attached', true end
+  if #names > 0 then
+    local failure
+    conform.format({ bufnr = buf, formatters = names, lsp_format = 'never', async = false, quiet = true, timeout_ms = left() }, function(e) failure = e end)
+    if failure then return failure end
+  end
   for _, client in ipairs(clients) do
-    local edits, problem, again = ask(client, buf)
-    if problem then return problem, again end
-    lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
+    -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
+    local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
+    local err = reply and reply.err
+    if err then return ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or next(client.progress.pending) ~= nil end
+    if not reply then return ('%s: %s'):format(client.name, silence) end
+    if type(reply.result) == 'table' then lsp.util.apply_text_edits(reply.result, buf, client.offset_encoding) end
   end
 end
 
@@ -108,7 +83,8 @@ local function format(path)
 
   local loaded, filetype = opened[buf] or now(), vim.bo[buf].filetype
   vim.wait(left(), function()
-    out.formatters = formatters(buf)
+    local names, clients = plan(buf)
+    out.formatters = vim.list_extend(names, vim.tbl_map(function(client) return client.name end, clients))
     if #out.formatters > 0 then return true end
     local clients = lsp.get_clients({ bufnr = buf, _uninitialized = true })
     for _, client in ipairs(clients) do
@@ -132,7 +108,6 @@ local function format(path)
     -- whichever one it was given.
     local ok, err = pcall(api.nvim_buf_call, buf, function()
       failure, again = run(buf)
-      -- Checked here too: conform gives each language server the whole of the time left.
       if not failure and left() == 0 then failure, again = 'timeout', false end
       if not failure and vim.bo[buf].modified then
         vim.cmd('silent noautocmd write')

@@ -9,7 +9,7 @@ local METHODS = {
   symbols = 'textDocument/documentSymbol', workspace_symbols = 'workspace/symbol',
 }
 -- A client may be created a moment after a buffer loads; much later on a filetype's first use.
-local ATTACH_MS, FIRST_ATTACH_MS = 300, 2000
+local ATTACH_MS, FIRST_ATTACH_MS, REATTACH_MS = 300, 2000, 1000
 -- A server showing progress is loading or indexing, and would answer from half a picture.
 -- Progress shorter than this is only a server ticking over.
 local SUSTAINED_MS = 150
@@ -22,8 +22,8 @@ local RECENT_MS, CALM_MS = 15000, 700
 local ATTEMPTS = 3
 local MAX_ITEMS = 300
 
-local S = _G.__pi_nvim_navigation_v1 or { filetypes = {}, born = {} }
-_G.__pi_nvim_navigation_v1 = S
+local S = _G.__pi_nvim_navigation_v2 or { filetypes = {}, born = {}, disk = {} }
+_G.__pi_nvim_navigation_v2 = S
 local started = now()
 
 -- What the questions have to work with, for /nvim-navigation.
@@ -50,34 +50,48 @@ end
 local method = METHODS[request.action]
 local path = request.file
 
--- Load the buffer, and reload it if the file no longer says what the buffer does.
+-- Bring a loaded buffer in line with its file; true if it had to be reloaded.
+-- Reloading can detach a buffer's clients for a moment; `before` holds who is expected back.
+local before = {}
+local function refresh(b)
+  local name = api.nvim_buf_get_name(b)
+  if name == '' or vim.bo[b].buftype ~= '' or vim.bo[b].modified then return false end
+  local stat = uv.fs_stat(name)
+  if not stat or stat.type ~= 'file' then return false end
+  -- Once the text has been seen to match, the file is only read again when its stat changes.
+  local key = ('%d:%d:%d'):format(stat.mtime.sec, stat.mtime.nsec, stat.size)
+  if S.disk[b] == key then return false end
+  S.disk[b] = key
+  local disk = vim.fn.readfile(name)
+  if #disk == 0 then disk = { '' } end -- An empty file is one empty line to a buffer.
+  if vim.bo[b].bomb then disk[1] = disk[1]:gsub('^\239\187\191', '') end
+  if vim.bo[b].fileformat == 'dos' then
+    for i, line in ipairs(disk) do disk[i] = line:gsub('\r$', '') end
+  end
+  local encoding = vim.bo[b].fileencoding
+  if (encoding == '' or encoding == 'utf-8') and vim.deep_equal(disk, api.nvim_buf_get_lines(b, 0, -1, false)) then return false end
+  local listed = vim.bo[b].buflisted
+  for _, client in ipairs(lsp.get_clients({ bufnr = b })) do before[client.id] = true end
+  api.nvim_buf_call(b, function() vim.cmd('silent keepalt keepjumps edit') end)
+  vim.bo[b].buflisted = listed
+  note(('%s: reloaded from disk'):format(vim.fs.basename(name)))
+  return true
+end
+
+-- Load the file asked about. Then every other loaded file too: where a symbol is defined
+-- or used is a question about the whole project, and a server answers from the buffers
+-- it has open, not from disk.
 local stat = uv.fs_stat(path)
 if not stat or stat.type ~= 'file' then error(stat and 'not a regular file' or 'no such file', 0) end
 local buf = vim.fn.bufadd(path)
 local fresh = not api.nvim_buf_is_loaded(buf)
 vim.fn.bufload(buf)
 local unsaved = vim.bo[buf].modified
-local how = fresh and 'loaded' or unsaved and 'unsaved buffer used as it is' or 'buffer already matches the file'
-if not fresh and not unsaved then
-  local disk = vim.fn.readfile(path)
-  if vim.bo[buf].bomb and disk[1] then disk[1] = disk[1]:gsub('^\239\187\191', '') end
-  if vim.bo[buf].fileformat == 'dos' then
-    for i, line in ipairs(disk) do disk[i] = line:gsub('\r$', '') end
-  end
-  local encoding = vim.bo[buf].fileencoding
-  if (encoding ~= '' and encoding ~= 'utf-8') or not vim.deep_equal(disk, api.nvim_buf_get_lines(buf, 0, -1, false)) then
-    local listed = vim.bo[buf].buflisted
-    api.nvim_buf_call(buf, function() vim.cmd('silent keepalt keepjumps edit') end)
-    vim.bo[buf].buflisted = listed
-    fresh, how = true, 'reloaded from disk, sent under a new document version'
-    -- A no-op change sends the text under a new document version: some servers (vtsls's
-    -- outline) cache by version and would otherwise answer for the old text.
-    pcall(api.nvim_buf_set_lines, buf, 0, 1, false, api.nvim_buf_get_lines(buf, 0, 1, false))
-    vim.bo[buf].modified = false
-  end
+note(('%s: %s'):format(vim.fs.basename(path), fresh and 'loaded' or unsaved and 'unsaved buffer used as it is' or 'already loaded'))
+for _, b in ipairs(api.nvim_list_bufs()) do
+  if api.nvim_buf_is_loaded(b) and refresh(b) and b == buf then fresh = true end
 end
 local filetype = vim.bo[buf].filetype
-note(('%s: %s'):format(vim.fs.basename(path), how))
 
 -- The position asked about: a symbol's text on the line is easier to give than a column.
 local position, symbol
@@ -86,7 +100,17 @@ if request.line then
   if not text then error(('line %d is past the end of the file (%d lines)'):format(request.line, api.nvim_buf_line_count(buf)), 0) end
   local column = request.column and request.column - 1
   if request.symbol then
-    local at = text:find(request.symbol, (column or 0) + 1, true)
+    -- "name" means the word name, not the end of "rename": the first occurrence standing
+    -- on its own is used, and only failing that the first one inside something longer.
+    local from, at, whole = (column or 0) + 1, nil, nil
+    while not whole do
+      local s, e = text:find(request.symbol, from, true)
+      if not s then break end
+      at = at or s
+      if not text:sub(s - 1, s - 1):match('[%w_]') and not text:sub(e + 1, e + 1):match('[%w_]') then whole = s end
+      from = s + 1
+    end
+    at = whole or at
     if not at then error(('"%s" is not on line %d, which reads: %s'):format(request.symbol, request.line, vim.trim(text):sub(1, 200)), 0) end
     column = at - 1
   end
@@ -101,9 +125,17 @@ local clients = function() return lsp.get_clients({ bufnr = buf, _uninitialized 
 local left = function() return math.max(0, request.timeoutMs - (now() - started)) end
 local working, said = {}, {}
 local ready = vim.wait(left(), function()
-  local list, busy = clients(), false
-  if #list == 0 then return not fresh or now() - started >= (S.filetypes[filetype] and ATTACH_MS or FIRST_ATTACH_MS) end
+  local list, busy, attached = clients(), false, {}
+  if #list == 0 then
+    -- A client may yet appear: the buffer was loaded just now (here, or by another
+    -- extension an instant ago, which is why a filetype's first use always waits), or a
+    -- server somewhere is still starting.
+    local grace = S.filetypes[filetype] and (fresh and ATTACH_MS or 0) or FIRST_ATTACH_MS
+    local starting = #lsp.get_clients({ _uninitialized = true }) > #lsp.get_clients()
+    return now() - started >= grace and (not starting or now() - started >= FIRST_ATTACH_MS)
+  end
   for _, client in ipairs(list) do
+    attached[client.id] = true
     local pending = next(client.progress.pending) ~= nil
     working[client.id] = pending and (working[client.id] or now()) or nil
     if client.initialized then S.born[client.id] = S.born[client.id] or now() end
@@ -112,10 +144,28 @@ local ready = vim.wait(left(), function()
     if said[client.id] ~= state then said[client.id] = state; note(('%s is %s'):format(client.name, state)) end
     busy = busy or state ~= 'ready'
   end
+  for id in pairs(before) do
+    busy = busy or (not attached[id] and lsp.get_client_by_id(id) ~= nil and now() - started < REATTACH_MS)
+  end
   return not busy
 end, 20)
 if #clients() == 0 then note('no language server attached') elseif not ready then note('gave up waiting for the servers') end
 S.filetypes[filetype] = true
+
+-- Neovim opens a reloaded document under its old version number, and some servers cache
+-- by version (vtsls would return the old outline). A no-op change sends the text under a
+-- new one. It has to wait until here: clients that were detached by the reload would miss it.
+for _, b in ipairs(api.nvim_list_bufs()) do
+  local ok, version = pcall(function() return lsp.util.buf_versions[b] end)
+  if api.nvim_buf_is_loaded(b) and vim.bo[b].buftype == '' and #lsp.get_clients({ bufnr = b }) > 0
+      and not (ok and version == api.nvim_buf_get_changedtick(b)) then
+    local modified = vim.bo[b].modified
+    if pcall(api.nvim_buf_set_lines, b, 0, 1, false, api.nvim_buf_get_lines(b, 0, 1, false)) then
+      note(('%s: sent under a new document version'):format(vim.fs.basename(api.nvim_buf_get_name(b))))
+    end
+    vim.bo[b].modified = modified
+  end
+end
 
 -- Ask every server that can answer; returns one entry per attached server.
 local function ask()
@@ -166,11 +216,14 @@ local function recent()
     if not S.born[client.id] or now() - S.born[client.id] < RECENT_MS then return true end
   end
 end
+-- True if somebody was asked and nobody had anything.
 local function empty(servers)
+  local asked = false
   for _, entry in ipairs(servers) do
     if entry.result ~= nil then return false end
+    asked = asked or (entry.status ~= 'unsupported' and entry.status ~= 'starting')
   end
-  return true
+  return asked
 end
 local servers = ask()
 for _ = 1, ATTEMPTS - 1 do
@@ -193,7 +246,8 @@ local out = { path = path, symbol = symbol, query = request.query, unsaved = uns
 local lines, seen = {}, {}
 local function source(file)
   if not lines[file] then
-    local loaded = vim.fn.bufloaded(file) == 1 and vim.fn.bufnr(file) or nil
+    -- bufadd finds an existing buffer by exact name; bufnr would read the path as a pattern.
+    local loaded = vim.fn.bufloaded(file) == 1 and vim.fn.bufadd(file) or nil
     lines[file] = loaded and api.nvim_buf_get_lines(loaded, 0, -1, false) or (vim.fn.filereadable(file) == 1 and vim.fn.readfile(file) or {})
   end
   return lines[file]
@@ -212,7 +266,7 @@ local function add(item, key)
   if #out.items < MAX_ITEMS then table.insert(out.items, item) end
 end
 local kinds = lsp.protocol.SymbolKind
-local function outline(list, depth, encoding)
+local function outline(list, depth, encoding, parent)
   local start = function(s) local r = s.selectionRange or s.range or (s.location and s.location.range); return r and r.start.line or 0 end
   if request.action == 'symbols' then table.sort(list, function(a, b) return start(a) < start(b) end) end
   for _, s in ipairs(list) do
@@ -220,11 +274,13 @@ local function outline(list, depth, encoding)
     local name = tostring(s.name)
     if not request.query or name:lower():find(request.query:lower(), 1, true) then
       local item = s.location and place(s.location.uri, range, encoding) or { line = range and range.start.line + 1 }
-      item.name, item.kind, item.depth, item.container, item.text = name, (kinds[s.kind] or 'Symbol'):lower(), depth, s.containerName, nil
+      -- A filtered outline has lost its nesting, so each match names its parent instead.
+      item.name, item.kind, item.text = name, (kinds[s.kind] or 'Symbol'):lower(), nil
+      item.depth, item.container = request.query and 0 or depth, s.containerName or (request.query and parent or nil)
       if request.action == 'symbols' then item.path = nil end
       add(item, table.concat({ item.path or '', item.line or 0, name, item.kind }, '\0'))
     end
-    if s.children then outline(s.children, depth + 1, encoding) end
+    if s.children then outline(s.children, depth + 1, encoding, name) end
   end
 end
 

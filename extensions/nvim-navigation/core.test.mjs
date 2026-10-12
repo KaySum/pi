@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../nvim-service/service.mjs';
@@ -41,7 +41,8 @@ test('rejects questions that cannot be asked, before touching the editor', () =>
     { action: 'symbols', file: 'a', timeoutMs: 50 }]) {
     assert.throws(() => validate(params));
   }
-  assert.deepEqual(validate({ action: 'symbols', file: 'a' }), { action: 'symbols', file: 'a', line: undefined, symbol: undefined, column: undefined, query: undefined, timeoutMs: 10000 });
+  assert.deepEqual(validate({ action: 'symbols', file: 'a', line: 3, symbol: 'x' }), { action: 'symbols', file: 'a', query: undefined, timeoutMs: 10000 });
+  assert.deepEqual(validate({ action: 'hover', file: 'a', line: 3, symbol: 'x' }), { action: 'hover', file: 'a', line: 3, symbol: 'x', column: undefined, query: undefined, timeoutMs: 10000 });
 });
 
 test('definitions, references, hover and symbols, pointed at by the text on a line', async t => {
@@ -59,7 +60,7 @@ test('definitions, references, hover and symbols, pointed at by the text on a li
   assert.equal((await f.ask('hover', 'use.normal', { line: 1, symbol: 'greet', column: 20 })).text, 'greet — normal\n**greet**: defined here');
   assert.equal((await f.ask('hover', 'use.normal', { line: 2, column: 12 })).text, 'inner — normal\n**inner**: defined here');
   assert.deepEqual([...await f.ask('symbols', 'lib.normal')], ['3 symbols in lib.normal — normal', '  1: function greet', '    2: method inner', '  4: function Other']);
-  assert.deepEqual([...await f.ask('symbols', 'lib.normal', { query: 'INN' })], ['1 symbols in lib.normal — normal', '    2: method inner']);
+  assert.deepEqual([...await f.ask('symbols', 'lib.normal', { query: 'INN' })], ['1 symbol in lib.normal — normal', '  2: method inner in greet']);
   assert.deepEqual([...await f.ask('workspace_symbols', 'use.normal', { query: 'e' })], [
     '3 symbols matching "e" — normal', '  function Other  lib.normal:4', '  function greet  lib.normal:1', '  method inner  lib.normal:2']); // The server's own ranking is kept.
   assert.equal((await f.ask('definition', 'use.normal', { line: 2, symbol: 'call' })).text, 'No definitions for call — normal');
@@ -74,6 +75,13 @@ test('the answer follows the file on disk, and an unsaved buffer is used as it i
   assert.deepEqual([...await f.ask('definition', 'a.links', { line: 4, symbol: 'renamed' })], ['1 definition for renamed — links', 'a.links', '  3:5  def renamed']);
   const versions = (await readFile(f.log, 'utf8')).trim().split('\n').map(JSON.parse).filter(m => m.version !== undefined).map(m => m.version);
   assert.ok(versions.at(-1) > versions[0], `the reload reached the server under a newer version: ${versions}`);
+
+  // A question about one file is answered from every open file, so those follow the disk too.
+  await f.write('lib.links', 'def shared\n');
+  await f.write('user.links', 'use shared\n');
+  await f.ask('symbols', 'lib.links');
+  await f.write('lib.links', '\n\n\ndef shared\n');
+  assert.deepEqual([...await f.ask('definition', 'user.links', { line: 1, symbol: 'shared' })], ['1 definition for shared — links', 'lib.links', '  4:5  def shared']);
 
   await f.nvim.lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, -1, false, { "def typed", "use typed" })', [join(f.directory, 'a.links')]);
   assert.deepEqual([...await f.ask('definition', 'a.links', { line: 2, symbol: 'typed' })], ['1 definition for typed — links (unsaved buffer)', 'a.links', '  1:5  def typed']);
@@ -131,7 +139,9 @@ test('the timeline, the server list and the command line explain and reproduce a
   assert.doesNotMatch(timeline, /plain asked/);
   assert.equal((await f.ask('definition', 'a.loading_plain', { line: 2, symbol: 'slow' })).text.includes('Timeline'), false);
   await f.write('a.loading_plain', 'def slow\nuse slow\n\n');
-  assert.match((await f.ask('symbols', 'a.loading_plain', { trace: true })).text, /ms  a\.loading_plain: reloaded from disk, sent under a new document version$/m);
+  // The new version is only sent once the servers are back, or clients detached by the reload would miss it.
+  assert.match((await f.ask('symbols', 'a.loading_plain', { trace: true })).text,
+    /ms  a\.loading_plain: reloaded from disk\n[^]*is ready\n +\d+ ms  a\.loading_plain: sent under a new document version\n[^]*asked for/);
 
   const servers = await status(f.nvim);
   assert.match(servers, /^Language servers in Pi's Neovim:\n/);
@@ -143,4 +153,33 @@ test('the timeline, the server list and the command line explain and reproduce a
   assert.deepEqual(parse('hover a.ts 3 14'), { action: 'hover', file: 'a.ts', line: 3, column: 14 });
   assert.deepEqual(parse('symbols a.ts'), { action: 'symbols', file: 'a.ts', query: undefined });
   assert.deepEqual(parse('workspace_symbols a.ts Greeter'), { action: 'workspace_symbols', file: 'a.ts', query: 'Greeter' });
+});
+
+test('a symbol is the whole word, paths are taken literally, and stray arguments are ignored', async t => {
+  const f = await fixture(t);
+  // "name" is the word name, not the end of "rename"; inside a longer word only if that is all there is.
+  await f.write('a.normal', 'def name\ndef rename\ncall rename name\ncall rename\n');
+  assert.deepEqual([...await f.ask('definition', 'a.normal', { line: 3, symbol: 'name' })], ['1 definition for name — normal', 'a.normal', '  1:5  def name']);
+  assert.deepEqual([...await f.ask('definition', 'a.normal', { line: 4, symbol: 'name' })], ['1 definition for name — normal', 'a.normal', '  2:5  def rename']);
+  // A path that would mean something as a pattern, as a target that is already loaded.
+  await mkdir(join(f.directory, 'app/[slug]'), { recursive: true });
+  await f.write('app/[slug]/page.normal', 'def handler\n');
+  await f.write('use.normal', 'call handler\n');
+  await f.ask('symbols', 'app/[slug]/page.normal');
+  assert.deepEqual([...await f.ask('definition', 'use.normal', { line: 1, symbol: 'handler' })], ['1 definition for handler — normal', 'app/[slug]/page.normal', '  1:5  def handler']);
+  // A line sent with an action that takes none is not an error.
+  assert.deepEqual([...await f.ask('symbols', 'a.normal', { line: 99, query: 'ren' })], ['1 symbol in a.normal — normal', '  2: function rename']);
+});
+
+test('no needless reloads or waits: an empty file, and servers that cannot answer', async t => {
+  const f = await fixture(t);
+  await f.write('empty.normal', '');
+  await f.ask('symbols', 'empty.normal');
+  const again = (await f.ask('symbols', 'empty.normal', { trace: true })).text;
+  assert.match(again, /empty\.normal: already loaded/);
+  assert.doesNotMatch(again, /reloaded from disk/);
+  await f.write('a.plain', 'def x\n');
+  const answer = await f.ask('hover', 'a.plain', { line: 1, symbol: 'x' });
+  assert.equal(answer.text, 'No server for a.plain supports this: plain.');
+  assert.ok(answer.ms < 1200, `took ${answer.ms} ms`);
 });

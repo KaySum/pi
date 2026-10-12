@@ -45,7 +45,7 @@ test('one tool, connected to the service only through the event bus', async t =>
 
   // The command shows the servers and the last question; with a question it answers it with a timeline.
   assert.match(await command(), /^info: No language servers are running.*\n\nLast question \d+ s ago, took \d+ ms: \{"action":"symbols","file":"a\.txt"\}\nNo language server for a\.txt\.$/);
-  assert.match(await command('symbols a.txt'), /^info: No language server for a\.txt\.\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: buffer already matches the file\n +\d+ ms  no language server attached$/);
+  assert.match(await command('symbols a.txt'), /^info: No language server for a\.txt\.\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: already loaded\n +\d+ ms  no language server attached$/);
   assert.match(await command('hover a.txt'), /^warning: nvim-navigation: hover needs line.*\nUsage: /);
   assert.match(await command('rename a.txt 1 x'), /^warning: nvim-navigation: action must be one of /);
 

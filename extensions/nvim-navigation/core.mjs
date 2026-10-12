@@ -22,7 +22,8 @@ export function validate(params) {
   if (query !== undefined && (typeof query !== 'string' || query.length > 256)) throw new Error('query must be text of up to 256 characters');
   if (action === 'workspace_symbols' && !query?.trim()) throw new Error('workspace_symbols needs a query');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60000) throw new Error('timeoutMs must be an integer from 100 to 60000');
-  return { action, file, line, symbol, column, query, timeoutMs };
+  // A line or symbol sent along with an action that takes none is ignored, not an error.
+  return AT_POSITION.includes(action) ? { action, file, line, symbol, column, query, timeoutMs } : { action, file, query, timeoutMs };
 }
 
 function format(report, action, cwd) {
@@ -32,7 +33,8 @@ function format(report, action, cwd) {
   const answered = report.servers.filter(server => server.status === 'answered').map(server => server.name);
   const others = report.servers.filter(server => !['answered', 'unsupported'].includes(server.status)).map(server => `${server.name} ${server.status}`);
   const of = report.symbol ? ` for ${report.symbol}` : '';
-  const what = count => action === 'symbols' ? `symbols in ${show(report.path)}` : action === 'workspace_symbols' ? `symbols matching ${JSON.stringify(report.query ?? '')}`
+  const symbols = count => count === 1 ? 'symbol' : 'symbols';
+  const what = count => action === 'symbols' ? `${symbols(count)} in ${show(report.path)}` : action === 'workspace_symbols' ? `${symbols(count)} matching ${JSON.stringify(report.query ?? '')}`
     : action === 'hover' ? `hover information${of}` : `${LABEL[action][count === 1 ? 0 : 1]}${of}`;
   if (!report.servers.length) return `No language server for ${show(report.path)}.`;
   const note = `${others.length ? ` (${others.join(', ')})` : ''}${report.loading ? ' (servers were still loading; ask again)' : ''}${report.unsaved ? ' (unsaved buffer)' : ''}`;
@@ -45,7 +47,7 @@ function format(report, action, cwd) {
   if (action === 'symbols' || action === 'workspace_symbols') {
     lines.push(`${report.total} ${what(report.total)}${from}`);
     for (const item of shown) {
-      lines.push(action === 'symbols' ? `${'  '.repeat(item.depth + 1)}${item.line}: ${item.kind} ${item.name}`
+      lines.push(action === 'symbols' ? `${'  '.repeat(item.depth + 1)}${item.line}: ${item.kind} ${item.name}${item.container ? ` in ${item.container}` : ''}`
         : `  ${item.kind} ${item.name}${item.container ? ` in ${item.container}` : ''}  ${show(item.path)}${item.line ? `:${item.line}` : ''}`);
     }
   } else {

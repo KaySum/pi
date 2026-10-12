@@ -79,6 +79,7 @@ Timeline (4666 ms):
   244 ms  asking about "sum" at 9:22
   370 ms  rust-analyzer is just started
   872 ms  rust-analyzer is ready
+  872 ms  main.rs: sent under a new document version
   872 ms  rust-analyzer asked for textDocument/definition
   872 ms  rust-analyzer answered with nothing
   874 ms  nothing from a server that started recently; waiting for it to stay calm, then asking again
@@ -91,10 +92,17 @@ spaces.
 
 ## What it takes care of
 
-- **The file on disk is what is asked about.** If the buffer no longer matches the file it
-  is reloaded, under a new document version, because some servers cache by version (vtsls
-  would otherwise return the old outline). A buffer with unsaved changes is used as it
-  is, and the answer is marked `(unsaved buffer)`.
+- **The files on disk are what is asked about.** Every loaded buffer that no longer
+  matches its file is reloaded first, not only the one named: where a symbol is defined
+  or used is a question about the whole project, and a server answers from the buffers
+  it has open. A buffer with unsaved changes is used as it is, and the answer is marked
+  `(unsaved buffer)`.
+- **The server is made to notice.** Neovim opens a reloaded document under its old
+  version number, and some servers cache by version (vtsls would return the old
+  outline). Each such document is sent again under a new version, once its servers are
+  attached again after the reload.
+- **A symbol is the whole word.** `symbol: "name"` means the word `name`, not the end of
+  `rename`; inside a longer word only if that is all the line has.
 - **A server that is still loading is not believed.** One that has just started, or is
   showing progress, is waited for. rust-analyzer answers "nothing" before it has loaded
   the project and only then starts showing progress, so an empty answer from a server

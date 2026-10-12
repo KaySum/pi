@@ -25,6 +25,28 @@ local MAX_ITEMS = 300
 local S = _G.__pi_nvim_navigation_v1 or { filetypes = {}, born = {} }
 _G.__pi_nvim_navigation_v1 = S
 local started = now()
+
+-- What the questions have to work with, for /nvim-navigation.
+if request.status then
+  local clients = {}
+  for _, client in ipairs(lsp.get_clients({ _uninitialized = true })) do
+    local actions = {}
+    for action, name in pairs(METHODS) do
+      if client.initialized and client:supports_method(name) then table.insert(actions, action) end
+    end
+    table.sort(actions)
+    table.insert(clients, { id = client.id, name = client.name, root = client.root_dir, initialized = client.initialized, actions = actions,
+      loading = next(client.progress.pending) ~= nil, buffers = vim.tbl_count(client.attached_buffers),
+      ageMs = S.born[client.id] and math.floor(now() - S.born[client.id]) or nil })
+  end
+  return { clients = clients }
+end
+
+-- With request.trace, a timeline of what was sent and received.
+local trace = request.trace and {} or nil
+local function note(text)
+  if trace then table.insert(trace, ('%5d ms  %s'):format(now() - started, text)) end
+end
 local method = METHODS[request.action]
 local path = request.file
 
@@ -35,6 +57,7 @@ local buf = vim.fn.bufadd(path)
 local fresh = not api.nvim_buf_is_loaded(buf)
 vim.fn.bufload(buf)
 local unsaved = vim.bo[buf].modified
+local how = fresh and 'loaded' or unsaved and 'unsaved buffer used as it is' or 'buffer already matches the file'
 if not fresh and not unsaved then
   local disk = vim.fn.readfile(path)
   if vim.bo[buf].bomb and disk[1] then disk[1] = disk[1]:gsub('^\239\187\191', '') end
@@ -46,7 +69,7 @@ if not fresh and not unsaved then
     local listed = vim.bo[buf].buflisted
     api.nvim_buf_call(buf, function() vim.cmd('silent keepalt keepjumps edit') end)
     vim.bo[buf].buflisted = listed
-    fresh = true
+    fresh, how = true, 'reloaded from disk, sent under a new document version'
     -- A no-op change sends the text under a new document version: some servers (vtsls's
     -- outline) cache by version and would otherwise answer for the old text.
     pcall(api.nvim_buf_set_lines, buf, 0, 1, false, api.nvim_buf_get_lines(buf, 0, 1, false))
@@ -54,6 +77,7 @@ if not fresh and not unsaved then
   end
 end
 local filetype = vim.bo[buf].filetype
+note(('%s: %s'):format(vim.fs.basename(path), how))
 
 -- The position asked about: a symbol's text on the line is easier to give than a column.
 local position, symbol
@@ -69,12 +93,13 @@ if request.line then
   if column > #text then error(('column %d is past the end of line %d'):format(column + 1, request.line), 0) end
   symbol = request.symbol or text:sub(column + 1):match('^[%w_]+') or text:sub(column + 1, column + 1)
   position = function(encoding) return { line = request.line - 1, character = vim.str_utfindex(text, encoding, column, false) } end
+  note(('asking about %s at %d:%d'):format(vim.inspect(symbol), request.line, column + 1))
 end
 
 -- Wait for the file's servers to be running and done loading.
 local clients = function() return lsp.get_clients({ bufnr = buf, _uninitialized = true }) end
 local left = function() return math.max(0, request.timeoutMs - (now() - started)) end
-local working = {}
+local working, said = {}, {}
 local ready = vim.wait(left(), function()
   local list, busy = clients(), false
   if #list == 0 then return not fresh or now() - started >= (S.filetypes[filetype] and ATTACH_MS or FIRST_ATTACH_MS) end
@@ -82,11 +107,14 @@ local ready = vim.wait(left(), function()
     local pending = next(client.progress.pending) ~= nil
     working[client.id] = pending and (working[client.id] or now()) or nil
     if client.initialized then S.born[client.id] = S.born[client.id] or now() end
-    busy = busy or not client.initialized or now() - S.born[client.id] < YOUNG_MS
-      or (pending and now() - working[client.id] >= SUSTAINED_MS)
+    local state = not client.initialized and 'starting' or now() - S.born[client.id] < YOUNG_MS and 'just started'
+      or pending and now() - working[client.id] >= SUSTAINED_MS and 'loading' or 'ready'
+    if said[client.id] ~= state then said[client.id] = state; note(('%s is %s'):format(client.name, state)) end
+    busy = busy or state ~= 'ready'
   end
   return not busy
 end, 20)
+if #clients() == 0 then note('no language server attached') elseif not ready then note('gave up waiting for the servers') end
 S.filetypes[filetype] = true
 
 -- Ask every server that can answer; returns one entry per attached server.
@@ -104,12 +132,18 @@ local function ask()
         entry.attempts = entry.attempts + 1
         local ok, sent = pcall(client.request, client, method, params, function(err, result)
           -- ContentModified / ServerCancelled: the server's state moved while it was answering.
-          if err and (err.code == -32801 or err.code == -32802) and entry.attempts < ATTEMPTS then return send() end
+          if err and (err.code == -32801 or err.code == -32802) and entry.attempts < ATTEMPTS then
+            note(('%s says its state changed (%s); asking again'):format(client.name, tostring(err.message or err.code)))
+            return send()
+          end
           entry.status = err and 'failed: ' .. tostring(err.message or err.code) or 'answered'
           if not err and result ~= vim.NIL and (type(result) ~= 'table' or next(result) ~= nil) then entry.result = result end
+          note(('%s %s%s'):format(client.name, entry.status, err and '' or entry.result == nil and ' with nothing'
+            or type(entry.result) == 'table' and #entry.result > 1 and (' with %d results'):format(#entry.result) or ' with a result'))
         end, buf)
         if not ok or not sent then entry.status = 'failed: request not sent' end
       end
+      note(('%s asked for %s'):format(client.name, method))
       send()
       table.insert(asked, entry)
     end
@@ -141,6 +175,7 @@ end
 local servers = ask()
 for _ = 1, ATTEMPTS - 1 do
   if not empty(servers) or not recent() or left() == 0 then break end
+  note('nothing from a server that started recently; waiting for it to stay calm, then asking again')
   local calm
   ready = vim.wait(left(), function()
     for _, client in ipairs(clients()) do
@@ -153,7 +188,8 @@ for _ = 1, ATTEMPTS - 1 do
 end
 
 -- Turn replies into plain rows.
-local out = { path = path, symbol = symbol, query = request.query, unsaved = unsaved, loading = not ready, servers = {}, items = {} }
+local out = { path = path, symbol = symbol, query = request.query, unsaved = unsaved, loading = not ready, servers = {}, items = {},
+  trace = trace, elapsedMs = math.floor(now() - started) }
 local lines, seen = {}, {}
 local function source(file)
   if not lines[file] then

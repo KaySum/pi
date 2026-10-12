@@ -1,10 +1,18 @@
 import { Type } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { useNvim } from '../nvim-service/api.mjs';
-import { navigate, ACTIONS } from './core.mjs';
+import { navigate, parse, status, ACTIONS } from './core.mjs';
 
 export default function (pi: ExtensionAPI) {
   const nvim = useNvim(pi);
+  let last: { at: number; ms: number; question: string; text: string } | undefined;
+
+  async function ask(params: Parameters<typeof navigate>[1], cwd: string, signal?: AbortSignal, trace = false) {
+    const at = Date.now();
+    const text = await navigate(nvim(), params, cwd, signal, { trace });
+    last = { at, ms: Date.now() - at, question: JSON.stringify(params), text };
+    return text;
+  }
 
   pi.registerTool({
     name: 'nvim_navigate',
@@ -26,11 +34,25 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       try {
-        return { content: [{ type: 'text', text: await navigate(nvim(), params, ctx.cwd, signal) }], details: {} };
+        return { content: [{ type: 'text', text: await ask(params, ctx.cwd, signal) }], details: {} };
       } catch (error) {
         // A prompt in the editor blocks every request; show it so it can be answered.
         const screen = (error as { screen?: string }).screen;
         throw screen ? new Error(`${(error as Error).message}\n${screen}`) : error;
+      }
+    },
+  });
+
+  pi.registerCommand('nvim-navigation', {
+    description: 'Show the language servers and the last question; or ask one with a timeline, e.g. "definition src/a.ts 3 greet"',
+    handler: async (args, ctx) => {
+      try {
+        if (args.trim()) return ctx.ui.notify(await ask(parse(args), ctx.cwd, undefined, true), 'info');
+        const recent = last && `Last question ${Math.round((Date.now() - last.at) / 1000)} s ago, took ${last.ms} ms: ${last.question}\n${last.text}`;
+        ctx.ui.notify(`${await status(nvim())}\n\n${recent ?? 'No question has been asked in this session.'}`, 'info');
+      } catch (error) {
+        const usage = 'Usage: /nvim-navigation <action> <file> <line> <symbol|column> | symbols <file> [filter] | workspace_symbols <file> <name>';
+        ctx.ui.notify(`nvim-navigation: ${error instanceof Error ? error.message : String(error)}\n${usage}`, 'warning');
       }
     },
   });

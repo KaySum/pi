@@ -45,6 +45,50 @@ src/main.ts
 Every location comes with its source line, so Pi rarely has to open the file to see what
 it found. Lines and byte columns are 1-based. At most 100 results are listed.
 
+## Debugging: `/nvim-navigation`
+
+Without arguments it lists the language servers in Pi's Neovim, whether each is ready, and
+which actions it can answer, followed by the most recent question and its answer:
+
+```
+Language servers in Pi's Neovim:
+  rust-analyzer (1): ready; 1 buffer; root /Users/xsv/project
+    answers: declaration, definition, hover, implementation, references, symbols, type, workspace_symbols
+
+Last question 8 s ago, took 4 ms: {"action":"references","file":"src/main.rs","line":1,"symbol":"Point"}
+3 references for Point — rust-analyzer
+  ...
+```
+
+With a question it asks it and adds a timeline of every wait, request and reply:
+
+```
+/nvim-navigation definition src/main.rs 9 sum
+/nvim-navigation hover src/main.rs 8 13            (a number instead of a symbol is a column)
+/nvim-navigation symbols src/main.rs [filter]
+/nvim-navigation workspace_symbols src/main.rs Point
+```
+
+```
+1 definition for sum — rust-analyzer
+src/main.rs
+  4:8  fn sum(&self) -> i32 { self.x + self.y }
+
+Timeline (4666 ms):
+  244 ms  main.rs: loaded
+  244 ms  asking about "sum" at 9:22
+  370 ms  rust-analyzer is just started
+  872 ms  rust-analyzer is ready
+  872 ms  rust-analyzer asked for textDocument/definition
+  872 ms  rust-analyzer answered with nothing
+  874 ms  nothing from a server that started recently; waiting for it to stay calm, then asking again
+ 4664 ms  rust-analyzer asked for textDocument/definition
+ 4666 ms  rust-analyzer answered with a result
+```
+
+Arguments are split on whitespace, so the command cannot take a path or symbol containing
+spaces.
+
 ## What it takes care of
 
 - **The file on disk is what is asked about.** If the buffer no longer matches the file it

@@ -16,9 +16,9 @@ const source = stripTypeScriptTypes(await readFile(new URL('./index.ts', import.
 const { default: register } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('one tool, connected to the service only through the event bus', async t => {
-  const bus = new EventEmitter(), tools = [];
+  const bus = new EventEmitter(), tools = [], commands = {}, notes = [];
   register({ events: { on: (channel, handler) => bus.on(channel, handler), emit: (channel, data) => bus.emit(channel, data) },
-    on: () => {}, registerTool: tool => tools.push(tool) });
+    on: () => {}, registerTool: tool => tools.push(tool), registerCommand: (name, command) => { commands[name] = command; } });
   const [tool] = tools;
   assert.equal(tools.length, 1);
   assert.equal(tool.name, 'nvim_navigate');
@@ -32,6 +32,8 @@ test('one tool, connected to the service only through the event bus', async t =>
   const directory = await realpath(await mkdtemp('/tmp/pi-navigation-test-'));
   const call = params => tool.execute('id', params, undefined, undefined, { cwd: directory });
   await assert.rejects(call({ action: 'symbols', file: 'a.txt' }), /Neovim service unavailable/);
+  const command = async (args = '') => { await commands['nvim-navigation'].handler(args, { cwd: directory, ui: { notify: (text, type) => notes.push(`${type}: ${text}`) } }); return notes.at(-1); };
+  assert.match(await command(), /^warning: nvim-navigation: Neovim service unavailable.*\nUsage: \/nvim-navigation /);
 
   const service = launch({ cwd: directory, init: 'NONE', graceMs: 100, killMs: 300 });
   const nvim = await openNvim(await service.ready);
@@ -40,6 +42,12 @@ test('one tool, connected to the service only through the event bus', async t =>
   await writeFile(join(directory, 'a.txt'), 'text');
   assert.deepEqual((await call({ action: 'symbols', file: 'a.txt' })).content, [{ type: 'text', text: 'No language server for a.txt.' }]);
   await assert.rejects(call({ action: 'hover', file: 'a.txt' }), /hover needs line/);
+
+  // The command shows the servers and the last question; with a question it answers it with a timeline.
+  assert.match(await command(), /^info: No language servers are running.*\n\nLast question \d+ s ago, took \d+ ms: \{"action":"symbols","file":"a\.txt"\}\nNo language server for a\.txt\.$/);
+  assert.match(await command('symbols a.txt'), /^info: No language server for a\.txt\.\n\nTimeline \(\d+ ms\):\n +\d+ ms  a\.txt: buffer already matches the file\n +\d+ ms  no language server attached$/);
+  assert.match(await command('hover a.txt'), /^warning: nvim-navigation: hover needs line.*\nUsage: /);
+  assert.match(await command('rename a.txt 1 x'), /^warning: nvim-navigation: action must be one of /);
 
   await nvim.keys(':echo "one\\ntwo"<CR>');
   await assert.rejects(call({ action: 'symbols', file: 'a.txt' }), /waiting at a prompt[^]*one\ntwo\nPress ENTER/);

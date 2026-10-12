@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../nvim-service/service.mjs';
 import { openNvim } from '../nvim-service/nvim.mjs';
-import { navigate, validate } from './core.mjs';
+import { navigate, parse, status, validate } from './core.mjs';
 
 // A file's extension names the fake servers that attach to it: `a.normal`, `b.normal_plain`.
 async function fixture(t) {
@@ -27,7 +27,8 @@ end })`);
     write: (name, text) => writeFile(join(directory, name), text),
     async ask(action, file, options = {}) {
       const started = Date.now();
-      const text = await navigate(nvim, { action, file, ...options }, directory);
+      const { trace, ...params } = options;
+      const text = await navigate(nvim, { action, file, ...params }, directory, undefined, { trace });
       return Object.assign(text.split('\n'), { text, ms: Date.now() - started });
     },
   };
@@ -106,4 +107,40 @@ test('what cannot be answered is said plainly', async t => {
   await assert.rejects(f.ask('hover', 'b.normal', { line: 9, symbol: 'x' }), { message: 'line 9 is past the end of the file (2 lines)' });
   // Nothing about the editor a person would see has moved.
   assert.deepEqual(await f.nvim.lua('return { vim.api.nvim_buf_get_name(0), #vim.api.nvim_list_wins(), vim.api.nvim_get_mode().mode }'), ['', 1, 'n']);
+});
+
+test('the timeline, the server list and the command line explain and reproduce a question', async t => {
+  const f = await fixture(t);
+  assert.match(await status(f.nvim), /^No language servers are running/);
+  await f.write('a.loading_plain', 'def slow\nuse slow\n');
+  const { text } = await f.ask('definition', 'a.loading_plain', { line: 2, symbol: 'slow', trace: true });
+  const [answer, timeline] = text.split('\n\nTimeline ');
+  assert.equal(answer, '1 definition for slow — loading\na.loading_plain\n  1:5  def slow');
+  for (const line of [
+    /^\(\d+ ms\):$/m,
+    /ms  a\.loading_plain: loaded$/m,
+    /ms  asking about "slow" at 2:5$/m,
+    /ms  loading is starting$/m,
+    /ms  loading is just started$/m,
+    /ms  loading is ready$/m,
+    /ms  loading asked for textDocument\/definition$/m,
+    /ms  loading answered with nothing$/m,
+    /ms  nothing from a server that started recently; waiting for it to stay calm, then asking again$/m,
+    /ms  loading answered with a result$/m,
+  ]) assert.match(timeline, line);
+  assert.doesNotMatch(timeline, /plain asked/);
+  assert.equal((await f.ask('definition', 'a.loading_plain', { line: 2, symbol: 'slow' })).text.includes('Timeline'), false);
+  await f.write('a.loading_plain', 'def slow\nuse slow\n\n');
+  assert.match((await f.ask('symbols', 'a.loading_plain', { trace: true })).text, /ms  a\.loading_plain: reloaded from disk, sent under a new document version$/m);
+
+  const servers = await status(f.nvim);
+  assert.match(servers, /^Language servers in Pi's Neovim:\n/);
+  assert.match(servers, /^  loading \(\d\): ready; 1 buffer; root \/.*\n    answers: definition, hover, references, symbols, workspace_symbols$/m);
+  assert.match(servers, /^  plain \(\d\): ready; 1 buffer; root \/.*\n    answers: none of the actions$/m);
+
+  assert.deepEqual(parse('definition src/a.ts 3 greet'), { action: 'definition', file: 'src/a.ts', line: 3, symbol: 'greet', column: undefined });
+  assert.deepEqual(parse(' references  a.ts 3 greet 20 '), { action: 'references', file: 'a.ts', line: 3, symbol: 'greet', column: 20 });
+  assert.deepEqual(parse('hover a.ts 3 14'), { action: 'hover', file: 'a.ts', line: 3, column: 14 });
+  assert.deepEqual(parse('symbols a.ts'), { action: 'symbols', file: 'a.ts', query: undefined });
+  assert.deepEqual(parse('workspace_symbols a.ts Greeter'), { action: 'workspace_symbols', file: 'a.ts', query: 'Greeter' });
 });

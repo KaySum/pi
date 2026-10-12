@@ -63,13 +63,16 @@ function format(report, action, cwd) {
   return lines.join('\n');
 }
 
-/** Answer one code-navigation question through the language servers of the Pi-owned Neovim. */
-export async function navigate(nvim, input, cwd, signal) {
+/**
+ * Answer one code-navigation question through the language servers of the Pi-owned Neovim.
+ * With `trace`, a timeline of every wait, request and reply follows the answer.
+ */
+export async function navigate(nvim, input, cwd, signal, { trace = false } = {}) {
   const params = validate(input);
   // Neovim enforces the deadline itself; the margin only covers an editor that stopped answering.
   const limit = AbortSignal.timeout(params.timeoutMs + 3000);
   // Absent options must be absent, not null: Lua would see a value.
-  const request = Object.fromEntries(Object.entries({ ...params, file: resolve(cwd, params.file) }).filter(([, value]) => value !== undefined));
+  const request = Object.fromEntries(Object.entries({ ...params, file: resolve(cwd, params.file), trace: trace || undefined }).filter(([, value]) => value !== undefined));
   let report;
   try { report = await nvim.lua(LUA, [request], { signal: signal ? AbortSignal.any([signal, limit]) : limit }); }
   catch (error) {
@@ -78,5 +81,27 @@ export async function navigate(nvim, input, cwd, signal) {
     throw refusal ? new Error(refusal[1]) : error;
   }
   const text = format(report, params.action, cwd);
+  if (trace) return `${text}\n\nTimeline (${report.elapsedMs} ms):\n${report.trace.join('\n')}`;
   return text.length > OUTPUT_LIMIT ? `${text.slice(0, OUTPUT_LIMIT)}\n[Truncated: narrow the query.]` : text;
+}
+
+/** What the questions have to work with: every language server in the editor and what it can answer. */
+export async function status(nvim, signal) {
+  const { clients } = await nvim.lua(LUA, [{ status: true }], { signal });
+  if (!clients.length) return 'No language servers are running. They start when a file is first asked about or opened.';
+  const lines = clients.map(c => `  ${c.name} (${c.id}): ${!c.initialized ? 'starting' : c.loading ? 'loading' : 'ready'}; ${c.buffers} buffer${c.buffers === 1 ? '' : 's'}; root ${c.root ?? 'none'}\n`
+    + `    answers: ${c.actions.join(', ') || 'none of the actions'}`);
+  return `Language servers in Pi's Neovim:\n${lines.join('\n')}`;
+}
+
+/** `definition src/a.ts 3 greet`, `symbols src/a.ts [filter]`, `workspace_symbols src/a.ts name`. */
+export function parse(text) {
+  const [action, file, ...rest] = text.split(/\s+/).filter(Boolean);
+  if (AT_POSITION.includes(action)) {
+    const [line, symbol, column] = rest;
+    // A number where the symbol would be is a column.
+    return /^\d+$/.test(symbol ?? '') ? { action, file, line: Number(line), column: Number(symbol) }
+      : { action, file, line: Number(line), symbol, column: column === undefined ? undefined : Number(column) };
+  }
+  return { action, file, query: rest.join(' ') || undefined };
 }

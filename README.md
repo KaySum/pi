@@ -22,8 +22,9 @@ extension, which gives each Pi instance its own Neovim:
 npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
 ```
 
-[`nvim-diagnostics`](extensions/nvim-diagnostics/README.md) and
-[`nvim-navigation`](extensions/nvim-navigation/README.md) build on it and need no install.
+[`nvim-diagnostics`](extensions/nvim-diagnostics/README.md),
+[`nvim-navigation`](extensions/nvim-navigation/README.md) and
+[`nvim-format`](extensions/nvim-format/README.md) build on it and need no install.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

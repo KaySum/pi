@@ -82,7 +82,7 @@ Timeline (4666 ms):
   872 ms  main.rs: sent under a new document version
   872 ms  rust-analyzer asked for textDocument/definition
   872 ms  rust-analyzer answered with nothing
-  874 ms  nothing from a server that started recently; waiting for it to stay calm, then asking again
+  874 ms  nothing, from a server that started recently or about a file it was only just shown; waiting for calm, then asking again
  4664 ms  rust-analyzer asked for textDocument/definition
  4666 ms  rust-analyzer answered with a result
 ```
@@ -96,7 +96,8 @@ spaces.
   matches its file is reloaded first, not only the one named: where a symbol is defined
   or used is a question about the whole project, and a server answers from the buffers
   it has open. A buffer with unsaved changes is used as it is, and the answer is marked
-  `(unsaved buffer)`.
+  `(unsaved buffer)`. A buffer whose file has been deleted is closed, so its contents
+  stop counting as part of the project.
 - **The server is made to notice.** Neovim opens a reloaded document under its old
   version number, and some servers cache by version (vtsls would return the old
   outline). Each such document is sent again under a new version, once its servers are
@@ -106,7 +107,9 @@ spaces.
 - **A server that is still loading is not believed.** One that has just started, or is
   showing progress, is waited for. rust-analyzer answers "nothing" before it has loaded
   the project and only then starts showing progress, so an empty answer from a server
-  that started in the last 15 s is asked for again once it has been calm for 0.7 s.
+  that started in the last 15 s is asked for again once it has been calm for 0.7 s. So is
+  an empty answer about a file the editor has only just opened: a new Rust module means
+  nothing to rust-analyzer until it has noticed the `mod` line in another file.
 - **A server whose state changed under the request** (it says so with an error) is asked
   again, up to three times.
 - **Every server that can answer is asked**, and their answers are merged without
@@ -129,3 +132,53 @@ node --test --test-timeout=40000 *.test.mjs
 
 The tests run a real Neovim against [`test/lsp.mjs`](test/lsp.mjs), a scriptable language
 server. They need `nvim-service`'s dev dependencies (`npm ci --prefix ../nvim-service`).
+
+### Checking answers against known truth
+
+The tests cannot show that an answer about real code is right, and a fake server attaches
+and loads in ways real ones do not. [`test/oracle.mjs`](test/oracle.mjs) checks the tool
+against your real servers with answers that are known without asking anyone:
+
+```sh
+node test/oracle.mjs                       # TypeScript, Python and Rust; takes several minutes
+node test/oracle.mjs rust --seed=7         # one language, one particular project
+node test/oracle.mjs --rounds=10 --questions=50 --keep
+```
+
+It generates a project in which every symbol has a unique name. For such a name, "every
+reference" is exactly "every whole-word occurrence in the project", which a text search
+finds, and the generator knows where and how it defined each one. It then changes the
+project on disk over and over (lines inserted, symbols renamed, functions moved between
+files, the order of a file shuffled, files added and removed) and after every change asks
+random questions and compares each answer, exactly, with that truth: the one place for a
+definition, the complete set for references, the line of every symbol in an outline.
+
+Some questions are not left to chance, because the bugs they catch need a particular
+sequence: one file's outline is asked for twice running with a change in between (a
+server may cache the last outline it gave), and a name that stands on a line after a
+longer name containing it is asked for by its text.
+
+Each language runs under three schedules:
+
+| Schedule | Stands for |
+| --- | --- |
+| asked at once after a change to open files | A formatter or `git` rewriting files the editor has open |
+| asked 1 s after each change | Any outside change, including files added and removed |
+| asked while a diagnostics warm-up runs | Pi's own edit followed at once by a question |
+
+The first round of each is a cold start. A wrong answer is printed with what was expected,
+and the seed replays the same project and questions. Putting each fixed bug back, one at
+a time, makes it fail; that is how its sensitivity was checked.
+
+What a pass means: for these three languages, every kind of question, and the changes and
+schedules above, the answers were exactly right. What it does not cover:
+
+- **An outside change to a file that is not open, asked about at once.** Servers learn of
+  those from their file watchers, which take a moment; the second schedule allows 1 s.
+  Pi's own edits are not affected: the warm-up opens the file.
+- **Projects much larger than the generated one**, where a server may load for longer, or
+  more quietly, than the waits described above allow for.
+- **Code a server is itself unsure about** (overloads, macros, dynamic dispatch). Unique
+  names sidestep that on purpose.
+- **`type` for Rust.** rust-analyzer gives no type definition for the name of a static
+  item, which is the only typed value the generated code has.

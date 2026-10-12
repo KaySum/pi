@@ -133,7 +133,7 @@ test('the timeline, the server list and the command line explain and reproduce a
     /ms  loading is ready$/m,
     /ms  loading asked for textDocument\/definition$/m,
     /ms  loading answered with nothing$/m,
-    /ms  nothing from a server that started recently; waiting for it to stay calm, then asking again$/m,
+    /ms  nothing, from a server that started recently or about a file it was only just shown; waiting for calm, then asking again$/m,
     /ms  loading answered with a result$/m,
   ]) assert.match(timeline, line);
   assert.doesNotMatch(timeline, /plain asked/);

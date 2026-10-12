@@ -79,5 +79,14 @@ export function warmer(nvim) {
     }
     running = undefined;
   }
-  return { add(path) { pending.add(path); return running ??= run(); } };
+  return {
+    add(path) {
+      pending.add(path);
+      // If a check is already under way this file waits its turn, but its servers should
+      // not: loading it now tells them about it, so a question about the project that
+      // comes before the check does is answered with this file in view.
+      if (running) { try { nvim().lua('pcall(vim.fn.bufload, vim.fn.bufadd(...))', [path]).catch(() => {}); } catch { /* the real check will say why */ } }
+      return running ??= run();
+    },
+  };
 }

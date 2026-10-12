@@ -22,8 +22,16 @@ local RECENT_MS, CALM_MS = 15000, 700
 local ATTEMPTS = 3
 local MAX_ITEMS = 300
 
-local S = _G.__pi_nvim_navigation_v2 or { filetypes = {}, born = {}, disk = {} }
-_G.__pi_nvim_navigation_v2 = S
+local S = _G.__pi_nvim_navigation_v2
+if not S then
+  S = { filetypes = {}, born = {}, disk = {}, loaded = {} }
+  _G.__pi_nvim_navigation_v2 = S
+  -- When each buffer was last (re)loaded, whoever did it: its clients attach a moment later.
+  api.nvim_create_autocmd('BufReadPost', {
+    group = api.nvim_create_augroup('PiNvimNavigation', {}),
+    callback = function(ev) S.loaded[ev.buf] = uv.hrtime() / 1e6 end,
+  })
+end
 local started = now()
 
 -- What the questions have to work with, for /nvim-navigation.
@@ -57,7 +65,17 @@ local function refresh(b)
   local name = api.nvim_buf_get_name(b)
   if name == '' or vim.bo[b].buftype ~= '' or vim.bo[b].modified then return false end
   local stat = uv.fs_stat(name)
-  if not stat or stat.type ~= 'file' then return false end
+  if not stat then
+    -- The file is gone. While its buffer stays loaded the servers go on treating it as
+    -- part of the project (its uses of a symbol are still "references"), so it is closed,
+    -- unless someone is looking at it.
+    if #vim.fn.win_findbuf(b) == 0 and pcall(api.nvim_buf_delete, b, { unload = true }) then
+      S.disk[b] = nil
+      note(('%s: deleted on disk, closed'):format(vim.fs.basename(name)))
+    end
+    return false
+  end
+  if stat.type ~= 'file' then return false end
   -- Once the text has been seen to match, the file is only read again when its stat changes.
   local key = ('%d:%d:%d'):format(stat.mtime.sec, stat.mtime.nsec, stat.size)
   if S.disk[b] == key then return false end
@@ -127,12 +145,12 @@ local working, said = {}, {}
 local ready = vim.wait(left(), function()
   local list, busy, attached = clients(), false, {}
   if #list == 0 then
-    -- A client may yet appear: the buffer was loaded just now (here, or by another
-    -- extension an instant ago, which is why a filetype's first use always waits), or a
-    -- server somewhere is still starting.
-    local grace = S.filetypes[filetype] and (fresh and ATTACH_MS or 0) or FIRST_ATTACH_MS
+    -- A client may yet appear: the buffer was loaded a moment ago (here, or by another
+    -- extension), this filetype has not been seen before, or a server is still starting.
+    local loaded = math.max(S.loaded[buf] or 0, fresh and started or 0)
+    local settled = S.filetypes[filetype] and now() - loaded >= ATTACH_MS or now() - started >= FIRST_ATTACH_MS
     local starting = #lsp.get_clients({ _uninitialized = true }) > #lsp.get_clients()
-    return now() - started >= grace and (not starting or now() - started >= FIRST_ATTACH_MS)
+    return settled and (not starting or now() - started >= FIRST_ATTACH_MS)
   end
   for _, client in ipairs(list) do
     attached[client.id] = true
@@ -209,9 +227,12 @@ local function ask()
 end
 
 -- A server that started recently may answer "nothing" before it has loaded the project,
--- and only start showing progress afterwards (rust-analyzer). So an empty answer from one
--- is not believed until it has stayed calm for a while; then it is asked again.
+-- and only start showing progress afterwards (rust-analyzer). The same goes for a file it
+-- has only just been shown: a new Rust module is nothing to rust-analyzer until it has
+-- noticed the `mod` line in a file that is not open. So an empty answer in either case is
+-- not believed until the servers have stayed calm for a while; then they are asked again.
 local function recent()
+  if fresh then return true end
   for _, client in ipairs(clients()) do
     if not S.born[client.id] or now() - S.born[client.id] < RECENT_MS then return true end
   end
@@ -228,7 +249,7 @@ end
 local servers = ask()
 for _ = 1, ATTEMPTS - 1 do
   if not empty(servers) or not recent() or left() == 0 then break end
-  note('nothing from a server that started recently; waiting for it to stay calm, then asking again')
+  note('nothing, from a server that started recently or about a file it was only just shown; waiting for calm, then asking again')
   local calm
   ready = vim.wait(left(), function()
     for _, client in ipairs(clients()) do

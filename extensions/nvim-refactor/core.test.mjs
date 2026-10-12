@@ -91,6 +91,7 @@ local function server(kind)
         { title = 'Sort', kind = 'source.sort', command = { title = 'Sort', command = 'editor.sort' } },
         { title = 'Deferred', data = { deferred = true } },
         { title = 'Deferred with an edit', data = { deferred = true }, edit = first(uri, 'Y') },
+        { title = 'Deferred with nothing', data = { deferred = true }, edit = first(uri, 'x') },
         { title = 'Twice', command = 'edit', arguments = { 20, first(uri, 'Y'), 200, first(other, 'Z') } },
         { title = 'Both', edit = first(uri, 'Y'), command = { title = 'Both', command = 'edit', arguments = { 50, first(other, 'Y') } } },
         unpack(vim.tbl_map(function(text)
@@ -345,8 +346,9 @@ test('edits a command has the server send are held to the same rules', async t =
   // Nor is one whose command only shows once the server is asked what the action does.
   await assert.rejects(apply('Deferred'), /^Error: "Deferred" cannot be applied here: needs the command editor\.sort, which neither Neovim nor odd can run$/);
   // With an edit of its own the action is applied, and only the command left out.
-  assert.deepEqual(await apply('Deferred with'), ['Applied "Deferred with an edit" in 1 file — odd', 'a.odd: lines 1 changed', 'not run: its command editor.sort, which neither Neovim nor odd can run']);
+  assert.deepEqual(await apply('Deferred with an edit'), ['Applied "Deferred with an edit" in 1 file — odd', 'a.odd: lines 1 changed', 'not run: its command editor.sort, which neither Neovim nor odd can run']);
   await reset();
+  assert.deepEqual(await apply('Deferred with nothing'), ['Applied "Deferred with nothing" — odd: it changed no files', 'not run: its command editor.sort, which neither Neovim nor odd can run']);
   // A server that fails does not take the others' actions with it.
   await f.write('b.odd_crash', 'x\n');
   assert.match((await f.run('actions', 'b.odd_crash', { kind: 'source' }))[0], /^0 code actions of kind source for b\.odd_crash — odd \(crash: .*cache is nil\)$/);

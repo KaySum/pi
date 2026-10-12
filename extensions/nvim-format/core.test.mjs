@@ -44,6 +44,7 @@ end`;
 // extension (`a.server`, `b.server_error`): `server` upper-cases the file it is asked
 // about, `plain` cannot format, `error` answers with an error, `flaky` says twice that its state changed
 // before formatting, `loading` fails once while showing progress, `hang` never answers,
+// `once` answers its first request as if for some other text,
 // and `stale` upper-cases the text it was last sent on opening, missing every change since.
 const SERVERS = `local function server(kind)
   return function()
@@ -62,6 +63,9 @@ const SERVERS = `local function server(kind)
           vim.lsp.get_client_by_id(id).progress.pending.load = 'Loading'
           vim.defer_fn(function() vim.lsp.get_client_by_id(id).progress.pending.load = nil end, 100)
           callback({ code = -32603, message = 'not ready' })
+        elseif method == 'textDocument/formatting' and kind == 'once' and asked < 1 then
+          asked = asked + 1
+          callback(nil, { { range = { start = { line = 0, character = 2 }, ['end'] = { line = 0, character = 3 } }, newText = '  {\\n' } })
         elseif method == 'textDocument/formatting' and kind == 'stale' then
           local text = opened[params.textDocument.uri]
           callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = select(2, text:gsub('\\n', '')), character = 0 } }, newText = text:upper() } })
@@ -83,7 +87,7 @@ end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   vim.defer_fn(function()
     for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
-      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1, stale = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1, once = 1, stale = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
     end
   end, 150)
 end })`;
@@ -193,6 +197,11 @@ for (const [setup, init] of [['with conform', undefined], ['no conform', SERVERS
     await f.nvim.lua('local b = vim.fn.bufadd(...); vim.api.nvim_buf_set_lines(b, 0, -1, false, { "ONE", "two", "three" }); vim.api.nvim_buf_call(b, function() vim.cmd("silent noautocmd write") end)', [join(f.directory, 'g.stale')]);
     assert.deepEqual(await f.run(['g.stale']), ['g.stale: formatted, lines 2-3 changed — stale']);
     assert.equal(await f.read('g.stale'), 'ONE\nTWO\nTHREE\n');
+
+    // Nor is it believed at its first word: edits are applied once it has given them twice.
+    await f.write('h.server_once', 'text\n');
+    assert.deepEqual(await f.run(['h.server_once']), ['h.server_once: formatted, lines 1 changed — server, once']);
+    assert.equal(await f.read('h.server_once'), 'TEXT\n');
 
     // A server that fails or never answers is a failure, and undoes what one before it did.
     for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');

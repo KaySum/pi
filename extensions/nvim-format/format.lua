@@ -31,10 +31,12 @@ local function plan(buf)
   return names, servers and lsp.get_clients({ bufnr = buf, method = FORMATTING }) or {}
 end
 
--- A server answers about its own copy of the file, and edits made for another text ruin
--- this one. rust-analyzer's copy can miss a change made while it loads a project, so the
--- server is sent the buffer afresh, as on a reload, before it is asked.
-local function resend(client, buf)
+-- Ask one server how to format the current buffer: its edits, or nil, what went wrong and
+-- whether asking again may help.
+local function ask(client, buf)
+  -- A server answers about its own copy of the file, and edits made for another text ruin
+  -- this one. rust-analyzer's copy can miss a change made while it loads a project, so the
+  -- server is sent the buffer afresh, as on a reload, before it is asked.
   local uri = vim.uri_from_bufnr(buf)
   client:notify('textDocument/didClose', { textDocument = { uri = uri } })
   client:notify('textDocument/didOpen', { textDocument = { uri = uri, version = lsp.util.buf_versions[buf],
@@ -44,6 +46,12 @@ local function resend(client, buf)
   local modified = vim.bo[buf].modified
   api.nvim_buf_set_lines(buf, 0, 1, false, api.nvim_buf_get_lines(buf, 0, 1, false))
   vim.bo[buf].modified = modified
+  -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
+  local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
+  local err = reply and reply.err
+  if err then return nil, ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or next(client.progress.pending) ~= nil end
+  if not reply then return nil, ('%s: %s'):format(client.name, silence) end
+  return type(reply.result) == 'table' and reply.result or {}
 end
 
 -- Format the current buffer without writing it; returns what went wrong, if anything, and
@@ -58,13 +66,15 @@ local function run(buf)
     if failure then return failure end
   end
   for _, client in ipairs(clients) do
-    resend(client, buf)
-    -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
-    local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
-    local err = reply and reply.err
-    if err then return ('%s: %s'):format(client.name, err.message or err.code), TRANSIENT[err.code] or next(client.progress.pending) ~= nil end
-    if not reply then return ('%s: %s'):format(client.name, silence) end
-    if type(reply.result) == 'table' then lsp.util.apply_text_edits(reply.result, buf, client.offset_encoding) end
+    local edits, problem, again = ask(client, buf)
+    -- Even a copy just sent can be overwritten before the request is read (rust-analyzer
+    -- does it with what it read from disk earlier), so edits are only applied once the
+    -- server has given the same ones twice, having been sent the file each time.
+    local second
+    if edits and #edits > 0 then second, problem, again = ask(client, buf) end
+    if problem then return problem, again end
+    if second and not vim.deep_equal(edits, second) then return client.name .. ': gave different edits when asked again', true end
+    lsp.util.apply_text_edits(edits, buf, client.offset_encoding)
   end
 end
 

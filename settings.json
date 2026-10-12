@@ -4,7 +4,6 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-luna",
   "enableInstallTelemetry": false,
-  "tuiMode": "fullscreen",
   "editorPaddingX": 1,
   "treeFilterMode": "no-tools",
   "packages": [

@@ -51,6 +51,9 @@ function M.ask(client, method, params, buf, ms)
   if not vim.wait(left(), function() return not busy() and now() - S.progress[client.id] >= CALM_MS end, 20) then
     return nil, client.name .. ': timeout while it was loading'
   end
+  -- Neovim holds back the changes to a buffer for a moment, and a request only sends on
+  -- those of the buffer it is about: a server asked about a project needs them all.
+  if lsp._changetracking then lsp._changetracking.flush(client) end
   local asked = now()
   local reply, silence = client:request_sync(method, params, left(), buf)
   local moved = busy() or S.progress[client.id] >= asked

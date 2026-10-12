@@ -87,6 +87,12 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
   left unsaved in a buffer; 10 s after the last command the server's edits are Neovim's
   to handle again. A command that a plugin defines in the editor runs there instead, and
   is trusted as the plugin is.
+- **What cannot be run is not offered.** Besides the actions a server marks as disabled,
+  some are commands that only the server's own editor plugin knows how to run: jsonls
+  lists "Sort JSON", which VS Code carries out itself. Those are counted, not listed, and
+  naming one gets the reason.
+- **One failing server does not take the others with it.** Its error is noted beside the
+  actions the rest offer; crates.nvim raises one for a `Cargo.toml` it has not read yet.
 - **The servers are told of the save**, once every file is on disk. Without it clangd
   goes on reading the old header for the sources that include it.
 - **The server is sent every change first.** Neovim holds back the changes to a buffer

@@ -12,7 +12,8 @@ import { parse, refactor, validate } from './core.mjs';
 // offers the code actions below. `stale` answers the first rename for a version of the
 // file it no longer has, `error` fails it, `outside` wants to change a file elsewhere,
 // and `plain` can do neither. `store` renames in the texts it was sent. `odd` offers actions that are hard to get right: its
-// commands reply first and send their edits afterwards.
+// commands reply first and send their edits afterwards. `crash` raises an error when
+// asked for actions, as a server that a plugin runs inside Neovim may.
 const SERVERS = `vim.o.confirm = true
 local function utf16(line, byte) return vim.str_utfindex(line, 'utf-16', byte, false) end
 local function span(l1, c1, l2, c2) return { start = { line = l1, character = c1 }, ['end'] = { line = l2, character = c2 } } end
@@ -87,6 +88,7 @@ local function server(kind)
         { title = 'Elsewhere', command = 'edit', arguments = { 50, first(vim.uri_from_fname('/etc/hosts'), 'Y') } },
         { title = 'Other', command = 'edit', arguments = { 50, first(other, 'Y') } },
         { title = 'Late', command = 'edit', arguments = { 500, first(other, 'Y') } },
+        { title = 'Sort', kind = 'source.sort', command = { title = 'Sort', command = 'editor.sort' } },
         { title = 'Twice', command = 'edit', arguments = { 20, first(uri, 'Y'), 200, first(other, 'Z') } },
         { title = 'Both', edit = first(uri, 'Y'), command = { title = 'Both', command = 'edit', arguments = { 50, first(other, 'Y') } } },
         unpack(vim.tbl_map(function(text)
@@ -106,7 +108,7 @@ local function server(kind)
       request = function(method, params, callback)
         if method == 'initialize' then
           callback(nil, { capabilities = { textDocumentSync = { openClose = true, change = 1 }, renameProvider = kind ~= 'plain' and { prepareProvider = kind == 'server' } or nil,
-            codeActionProvider = kind == 'server' and { resolveProvider = true } or kind == 'odd' or nil, executeCommandProvider = { commands = { 'reverse', 'edit' } } } })
+            codeActionProvider = kind == 'server' and { resolveProvider = true } or kind == 'odd' or kind == 'crash' or nil, executeCommandProvider = { commands = { 'reverse', 'edit' } } } })
         elseif method == 'textDocument/prepareRename' then
           local word = word_at(params)
           callback(nil, word and word ~= 'fixed' and { defaultBehavior = true } or vim.NIL)
@@ -122,6 +124,7 @@ local function server(kind)
           end
           callback(nil, { documentChanges = documents })
         elseif method == 'textDocument/rename' then callback(nil, { changes = rename(params) })
+        elseif method == 'textDocument/codeAction' and kind == 'crash' then error('cache is nil')
         elseif method == 'textDocument/codeAction' then callback(nil, kind == 'odd' and odd(params) or actions(params))
         elseif method == 'workspace/executeCommand' and params.command == 'edit' then
           for i = 1, #params.arguments, 2 do
@@ -160,8 +163,9 @@ local function server(kind)
 end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   vim.defer_fn(function()
-    local kind = vim.fn.fnamemodify(ev.file, ':e')
-    if ({ server = 1, stale = 1, error = 1, outside = 1, plain = 1, odd = 1, store = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+    for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
+      if ({ server = 1, stale = 1, error = 1, outside = 1, plain = 1, odd = 1, store = 1, crash = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+    end
   end, 150)
 end })`;
 
@@ -283,7 +287,7 @@ test('lists the code actions for a place and applies the one named', async t => 
   const refused = (options, pattern) => assert.rejects(f.run('apply', 'a.server', options), pattern);
   await refused({ line: 2, title: 'the line' }, /^Error: 3 code actions for a\.server:2 have "the line" in their title; give the full title of one, or a kind that only one has:\n  Upper-case the line  \[refactor\.rewrite\]\n  Reverse the lines\n  Move the line to notes  \[refactor\.move\]$/);
   await refused({ line: 2, title: 'Extract' }, /^Error: No code action for a\.server:2 has "Extract" in its title\. There are:\n  Fix: bad word/);
-  await refused({ line: 2, title: 'Inline' }, /^Error: "Inline the line" is disabled: nothing to inline$/);
+  await refused({ line: 2, title: 'Inline' }, /^Error: "Inline the line" cannot be applied here: nothing to inline$/);
   await refused({ line: 3, kind: 'quickfix' }, /^Error: No code actions of kind quickfix for a\.server:3$/);
   assert.equal(await f.read('a.server'), 'b todo\na bad word\nc\n');
 
@@ -331,6 +335,17 @@ test('edits a command has the server send are held to the same rules', async t =
     assert.equal(await f.read('a.odd.other'), text);
   }
   await reset();
+
+  // An action whose command only another editor's plugin could run is not offered as usable.
+  await assert.rejects(apply('Sort'), /^Error: "Sort" cannot be applied here: needs the command editor\.sort, which neither Neovim nor odd can run$/);
+  assert.deepEqual(await f.run('actions', 'a.odd', { kind: 'source' }), ['0 code actions of kind source for a.odd — odd', '  +1 that cannot be applied here']);
+  // A server that fails does not take the others' actions with it.
+  await f.write('b.odd_crash', 'x\n');
+  assert.match((await f.run('actions', 'b.odd_crash', { kind: 'source' }))[0], /^0 code actions of kind source for b\.odd_crash — odd \(crash: .*cache is nil\)$/);
+
+  await f.write('c.crash', 'x\n');
+  assert.match((await f.run('actions', 'c.crash'))[0], /^No code actions for c\.crash \(crash: .*cache is nil\)$/);
+  await assert.rejects(f.run('apply', 'c.crash', { title: 'Sort' }), /^Error: No code actions for c\.crash \(crash: .*cache is nil\)$/);
 
   // A command may send several edits: they are taken until none has come for a while.
   assert.deepEqual(await apply('Twice'), ['Applied "Twice" in 2 files — odd', 'a.odd: lines 1 changed', 'a.odd.other: lines 1 changed']);

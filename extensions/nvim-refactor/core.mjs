@@ -31,10 +31,10 @@ export function validate(params) {
   return action === 'apply' ? { action, file, line, symbol, column, endLine, title, kind, timeoutMs } : { action, file, line, symbol, column, endLine, kind, timeoutMs };
 }
 
-// Those that are disabled here are only counted: servers list every refactoring they know.
+// Those that cannot be applied here are only counted: servers list every refactoring they know.
 function listed(actions, all = false) {
   const shown = actions.filter(a => all || a.disabled === undefined);
-  const lines = shown.slice(0, SHOWN).map(a => `  ${a.title}${a.kind ? `  [${a.kind}]` : ''}${a.disabled === undefined ? '' : ` (disabled${a.disabled && `: ${a.disabled}`})`}`);
+  const lines = shown.slice(0, SHOWN).map(a => `  ${a.title}${a.kind ? `  [${a.kind}]` : ''}${a.disabled ? ` (${a.disabled})` : ''}`);
   if (shown.length > SHOWN) lines.push(`  +${shown.length - SHOWN} more`);
   if (shown.length < actions.length) lines.push(`  +${actions.length - shown.length} that cannot be applied here`);
   return lines.join('\n');

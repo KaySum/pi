@@ -323,10 +323,21 @@ local function change(edit, command, client)
   return { files = files, moved = moved }
 end
 
+-- Why an action cannot be applied, if it cannot: the server says so, or it is a command
+-- that only the server's own editor plugin knows how to run (jsonls: "Sort JSON").
+local function unusable(entry)
+  local action, client = entry.action, entry.client
+  if action.disabled then return action.disabled.reason or '' end
+  local name = type(action.command) == 'table' and action.command.command or action.command
+  local provider = client.server_capabilities.executeCommandProvider
+  if name and not (client.commands[name] or lsp.commands[name] or vim.list_contains(type(provider) == 'table' and provider.commands or {}, name)) then
+    return ('needs the command %s, which neither Neovim nor %s can run'):format(name, client.name)
+  end
+end
+
 local function describe(found)
   return vim.tbl_map(function(entry)
-    local action = entry.action
-    return { title = action.title, kind = action.kind, server = entry.client.name, disabled = action.disabled and (action.disabled.reason or '') or nil }
+    return { title = entry.action.title, kind = entry.action.kind, server = entry.client.name, disabled = unusable(entry) }
   end, found)
 end
 
@@ -343,16 +354,15 @@ local function run()
 
   local found, problems, again = actions()
   if not found then return nil, problems, again end
-  if #found == 0 and #problems > 0 then return nil, table.concat(problems, '; ') end
   local out = { actions = describe(found), problems = problems }
   if request.action == 'actions' then return out end
 
   -- The one to apply is named by its title, or by a part of it, or by its kind when that
-  -- leaves only one. One that is disabled is only meant when no other matches.
+  -- leaves only one. One that cannot be applied is only meant when no other matches.
   local function pick(test)
     local enabled, disabled = {}, {}
     for _, entry in ipairs(found) do
-      if test(entry.action.title) then table.insert(entry.action.disabled and disabled or enabled, entry) end
+      if test(entry.action.title) then table.insert(unusable(entry) and disabled or enabled, entry) end
     end
     return #enabled > 0 and enabled or disabled
   end
@@ -364,7 +374,8 @@ local function run()
     return out
   end
   local action, client = matches[1].action, matches[1].client
-  if action.disabled then return nil, ('"%s" is disabled: %s'):format(action.title, action.disabled.reason or 'no reason given') end
+  local reason = unusable(matches[1])
+  if reason then return nil, ('"%s" cannot be applied here: %s'):format(action.title, reason ~= '' and reason or 'the server gives no reason') end
   -- A server may leave out what an action does until it is chosen. A bare command has no more to give.
   if type(action.command) ~= 'string' and not (action.edit and action.command) and client:supports_method('codeAction/resolve', buf) then
     local resolved, problem

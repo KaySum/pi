@@ -40,6 +40,18 @@ end
 -- not given as long.
 function M.seen(buf) S.filetypes[vim.bo[buf].filetype] = true end
 
+-- Tell a buffer's servers that it was written, which a write without autocommands does
+-- not. Some only then look again at what depends on the file: clangd reads the headers a
+-- source includes from disk, and goes on using the old ones until it hears of a save.
+function M.saved(buf)
+  for _, client in ipairs(lsp.get_clients({ bufnr = buf, method = 'textDocument/didSave' })) do
+    local sync = client.server_capabilities.textDocumentSync
+    local text = type(sync) == 'table' and type(sync.save) == 'table' and sync.save.includeText
+      and table.concat(api.nvim_buf_get_lines(buf, 0, -1, false), '\n') .. '\n' or nil
+    client:notify('textDocument/didSave', { textDocument = { uri = vim.uri_from_bufnr(buf) }, text = text })
+  end
+end
+
 -- Ask one server, within `ms`: its answer, or nil, what went wrong and whether asking
 -- again may help.
 function M.ask(client, method, params, buf, ms)

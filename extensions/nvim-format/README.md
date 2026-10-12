@@ -72,6 +72,10 @@ Formatted files stay loaded, so their servers keep their state.
 Cancelling a call stops Pi waiting, not Neovim working: the call runs to its end inside
 the editor, so files may still be formatted and written after it.
 
+`already formatted` means the formatter had nothing to change, not that the file parses:
+ruff's language server answers a Python file with a syntax error with no edits and no
+error. [`nvim-diagnostics`](../nvim-diagnostics/README.md) is what finds those.
+
 Measured on this machine with Neovim 0.12.6 and files already loaded: 20–60 ms a file
 for stylua, prettier, shfmt and ruff. The first file of a type in a session takes as long
 as its formatter or server needs to start, up to a few seconds.

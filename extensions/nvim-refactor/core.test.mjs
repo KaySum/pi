@@ -89,6 +89,9 @@ local function server(kind)
         { title = 'Late', command = 'edit', arguments = { 500, first(other, 'Y') } },
         { title = 'Twice', command = 'edit', arguments = { 20, first(uri, 'Y'), 200, first(other, 'Z') } },
         { title = 'Both', edit = first(uri, 'Y'), command = { title = 'Both', command = 'edit', arguments = { 50, first(other, 'Y') } } },
+        unpack(vim.tbl_map(function(text)
+          return { title = 'Fill ' .. vim.json.encode(text), edit = { changes = { [other] = { { range = span(0, 0, 0, 0), newText = text } } } } }
+        end, { '\\n', 'new', 'new\\n', 'new\\n\\n' })),
       }
     end
     local function publish(uri)
@@ -319,6 +322,14 @@ test('edits a command has the server send are held to the same rules', async t =
   // The action's own edit and the one its command sends afterwards are both written.
   assert.deepEqual(await apply('Both'), ['Applied "Both" in 2 files — odd', 'a.odd: lines 1 changed', 'a.odd.other: lines 1 changed']);
   assert.equal(await f.read('a.odd.other'), 'Y\n');
+  await reset();
+
+  // Text put into an empty file is written as it is, with or without a final newline.
+  for (const text of ['\n', 'new', 'new\n', 'new\n\n']) {
+    await f.write('a.odd.other', '');
+    await f.run('apply', 'a.odd', { title: `Fill ${JSON.stringify(text)}` });
+    assert.equal(await f.read('a.odd.other'), text);
+  }
   await reset();
 
   // A command may send several edits: they are taken until none has come for a while.

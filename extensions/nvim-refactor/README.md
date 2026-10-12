@@ -69,7 +69,8 @@ greet welcome`, `actions src/a.ts [3]` and `apply src/a.ts [3] <title>` make one
   files: Neovim does that on disk as it goes.
 - **Only what changed is written.** A file whose edit puts back what was there is neither
   written nor listed, one without a final newline is not given one, and text put into an
-  empty file is not followed by the blank line Neovim would add.
+  empty or new file is written byte for byte, where Neovim would end it with a newline of
+  its own.
 - **Nothing outside the project.** An edit that reaches a file outside Pi's working
   directory and the server's own workspace is refused.
 - **A server that is loading is not asked**, and its answer is dropped if it began

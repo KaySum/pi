@@ -253,12 +253,12 @@ local function execute(command, client, moved)
   return problem or not reply and ('%s: %s'):format(client.name, silence) or reply.err and ('%s: %s'):format(client.name, reply.err.message or reply.err.code) or nil
 end
 
--- What the buffer's file holds if it holds just what the buffer does, for the plain case.
+-- True if the buffer's file holds just what writing the buffer would put there, for the
+-- plain case.
 local function same(b, file)
   if vim.bo[b].bomb or not vim.tbl_contains({ '', 'utf-8' }, vim.bo[b].fileencoding) then return false end
   local eol = vim.bo[b].fileformat == 'dos' and '\r\n' or '\n'
-  local text, disk = table.concat(api.nvim_buf_get_lines(b, 0, -1, false), eol), read(file)
-  return disk == text or disk == text .. eol
+  return read(file) == table.concat(api.nvim_buf_get_lines(b, 0, -1, false), eol) .. (vim.bo[b].endofline and eol or '')
 end
 
 -- Apply an edit, and after it a command, then write every file that changed. Returns the
@@ -288,10 +288,14 @@ local function change(edit, command, client)
   for _, b in ipairs(changed) do
     local file = api.nvim_buf_get_name(b)
     local before = read(file)
-    -- To Neovim an empty file is one empty line, so text put into it that ends its last
-    -- line is followed by another.
-    local count = api.nvim_buf_line_count(b)
-    if before == '' and count > 1 and api.nvim_buf_get_lines(b, -2, -1, false)[1] == '' then api.nvim_buf_set_lines(b, count - 1, count, false, {}) end
+    -- To the server an empty file is no text; to Neovim it is one empty line with a newline
+    -- to come. So what was put into it ends in a newline only if its last line is empty,
+    -- and that line is not one of its own.
+    if before == '' then
+      local count = api.nvim_buf_line_count(b)
+      vim.bo[b].endofline = count > 1 and api.nvim_buf_get_lines(b, -2, -1, false)[1] == ''
+      if vim.bo[b].endofline then api.nvim_buf_set_lines(b, count - 1, count, false, {}) end
+    end
     -- An edit may put back what was there: Neovim calls the buffer changed all the same.
     if uv.fs_stat(file) and same(b, file) then
       vim.bo[b].modified = false

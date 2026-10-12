@@ -8,7 +8,6 @@
   "treeFilterMode": "no-tools",
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:@narumitw/pi-btw",
     "npm:@narumitw/pi-usage",
     "npm:pi-cc-extensions",
     "npm:pi-web-access",

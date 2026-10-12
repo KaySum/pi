@@ -34,7 +34,8 @@ file in the background and throws the result away. Nothing is added to the conve
 By the time Pi calls `nvim_diagnostics`, the servers are running and have already
 reported, so the check finds the text unchanged and returns in a few milliseconds. A
 check that arrives while the background one is still waiting simply waits for the same
-servers; it never returns earlier or with less.
+servers; it never returns earlier or with less. A file that has to wait its turn behind a check
+already under way is still loaded at once, so its servers know about it immediately.
 
 The cost is that language servers start for files Pi edits but never checks.
 

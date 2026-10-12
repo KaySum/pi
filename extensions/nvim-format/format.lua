@@ -31,6 +31,21 @@ local function plan(buf)
   return names, servers and lsp.get_clients({ bufnr = buf, method = FORMATTING }) or {}
 end
 
+-- A server answers about its own copy of the file, and edits made for another text ruin
+-- this one. rust-analyzer's copy can miss a change made while it loads a project, so the
+-- server is sent the buffer afresh, as on a reload, before it is asked.
+local function resend(client, buf)
+  local uri = vim.uri_from_bufnr(buf)
+  client:notify('textDocument/didClose', { textDocument = { uri = uri } })
+  client:notify('textDocument/didOpen', { textDocument = { uri = uri, version = lsp.util.buf_versions[buf],
+    languageId = client.get_language_id(buf, vim.bo[buf].filetype), text = lsp._buf_get_full_text(buf) } })
+  -- A reopened file makes some servers publish its diagnostics anew; a no-op change gives
+  -- the text a new version, by which nvim-diagnostics knows to wait for them.
+  local modified = vim.bo[buf].modified
+  api.nvim_buf_set_lines(buf, 0, 1, false, api.nvim_buf_get_lines(buf, 0, 1, false))
+  vim.bo[buf].modified = modified
+end
+
 -- Format the current buffer without writing it; returns what went wrong, if anything, and
 -- whether trying again may help.
 local function run(buf)
@@ -43,6 +58,7 @@ local function run(buf)
     if failure then return failure end
   end
   for _, client in ipairs(clients) do
+    resend(client, buf)
     -- Not vim.lsp.buf.format: it tells the user of a server's error or silence and carries on.
     local reply, silence = client:request_sync(FORMATTING, lsp.util.make_formatting_params(), left(), buf)
     local err = reply and reply.err

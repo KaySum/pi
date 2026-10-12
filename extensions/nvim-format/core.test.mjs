@@ -43,13 +43,14 @@ end`;
 // Language servers inside Neovim, attaching a moment after a file loads and named by its
 // extension (`a.server`, `b.server_error`): `server` upper-cases the file it is asked
 // about, `plain` cannot format, `error` answers with an error, `flaky` says twice that its state changed
-// before formatting, `loading` fails once while showing progress, and `hang` never answers.
+// before formatting, `loading` fails once while showing progress, `hang` never answers,
+// and `stale` upper-cases the text it was last sent on opening, missing every change since.
 const SERVERS = `local function server(kind)
   return function()
-    local closing, asked = false, 0
+    local closing, asked, opened = false, 0, {}
     return {
       request = function(method, params, callback)
-        if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = kind ~= 'plain' } })
+        if method == 'initialize' then callback(nil, { capabilities = { documentFormattingProvider = kind ~= 'plain', textDocumentSync = { openClose = true, change = 2 } } })
         elseif method == 'textDocument/formatting' and kind == 'hang' then
         elseif method == 'textDocument/formatting' and kind == 'error' then callback({ code = -32603, message = 'cannot format this' })
         elseif method == 'textDocument/formatting' and kind == 'flaky' and asked < 2 then
@@ -61,13 +62,19 @@ const SERVERS = `local function server(kind)
           vim.lsp.get_client_by_id(id).progress.pending.load = 'Loading'
           vim.defer_fn(function() vim.lsp.get_client_by_id(id).progress.pending.load = nil end, 100)
           callback({ code = -32603, message = 'not ready' })
+        elseif method == 'textDocument/formatting' and kind == 'stale' then
+          local text = opened[params.textDocument.uri]
+          callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = select(2, text:gsub('\\n', '')), character = 0 } }, newText = text:upper() } })
         elseif method == 'textDocument/formatting' then
           local lines = vim.api.nvim_buf_get_lines(vim.uri_to_bufnr(params.textDocument.uri), 0, -1, false)
           callback(nil, { { range = { start = { line = 0, character = 0 }, ['end'] = { line = #lines, character = 0 } }, newText = table.concat(lines, '\\n'):upper() .. '\\n' } })
         else callback(nil, vim.NIL) end
         return true, 1
       end,
-      notify = function() return true end,
+      notify = function(method, params)
+        if method == 'textDocument/didOpen' then opened[params.textDocument.uri] = params.textDocument.text end
+        return true
+      end,
       is_closing = function() return closing end,
       terminate = function() closing = true end,
     }
@@ -76,7 +83,7 @@ end
 vim.api.nvim_create_autocmd('BufReadPost', { callback = function(ev)
   vim.defer_fn(function()
     for kind in vim.fn.fnamemodify(ev.file, ':e'):gmatch('[^_]+') do
-      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
+      if ({ server = 1, plain = 1, error = 1, flaky = 1, loading = 1, hang = 1, stale = 1 })[kind] then vim.lsp.start({ name = kind, cmd = server(kind) }, { bufnr = ev.buf }) end
     end
   end, 150)
 end })`;
@@ -178,6 +185,14 @@ for (const [setup, init] of [['with conform', undefined], ['no conform', SERVERS
       assert.deepEqual(await f.run([`f.server_${kind}`]), [`f.server_${kind}: formatted, lines 1 changed — server, ${kind}`]);
       assert.equal(await f.read(`f.server_${kind}`), 'TEXT\n');
     }
+
+    // A server answers about its own copy of the file, which may have missed a change
+    // (rust-analyzer's does, while it loads a project): it is sent the text first.
+    await f.write('g.stale', 'one\n');
+    assert.deepEqual(await f.run(['g.stale']), ['g.stale: formatted, lines 1 changed — stale']);
+    await f.nvim.lua('local b = vim.fn.bufadd(...); vim.api.nvim_buf_set_lines(b, 0, -1, false, { "ONE", "two", "three" }); vim.api.nvim_buf_call(b, function() vim.cmd("silent noautocmd write") end)', [join(f.directory, 'g.stale')]);
+    assert.deepEqual(await f.run(['g.stale']), ['g.stale: formatted, lines 2-3 changed — stale']);
+    assert.equal(await f.read('g.stale'), 'ONE\nTWO\nTHREE\n');
 
     // A server that fails or never answers is a failure, and undoes what one before it did.
     for (const name of ['c.error', 'd.server_error', 'e.hang']) await f.write(name, 'text\n');

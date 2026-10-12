@@ -68,6 +68,11 @@ explicit request, not a save.
   showing progress, or that says its state changed under the request, is not taken as
   final: the file is tried again from the start, up to four more times, 0.3 s apart,
   within the time allowed. Any other error is reported at once.
+- **A server is sent the file before it is asked.** It answers about its own copy of
+  the text, and edits made for another text ruin this one. rust-analyzer's copy can miss
+  a change made while it loads a project, so each server gets the buffer afresh, as on a
+  reload, just before the request. The protocol has no way to ask a server what text it
+  holds, so this makes a stale answer unlikely, not impossible.
 - **Language-server formatting gets the right file.** Neovim builds the request from the
   current buffer, so each file is made current for the call. Pi's windows and cursor are not touched.
 - **Read-only files are refused up front.** With `confirm` set, as LazyVim has it,

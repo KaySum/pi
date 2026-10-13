@@ -81,6 +81,36 @@ rather than keeping the old one. Extensions that prefer not to import can use th
 contract on `pi.events`: `nvim-service:ready` (handle), `nvim-service:stopped` (`info`),
 and `nvim-service:get` with `{ reply }` to ask for the current handle.
 
+### Having language servers change files
+
+A language server answers about its own copy of a file, and edits made for an older text
+ruin the present one: rust-analyzer takes in no changes while it scans a project, and
+says nothing of it. Lua that asks servers for edits gets the precautions with
+`withServers`:
+
+```js
+import { withServers } from '../nvim-service/api.mjs';
+const LUA = withServers("local edits, problem, again = servers.ask(client, 'textDocument/formatting', params, buf, 5000) ...");
+```
+
+| `servers.` | Behavior |
+| --- | --- |
+| `ask(client, method, params, buf, ms)` | The answer; or `nil`, what went wrong (an error raised by a server that runs inside Neovim included), and whether asking again may help. The server is only asked once it has shown no progress for 0.5 s (so the first request to each server in a session waits that long), and its answer is dropped if it showed any before the answer came. It is first sent the pending changes of every buffer, not only of `buf`: Neovim holds them back for 150 ms. |
+| `attached(buf, loaded?)` | True once no more servers are to be expected for the buffer and those it has are running. `loaded` is when it was (re)loaded, if only just: it is then given 0.3 s, or 2 s for the first file of a type. |
+| `saved(buf)` | Tell the buffer's servers it was written, after a write without autocommands. clangd only then rereads a header for the sources that include it. |
+| `seen(buf)` | Call once a buffer's servers have been waited for, so the next file of its type is not given the 2 s. |
+
+This rests on the server saying that it is loading: the protocol has no way to ask a
+server what text it holds.
+
+Sending the pending changes uses `vim.lsp._changetracking.flush`, which is private to
+Neovim: there is no public way to do it (tested with 0.12.6). If a later Neovim renames
+or removes it, the call is skipped without an error, and a server may again be asked
+about a project while it lacks the last 150 ms of changes to other files; pyright then
+left files out of a rename made straight after another. The test "a server is sent every
+change before it is asked about the project" in `nvim-refactor` fails when that happens,
+so run the tests after updating Neovim.
+
 ## Lifetime
 
 ```

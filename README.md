@@ -23,8 +23,9 @@ npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
 ```
 
 [`nvim-diagnostics`](extensions/nvim-diagnostics/README.md),
-[`nvim-navigation`](extensions/nvim-navigation/README.md) and
-[`nvim-format`](extensions/nvim-format/README.md) build on it and need no install.
+[`nvim-navigation`](extensions/nvim-navigation/README.md),
+[`nvim-format`](extensions/nvim-format/README.md) and
+[`nvim-refactor`](extensions/nvim-refactor/README.md) build on it and need no install.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

@@ -10,6 +10,7 @@
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@narumitw/pi-usage",
     "npm:pi-cc-extensions",
+    "npm:pi-web-access",
     "npm:pi-workspace-history"
   ]
 }

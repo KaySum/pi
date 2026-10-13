@@ -115,14 +115,18 @@ say when that picture is partial.
   does not say when it is done. A rename that follows another at once, or half a second
   later, has missed a source file; a second apart none did, in 48 renames tried here.
   There is nothing to wait on.
+- marksman, renaming a Markdown heading, updates the inline links to it but has left a
+  reference-style definition (`[target]: guide.md#topic`) pointing at the old one. No
+  diagnostic shows that.
 - TypeScript, asked to rename an imported name where it is used, keeps the export and
   writes `import { greet as welcome }`. Pointed at the definition, it renames everywhere.
 
 Nor is an action known to be right because it applied: clangd's "Move function body to
 declaration", in C, leaves an `inline` definition in the header that does not link.
 
-So the files listed are worth a glance, and `nvim_diagnostics` on them afterwards shows
-what a partial rename broke.
+So the files listed are worth a glance, `nvim_diagnostics` on them afterwards shows what
+a partial rename broke where the language has a compiler to say so, and a search for the
+old name shows the rest. Pi is told as much with the tool.
 
 Cancelling a call stops Pi waiting, not Neovim working: the call runs to its end inside
 the editor, so files may still be changed after it.

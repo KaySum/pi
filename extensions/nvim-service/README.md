@@ -103,6 +103,14 @@ const LUA = withServers("local edits, problem, again = servers.ask(client, 'text
 This rests on the server saying that it is loading: the protocol has no way to ask a
 server what text it holds.
 
+Sending the pending changes uses `vim.lsp._changetracking.flush`, which is private to
+Neovim: there is no public way to do it (tested with 0.12.6). If a later Neovim renames
+or removes it, the call is skipped without an error, and a server may again be asked
+about a project while it lacks the last 150 ms of changes to other files; pyright then
+left files out of a rename made straight after another. The test "a server is sent every
+change before it is asked about the project" in `nvim-refactor` fails when that happens,
+so run the tests after updating Neovim.
+
 ## Lifetime
 
 ```

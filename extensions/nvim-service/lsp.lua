@@ -64,7 +64,9 @@ function M.ask(client, method, params, buf, ms)
     return nil, client.name .. ': timeout while it was loading'
   end
   -- Neovim holds back the changes to a buffer for a moment, and a request only sends on
-  -- those of the buffer it is about: a server asked about a project needs them all.
+  -- those of the buffer it is about: a server asked about a project needs them all. The
+  -- function is private to Neovim and has no public counterpart: should it go, nothing is
+  -- sent on here, and nvim-refactor's test of two renames in a row fails.
   if lsp._changetracking then lsp._changetracking.flush(client) end
   local asked = now()
   -- A server that a plugin runs inside Neovim fails by raising an error (crates.nvim).

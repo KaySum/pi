@@ -19,7 +19,7 @@ export default function (pi: ExtensionAPI) {
 
   // agent_end can be followed by retries, compaction or queued work; agent_settled is the true end.
   pi.on('agent_settled', async (event, ctx) => {
-    if (!state.enabled || event.aborted || !ctx.hasUI) return;
+    if (!state.enabled || event.aborted || ctx.mode !== 'tui') return;
     // Posted by the terminal itself (OSC 777), so clicking it brings that terminal forward.
     const osc = `\x1b]777;notify;Pi;Done in ${basename(ctx.cwd)}\x07`;
     if (!process.env.NVIM) process.stdout.write(osc);

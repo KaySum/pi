@@ -3,10 +3,18 @@ import { fileURLToPath } from 'node:url';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 const SOUND = '/System/Library/Sounds/Funk.aiff';
+const DEFAULT_ALERT_VOLUME = 0.75;
 const LUA = fileURLToPath(new URL('./notify.lua', import.meta.url));
 
 export default function (pi: ExtensionAPI) {
   let enabled = false;
+
+  // Match macOS's alert volume (Sound settings), which is unset until first changed.
+  async function playSound() {
+    const { stdout } = await pi.exec('defaults', ['read', '-g', 'com.apple.sound.beep.volume']);
+    const volume = parseFloat(stdout);
+    await pi.exec('afplay', ['-v', String(Number.isFinite(volume) ? volume : DEFAULT_ALERT_VOLUME), SOUND]);
+  }
 
   // agent_end can be followed by retries, compaction or queued work; agent_settled is the true end.
   pi.on('agent_settled', async (event, ctx) => {
@@ -19,7 +27,7 @@ export default function (pi: ExtensionAPI) {
       const args = JSON.stringify([LUA, { osc, pids: [process.pid, process.ppid] }]);
       pi.exec('nvim', ['--server', process.env.NVIM, '--remote-expr', `luaeval('dofile(_A[1])(_A[2])', ${args})`]).catch(() => {});
     }
-    if (process.platform === 'darwin') pi.exec('afplay', [SOUND]).catch(() => {});
+    if (process.platform === 'darwin') playSound().catch(() => {});
   });
 
   pi.registerCommand('notify', {

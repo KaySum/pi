@@ -4,7 +4,6 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6.1-sol",
   "enableInstallTelemetry": false,
-  "editorPaddingX": 1,
   "treeFilterMode": "no-tools",
   "packages": [
     "npm:@juicesharp/rpiv-ask-user-question",

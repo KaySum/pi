@@ -223,6 +223,49 @@ test('the cursor goes to the exact column given, clamped to the line and the fil
   assert.deepEqual(await at(), [2, 0]);
 });
 
+/** The first and last lines in view, the window's height, and the cursor's line. */
+const view = (win: number) => lua(`local w = ...
+  return vim.api.nvim_win_call(w, function()
+    return { vim.fn.line('w0'), vim.fn.line('w$'), vim.api.nvim_win_get_height(w), vim.api.nvim_win_get_cursor(w)[1] }
+  end)`, win);
+
+test('changes that fit in the window are all brought into view', async t => {
+  const { code } = await layout(t);
+  const path = await file('s1.txt', lines(200));
+  await follow(path, [[100, 100], [108, 110]], 150, [100, 0]);
+  const [first, last, height, at] = await view(code);
+  assert.ok(height >= 12, `the window is ${height} lines`);
+  assert.ok(first <= 100 && last >= 110, `${first}-${last} shows 100-110`);
+  assert.equal(at, 100); // The cursor stays on the first change.
+  // Centered: about as much room above the first change as below the last.
+  assert.ok(Math.abs((100 - first) - (last - 110)) <= 1, `${first}-${last} is centered on 100-110`);
+});
+
+test("'scrolloff' is kept, and changes too far apart to fit center on the first", async t => {
+  const { code } = await layout(t);
+  await lua(`vim.wo[...].scrolloff = 4`, code);
+  const path = await file('s2.txt', lines(200));
+  const [, , height] = await view(code);
+  // A span just too tall once scrolloff is kept above the cursor: the first change, centered.
+  const end = 100 + height - 4;
+  await follow(path, [[100, 100], [end, end]], 150, [100, 0]);
+  const [first, last, , at] = await view(code);
+  assert.equal(at, 100);
+  assert.ok(Math.abs((first + last) / 2 - 100) <= 1, `${first}-${last} is centered on 100`);
+  // One that fits with room for scrolloff: all of it, the cursor at least 4 lines from the top.
+  await follow(path, [[60, 60], [60 + height - 6, 60 + height - 6]], 150, [60, 0]);
+  const [top, bottom] = await view(code);
+  assert.ok(top <= 56 && bottom >= 60 + height - 6, `${top}-${bottom} shows 56-${60 + height - 6}`);
+});
+
+test('a single change is centered, as before', async t => {
+  const { code } = await layout(t);
+  const path = await file('s3.txt', lines(200));
+  await follow(path, [[120, 120]], 150, [120, 0]);
+  const [first, last] = await view(code);
+  assert.ok(Math.abs((first + last) / 2 - 120) <= 1, `${first}-${last} is centered on 120`);
+});
+
 test('the changed lines flash, then clear; a quick second change keeps its own', async t => {
   const { code } = await layout(t);
   const path = await file('l.txt', lines(20));

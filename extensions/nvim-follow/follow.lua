@@ -75,6 +75,24 @@ if cursor then
   local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
   -- In normal mode the cursor sits on a character, so the last one is as far as it goes.
   vim.api.nvim_win_set_cursor(win, { line, math.max(0, math.min(cursor[2], #text - 1)) })
-  vim.api.nvim_win_call(win, function() vim.cmd('normal! zz') end)
+  -- Every change in view when they fit, the span from the first to the last centered, the
+  -- cursor on the first kept 'scrolloff' lines from the top; otherwise the first, centered.
+  local top, bottom = line, line
+  for _, range in ipairs(ranges) do
+    top, bottom = math.min(top, math.min(range[1], count)), math.max(bottom, math.min(range[2], count))
+  end
+  local height = vim.api.nvim_win_get_height(win)
+  local scrolloff = vim.wo[win].scrolloff
+  if scrolloff < 0 then scrolloff = vim.o.scrolloff end
+  scrolloff = math.min(scrolloff, math.floor((height - 1) / 2))
+  local lowest, highest = math.max(1, bottom - height + 1), math.max(1, line - scrolloff)
+  vim.api.nvim_win_call(win, function()
+    if bottom > top and lowest <= highest then
+      local centered = math.floor((top + bottom + 1 - height) / 2)
+      vim.fn.winrestview({ topline = math.max(lowest, math.min(highest, centered)) })
+    else
+      vim.cmd('normal! zz')
+    end
+  end)
 end
 return 'shown'

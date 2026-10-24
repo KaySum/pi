@@ -24,6 +24,8 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
   text, if that occurs once. A write is shown at what it changed, a new file at its top. An
   added or removed line that could be placed several ways is placed at a line start, as diff
   tools do.
+- **View:** when the changes fit in the window, all of them are brought into view, the cursor
+  on the first; otherwise the first is centered. `scrolloff` is kept.
 - **Window:** one already showing the file; else the one you came from; else another normal
   window in the tab. The window you are in is used only in normal mode, and only when there
   is no other, so it is never taken while you type. Terminals, help and floating windows

@@ -149,6 +149,21 @@ test('several edits in one call: the first is where the cursor goes', async () =
   await shutdown();
 });
 
+test('several edits in one call are all brought into view when they fit', async () => {
+  const { follow, tool, shutdown } = await pi();
+  const code = await layout();
+  const path = join(dir, 'many.txt');
+  await writeFile(path, lines(300));
+  await follow('on');
+  const edits = [{ oldText: 'line 150\n', newText: 'one-fifty\n' }, { oldText: 'line 165\n', newText: 'one-sixty-five\n' }];
+  await tool('edit', { path: 'many.txt', edits }, text => edits.reduce((t, e) => t.replace(e.oldText, e.newText), text!));
+  await showing(code, path, 150);
+  const [first, last] = await lua(`local w = ...
+    return vim.api.nvim_win_call(w, function() return { vim.fn.line('w0'), vim.fn.line('w$') } end)`, code);
+  assert.ok(first <= 150 && last >= 165, `${first}-${last} shows both edits`);
+  await shutdown();
+});
+
 test('the legacy edit form and @ paths are followed too', async () => {
   const { follow, tool, shutdown } = await pi();
   const code = await layout();

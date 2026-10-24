@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch } from './service.mjs';
@@ -100,4 +100,28 @@ test('instances are independent', async () => {
   assert.ok(alive(second.pid));
   await b.stop();
   assert.ok(await gone(second, 0));
+});
+
+test('plugins named in the settings are disabled through lazy.nvim', async t => {
+  const directory = await mkdtemp('/tmp/pi-nvim-test-');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  // A stand-in for lazy.nvim's configuration module, added to the runtimepath as its bootstrap does.
+  await mkdir(join(directory, 'lazy/lua/lazy/core'), { recursive: true });
+  await writeFile(join(directory, 'lazy/lua/lazy/core/config.lua'),
+    "local M = { defaults = { defaults = {} } }\nfunction M.setup(opts) M.options = vim.tbl_deep_extend('force', M.defaults, opts) end\nreturn M");
+  const init = join(directory, 'init.lua');
+  await writeFile(init, `vim.opt.rtp:prepend(${JSON.stringify(join(directory, 'lazy'))})
+require('lazy.core.config').setup({ defaults = { cond = function(plugin) return plugin.name ~= 'user-off' end } })`);
+  const settings = join(directory, 'nvim-service.json');
+  await writeFile(settings, JSON.stringify({ disabledPlugins: ['pi-off'] }));
+
+  const service = launch({ ...fast, init, settings });
+  const rpc = await connectRpc((await service.ready).socket);
+  t.after(() => { rpc.close(); return service.stop(); });
+  const conds = await rpc.request('nvim_exec_lua', [
+    "local cond = require('lazy.core.config').options.defaults.cond\nreturn vim.tbl_map(function(name) return cond({ name = name }) end, { 'pi-off', 'user-off', 'on' })", []]);
+  assert.deepEqual(conds, [false, false, true]);
+
+  await writeFile(settings, '{ "disabledPlugins": "pi-off" }');
+  await assert.rejects(launch({ ...fast, init, settings }).ready, /must be JSON like/);
 });

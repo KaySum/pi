@@ -1,8 +1,9 @@
 // A separate process, because nothing in Pi can run after Pi is SIGKILLed.
 // stdin is the lifetime pipe: only Pi holds its writing end, so EOF means Pi is gone.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const config = JSON.parse(process.argv[2]);
 const timers = [];
@@ -57,7 +58,21 @@ process.on('exit', () => {
   if (child?.pid && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 });
 
+// The plugins that Pi's nvim-service.json keeps out of this instance.
+function disabledPlugins() {
+  if (!config.settings) return [];
+  let text;
+  try { text = readFileSync(config.settings, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  try {
+    const { disabledPlugins = [] } = JSON.parse(text);
+    if (Array.isArray(disabledPlugins) && disabledPlugins.every(name => typeof name === 'string')) return disabledPlugins;
+  } catch {}
+  throw new Error(`${config.settings} must be JSON like { "disabledPlugins": ["persistence.nvim"] }`);
+}
+
 function launch() {
+  const disabled = disabledPlugins();
   // A short path: Unix socket paths are limited and macOS's $TMPDIR is long. mkdtemp is 0700.
   directory = mkdtempSync('/tmp/pi-nvim-');
   const socket = join(directory, 'nvim.sock');
@@ -69,9 +84,10 @@ function launch() {
   if (config.init !== undefined) args.push('-u', config.init);
   // Ready means the user's configuration has loaded, not merely that the socket exists.
   args.push('--cmd', 'lua vim.api.nvim_create_autocmd("VimEnter", {once=true, callback=function() vim.schedule(function() local uv=vim.uv or vim.loop; uv.fs_write(3, "ready\\n", -1); uv.fs_close(3) end) end})');
-  // Registered before the configuration, so it runs first on exit: persistence.nvim would
-  // otherwise overwrite the user's session for this directory with this instance's buffers.
-  args.push('--cmd', 'lua vim.api.nvim_create_autocmd("VimLeavePre", {callback=function() local p=package.loaded.persistence; if p then p.stop() end end})');
+  if (disabled.length) {
+    env.PI_NVIM_DISABLED_PLUGINS = JSON.stringify(disabled);
+    args.push('--cmd', `lua dofile(${JSON.stringify(fileURLToPath(new URL('./disable.lua', import.meta.url)))})`);
+  }
   child = spawn(config.executable, args, { cwd: config.cwd, env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {}); // Neovim may close its end first.
   child.stdout.resume();

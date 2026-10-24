@@ -177,7 +177,10 @@ export function patchChanges(patch: string): Changes {
     if (!removed.length && !added.length) return;
     const at = line - added.length; // Where this run starts in the file after.
     if (added.length) ranges.push([at, at + added.length - 1]);
-    else deletions.push({ line: at, lines: removed });
+    // A shrinking replacement shows its old block above the new one. Ordinary one-for-one
+    // edits keep their existing, quieter display.
+    if (removed.length > added.length)
+      deletions.push({ line: at, lines: removed });
     cursor ??= [
       at,
       removed.length && added.length

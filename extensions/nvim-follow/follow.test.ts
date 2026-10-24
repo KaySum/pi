@@ -153,6 +153,66 @@ test("empty files show deleted text, and detach removes virtual lines", async (t
   assert.equal((await remaining()).length, 0);
 });
 
+test("a shrinking replacement displays deleted text and highlights the new line", async (t) => {
+  const { code } = await layout(t);
+  const path = await file("replacement.txt", "keep\nreplacement\nend\n");
+  await show(remote, [
+    path,
+    [[2, 2]],
+    1000,
+    "PiFollow",
+    [2, 0],
+    true,
+    [{ line: 2, lines: ["first", "second", "third"] }],
+  ]);
+  const details = await lua(
+    `local w = ...
+    local ns = require('nvim_remote.v1').contexts[${remote.channel}].nvim_follow.ns
+    return vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(w), ns, 0, -1, { details = true })`,
+    code,
+  );
+  assert.equal(details.length, 2);
+  assert.equal(details[0][3].hl_group, "PiFollow");
+  assert.deepEqual(details[1][3].virt_lines, [
+    [["first", "PiFollowDelete"]],
+    [["second", "PiFollowDelete"]],
+    [["third", "PiFollowDelete"]],
+  ]);
+  assert.equal(details[1][3].virt_lines_above, true);
+});
+
+test("older deletion timers leave newer virtual lines intact, including across files", async (t) => {
+  const { code } = await layout(t);
+  const a = await file("rapid-a.txt", "keep\n"),
+    b = await file("rapid-b.txt", "keep\n");
+  const display = (path: string, text: string, ms: number) =>
+    show(remote, [
+      path,
+      [],
+      ms,
+      "PiFollow",
+      [1, 0],
+      true,
+      [{ line: 1, lines: [text] }],
+    ]);
+  const deleted = (path: string) =>
+    lua(
+      `local path = ...
+    local ns = require('nvim_remote.v1').contexts[${remote.channel}].nvim_follow.ns
+    return vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, { details = true })`,
+      path,
+    );
+  await display(a, "old", 300);
+  await display(a, "new", 1500);
+  await display(b, "other file", 300);
+  await eventually(async () => (await deleted(b)).length === 0);
+  assert.deepEqual((await deleted(a))[0][3].virt_lines, [
+    [["new", "PiFollowDelete"]],
+  ]);
+  await eventually(async () => (await deleted(a)).length === 0);
+  void code;
+});
+
 // Where it shows
 
 test("the file opens beside Pi at the change, and Pi keeps focus and terminal mode", async (t) => {

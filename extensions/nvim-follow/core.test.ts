@@ -76,7 +76,21 @@ test("several edits in one call are each placed, shifted by those above them", a
       [9, 9],
     ],
     cursor: [2, 0],
+    deletions: [{ line: 7, lines: ["line 5", "line 6"] }],
   });
+});
+
+test("shrinking replacements show the removed block alongside the replacement", async () => {
+  assert.deepEqual(
+    await edited("keep\nfirst\nsecond\nthird\nend\n", [
+      { oldText: "first\nsecond\nthird\n", newText: "replacement\n" },
+    ]),
+    {
+      ranges: [[2, 2]],
+      cursor: [2, 0],
+      deletions: [{ line: 2, lines: ["first", "second", "third"] }],
+    },
+  );
 });
 
 test("a new text that also occurs elsewhere does not mislead", async () => {

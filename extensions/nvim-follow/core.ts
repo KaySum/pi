@@ -3,7 +3,24 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** follow.lua, which `show` sends once to each attachment. */
 export const FOLLOW = readFileSync(new URL('./follow.lua', import.meta.url), 'utf8');
+const SHOW = `local follow = remote.nvim_follow
+if not (follow and follow.show) then return 'not installed' end
+return follow.show(...)`;
+
+type Lua = { lua(code: string, args: unknown[], options?: { timeout?: number }): Promise<unknown> };
+
+/**
+ * Show a change in the editor (follow.lua's `show`, given `args`), installing follow.lua in
+ * this attachment first if it is not yet: afterwards only this one-line call is sent.
+ */
+export async function show(remote: Lua, args: unknown[], options?: { timeout?: number }) {
+  const shown = await remote.lua(SHOW, args, options);
+  if (shown !== 'not installed') return shown;
+  await remote.lua(FOLLOW, [], options);
+  return remote.lua(SHOW, args, options);
+}
 
 /** 1-based, inclusive lines of the file after the change. */
 export type Range = [first: number, last: number];

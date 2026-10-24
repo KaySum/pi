@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
 import { attach, connect, type Remote } from '../nvim-remote/remote.ts';
-import { FOLLOW, type Range } from './core.ts';
+import { FOLLOW, show, type Range } from './core.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -17,7 +17,7 @@ const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('
 const remote: Remote = await attach(socket, { onError: () => {} });
 after(() => remote.close());
 const follow = (path: string, ranges: Range[] = [], ms = 150, cursor: [number, number] | null = null, reread = true) =>
-  remote.lua(FOLLOW, [path, ranges, ms, 'PiFollow', cursor, reread]);
+  show(remote, [path, ranges, ms, 'PiFollow', cursor, reread]);
 
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-follow-')));
 after(() => rm(dir, { recursive: true, force: true }));
@@ -249,6 +249,25 @@ test('the buffer is found by its name, with the file system asked only once per 
   void code;
 });
 
+test('follow.lua is sent once to an attachment, then only called', async t => {
+  const { code } = await layout(t);
+  const fresh = await attach(socket, { onError: () => {} });
+  t.after(() => fresh.close());
+  const sent: string[] = [];
+  const counting = { lua: (code: string, args: unknown[], options?: { timeout?: number }) => { sent.push(code); return fresh.lua(code, args, options); } };
+  const path = await file('once-sent.txt', lines(5));
+  for (const line of [2, 3, 4]) assert.equal(await show(counting, [path, [[line, line]], 150, 'PiFollow', null, true]), 'shown');
+  assert.equal(sent.filter(c => c === FOLLOW).length, 1);
+  assert.ok(sent.filter(c => c !== FOLLOW).every(c => c.length < 200), 'every other call is the short one');
+  // A new attachment (after /reload, say) has it installed afresh.
+  const again = await attach(socket, { onError: () => {} });
+  t.after(() => again.close());
+  const sentAgain: string[] = [];
+  await show({ lua: (code, args, options) => { sentAgain.push(code); return again.lua(code, args, options); } }, [path, [[2, 2]], 150, 'PiFollow', null, true]);
+  assert.equal(sentAgain.filter(c => c === FOLLOW).length, 1);
+  void code;
+});
+
 // The cursor and the highlight
 
 test('ranges past the end are clamped, and no ranges leaves the cursor where it was', async t => {
@@ -355,7 +374,7 @@ test('highlights live apart from what other features put in remote.ns, and go on
     vim.cmd('badd ' .. vim.fn.fnameescape(path))
     vim.fn.bufload(vim.fn.bufnr(path))
     vim.api.nvim_buf_set_extmark(vim.fn.bufnr(path), remote.ns, 0, 0, { hl_group = 'Search', end_col = 1 })`, [path]);
-  await own.lua(FOLLOW, [path, [[2, 3]], 60000]);
+  await show(own, [path, [[2, 3]], 60000, 'PiFollow', null, true]);
   const count = (ns: string) => own.lua(`local path = ...
     local ns = ${ns}
     return #vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, {})`, [path]);

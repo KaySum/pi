@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { readFile } from 'node:fs/promises';
 import { useRemote } from '../nvim-remote/api.ts';
-import { FOLLOW, patchChanges, pathOf, readRanges, writeChanges, type Changes } from './core.ts';
+import { patchChanges, pathOf, readRanges, show as showIn, writeChanges, type Changes } from './core.ts';
 
 const HIGHLIGHT_MS = 1500;
 // Pi loads extensions afresh on /reload and for every session, in the same process; the
@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
     // Not awaited: Pi does not wait on the editor, and a busy one just misses a step.
     // A changed file is reread if the editor has it loaded; one only read need not be.
     const follow = ({ ranges, cursor }: Changes, what: 'change' | 'read') =>
-      void remote.lua(FOLLOW, [path, ranges, HIGHLIGHT_MS, what === 'read' ? 'PiFollowRead' : 'PiFollow', cursor ?? null, what === 'change'],
+      void showIn(remote, [path, ranges, HIGHLIGHT_MS, what === 'read' ? 'PiFollowRead' : 'PiFollow', cursor ?? null, what === 'change'],
         { timeout: 2000 }).catch(() => {});
     if (event.toolName === 'read') {
       // An image read is not for an editor.

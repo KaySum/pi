@@ -26,10 +26,10 @@ return { buffer = buf, file = vim.api.nvim_buf_get_name(buf), line = cursor[1], 
 type State = { buffer: number; file: string; line: number; column: number; modified: boolean; terminal: boolean; message: string };
 
 const PART_BYTES = 4096;
-// A key in Neovim notation, kept whole: modifiers (C-, S-, M-, A-, D-, T-), then a key's name
-// (Esc, F12, lt, ScrollWheelUp) or any one character, punctuation included (<C-]>, <C-\>,
-// <C->>). Anything else is one character.
-const KEY = /<(?:[CSMADTcsmadt]-)*(?:[A-Za-z0-9_]+|[^\s])>|[\s\S]/gu;
+// A key in Neovim notation, kept whole: modifiers (C-, S-, M-, A-, D-, T-), then a character
+// by number (Char-65, Char-0x41, Char-0101), a key's name (Esc, F12, lt, ScrollWheelUp) or any
+// one character, punctuation included (<C-]>, <C-\>, <C->>). Anything else is one character.
+const KEY = /<(?:[CSMADTcsmadt]-)*(?:[Cc][Hh][Aa][Rr]-(?:0[xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z0-9_]+|[^\s])>|[\s\S]/gu;
 // Refuses, with -1, while Pi's own terminal has focus; otherwise queues the keys. In one go in
 // the editor, so focus cannot move between the look and the typing.
 const TYPE = `local part = ...

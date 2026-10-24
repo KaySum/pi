@@ -447,3 +447,23 @@ test('running out of timeoutMs says the call did not finish, and stops waiting t
   await assert.rejects(run('nvim_control_lua', { code: 'vim.wait(250) return 1', timeoutMs: 150 }), /did not finish within 150 ms/);
   assert.ok(Date.now() - start < 400, `took ${Date.now() - start} ms`);
 });
+
+test('numeric key notation (<Char-65>, <Char-0x41>, <Char-0101>) is kept whole', () => {
+  for (const key of ['<Char-65>', '<Char-0x41>', '<Char-0101>', '<char-97>', '<C-Char-65>', '<Char-0X7E>']) {
+    for (let pad = 4084; pad <= 4097; pad++) {
+      const cut = parts('a'.repeat(pad) + key + 'b');
+      assert.ok(cut.some(part => part.includes(key)), `${key} after ${pad} bytes was split`);
+    }
+  }
+});
+
+test('numeric key notation reaches Neovim whole, wherever it falls', async t => {
+  const { run } = load(await attached(t));
+  for (const [key, typed] of [['<Char-65>', 'A'], ['<Char-0x42>', 'B'], ['<Char-0103>', 'C']]) {
+    for (const pad of [0, 4091, 4092, 4093]) {
+      const buf = await scratch();
+      await run('nvim_control_keys', { keys: `i${'x'.repeat(pad)}${key}<Esc>` });
+      assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), `${'x'.repeat(pad)}${typed}`, `${key} after ${pad}`);
+    }
+  }
+});

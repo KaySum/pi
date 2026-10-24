@@ -108,11 +108,16 @@ export type ViewHandle = {
  */
 export function useView(pi: ExtensionAPI, onChange?: (view: View) => void): ViewHandle {
   let latest: View | undefined;
+  // How many times the editor has gone: a refresh answered across a stop is no view.
+  let stops = 0;
   pi.events.on('nvim-view:changed', view => {
     latest = view as View;
     onChange?.(latest);
   });
-  pi.events.on('nvim-view:stopped', () => { latest = undefined; });
+  pi.events.on('nvim-view:stopped', () => {
+    latest = undefined;
+    stops++;
+  });
   const ask = () => pi.events.emit('nvim-view:get', { reply: (view?: View) => { latest = view; } });
   pi.on('session_start', ask);
   return Object.assign(() => {
@@ -121,12 +126,17 @@ export function useView(pi: ExtensionAPI, onChange?: (view: View) => void): View
   }, {
     refresh: () => new Promise<View | undefined>(resolve => {
       let answered = false;
+      const asked = stops;
       // A view that is new reaches every extension's `latest` and `onChange`, as
       // `nvim-view:changed`; this one's `latest` is the view in any case.
       pi.events.emit('nvim-view:refresh', {
         reply: (view: Promise<View | undefined>) => {
           answered = true;
-          resolve(view.then(fresh => (fresh && (latest = fresh), fresh)));
+          resolve(view.then(fresh => {
+            if (stops !== asked) return undefined;
+            if (fresh) latest = fresh;
+            return fresh;
+          }));
         },
       });
       if (!answered) resolve(undefined); // nvim-view is not loaded.

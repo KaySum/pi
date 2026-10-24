@@ -1,8 +1,9 @@
 -- Show `path` in the editor at `ranges` ({ first, last } lines), highlighted in `group` for
 -- `ms`, with the cursor at `cursor` ({ line, byte column }) or else the first range's start.
--- Runs through nvim-remote, with `remote` in scope. Returns what happened, so a file left
--- alone can be told from one shown.
-local path, ranges, ms, group, cursor = ...
+-- `reread` is for a file that changed: a buffer already loaded is read again. Runs through
+-- nvim-remote, with `remote` in scope. Returns what happened, so a file left alone can be
+-- told from one shown.
+local path, ranges, ms, group, cursor, reread = ...
 
 -- This attachment's own highlights, apart from what other features put in remote.ns, and
 -- gone with it.
@@ -43,11 +44,14 @@ local win = vim.iter(wins):find(function(w) return w ~= current and vim.api.nvim
   or (vim.tbl_contains(wins, current) and current)
 if not win then return 'no window' end
 
--- keepjumps and keepalt: <C-o> and <C-^> stay the user's, not a trail of Pi's files.
+-- keepjumps and keepalt: <C-o> and <C-^> stay the user's, not a trail of Pi's files. Each
+-- read from disk runs filetype detection, parsing and the language servers again, so a file
+-- is read once at most: when it is opened, or when one already loaded has changed.
+local loaded = buf ~= nil and vim.api.nvim_buf_is_loaded(buf)
 local ok, err = pcall(vim.api.nvim_win_call, win, function()
-  vim.cmd('keepjumps keepalt edit ' .. vim.fn.fnameescape(path))
-  -- Switching to a buffer already loaded does not reread it.
-  vim.cmd('keepjumps keepalt edit')
+  if not buf then return vim.cmd('keepjumps keepalt edit ' .. vim.fn.fnameescape(path)) end
+  if vim.api.nvim_win_get_buf(win) ~= buf then vim.cmd('keepjumps keepalt buffer ' .. buf) end
+  if loaded and reread then vim.cmd('keepjumps keepalt edit') end
 end)
 if not ok then return err end
 

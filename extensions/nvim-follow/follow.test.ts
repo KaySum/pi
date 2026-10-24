@@ -16,8 +16,8 @@ after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
 const remote: Remote = await attach(socket, { onError: () => {} });
 after(() => remote.close());
-const follow = (path: string, ranges: Range[] = [], ms = 150, cursor: [number, number] | null = null) =>
-  remote.lua(FOLLOW, [path, ranges, ms, 'PiFollow', cursor]);
+const follow = (path: string, ranges: Range[] = [], ms = 150, cursor: [number, number] | null = null, reread = true) =>
+  remote.lua(FOLLOW, [path, ranges, ms, 'PiFollow', cursor, reread]);
 
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-follow-')));
 after(() => rm(dir, { recursive: true, force: true }));
@@ -142,6 +142,33 @@ test('a file already open is reread', async t => {
   await follow(path, [[1, 1]]);
   assert.deepEqual(await lua(`return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, -1, true)`, path), ['new']);
   void code;
+});
+
+test('a file is read from disk once per follow, and not at all to show a read of one loaded', async t => {
+  const { code } = await layout(t);
+  await lua(`_G.reads = {}
+    vim.api.nvim_create_autocmd('BufReadPost', { group = vim.api.nvim_create_augroup('count-reads', {}), callback = function(ev)
+      _G.reads[ev.file] = (_G.reads[ev.file] or 0) + 1
+    end })`);
+  t.after(() => lua(`vim.api.nvim_del_augroup_by_name('count-reads')`));
+  const reads = async (path: string) => (await lua('return _G.reads[...] or 0', path)) as number;
+  const path = await file('once.txt', lines(5));
+  await follow(path, [[2, 2]]); // Not loaded yet: opened.
+  assert.equal(await reads(path), 1);
+  await follow(path, [[3, 3]]); // Loaded and shown: reread for the change.
+  assert.equal(await reads(path), 2);
+  await lua('vim.api.nvim_win_call(..., function() vim.cmd.enew() end)', code); // Loaded, hidden.
+  await follow(path, [[4, 4]]);
+  assert.equal(await reads(path), 3);
+  await lua('vim.api.nvim_win_call(..., function() vim.cmd.enew() end)', code);
+  await follow(path, [[4, 4]], 150, null, false); // A read: switched to, not reread.
+  assert.equal(await reads(path), 3);
+  assert.deepEqual(await shown(code), [path, 4]);
+  // Listed but never loaded (:badd): loaded once, not then reread.
+  const listed = await file('listed.txt', lines(5));
+  await lua('vim.cmd.badd(vim.fn.fnameescape(...))', listed);
+  await follow(listed, [[2, 2]]);
+  assert.equal(await reads(listed), 1);
 });
 
 test('unsaved changes are never reloaded over', async t => {

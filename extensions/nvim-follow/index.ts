@@ -52,11 +52,13 @@ export default function (pi: ExtensionAPI) {
     const remote = nvim();
     if (state.mode === 'off' || event.isError || !path || !remote) return;
     // Not awaited: Pi does not wait on the editor, and a busy one just misses a step.
-    const follow = ({ ranges, cursor }: Changes, group: string) =>
-      void remote.lua(FOLLOW, [path, ranges, HIGHLIGHT_MS, group, cursor ?? null], { timeout: 2000 }).catch(() => {});
+    // A changed file is reread if the editor has it loaded; one only read need not be.
+    const follow = ({ ranges, cursor }: Changes, what: 'change' | 'read') =>
+      void remote.lua(FOLLOW, [path, ranges, HIGHLIGHT_MS, what === 'read' ? 'PiFollowRead' : 'PiFollow', cursor ?? null, what === 'change'],
+        { timeout: 2000 }).catch(() => {});
     if (event.toolName === 'read') {
       // An image read is not for an editor.
-      if (state.mode === 'all' && !event.content.some(block => block.type === 'image')) follow({ ranges: readRanges(event.input) }, 'PiFollowRead');
+      if (state.mode === 'all' && !event.content.some(block => block.type === 'image')) follow({ ranges: readRanges(event.input) }, 'read');
       return;
     }
     if (event.toolName === 'edit') {
@@ -64,11 +66,11 @@ export default function (pi: ExtensionAPI) {
       const line = typeof details?.firstChangedLine === 'number' ? details.firstChangedLine : undefined;
       // Without a patch (another edit tool, say), the first changed line if given, else just the file.
       return follow(typeof details?.patch === 'string' ? patchChanges(details.patch)
-        : line ? { ranges: [[line, line]], cursor: [line, 0] } : { ranges: [] }, 'PiFollow');
+        : line ? { ranges: [[line, line]], cursor: [line, 0] } : { ranges: [] }, 'change');
     }
     if (event.toolName !== 'write' || typeof event.input.content !== 'string') return;
     const changed = writeChanges(had ? old : undefined, event.input.content);
-    follow(changed, 'PiFollow');
+    follow(changed, 'change');
   });
 
   pi.registerCommand('follow', {

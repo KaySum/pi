@@ -4,14 +4,14 @@ Watch Pi work: with following on, every file Pi edits or writes (and, if you lik
 opens in the Neovim Pi runs inside, at the lines it changed, which flash briefly. Pi keeps focus. Built on
 [nvim-remote](../nvim-remote/README.md), and needs no install.
 
-| `/follow` | |
-| --- | --- |
-| `on` | Follow what Pi edits and writes. |
-| `all` | Follow what it reads as well. |
-| `off` | Stop following. |
-| *(nothing)* | Switch off, or back to whichever of `on` and `all` was last used. |
+| `/follow`   |                                                                   |
+| ----------- | ----------------------------------------------------------------- |
+| `on`        | Follow what Pi edits and writes.                                  |
+| `all`       | Follow what it reads as well.                                     |
+| `off`       | Stop following.                                                   |
+| _(nothing)_ | Switch off, or back to whichever of `on` and `all` was last used. |
 
-The options are offered as completions after `/follow `. It starts off, and keeps its
+The options are offered as completions after `/follow`. It starts off, and keeps its
 setting across `/reload` and session switches until Pi exits. While following and attached,
 the status bar shows `following edits` or `following all` (status key `nvim-follow`).
 
@@ -35,8 +35,11 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
 - **Reads:** a read is shown at the lines it asked for (`offset` and `limit`); one of a whole
   file just opens it. Image reads and failed ones are not shown.
 - **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `IncSearch`, and
-  the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. A highlight
-  still showing when Pi detaches goes with it.
+  the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. Pure deletions
+  show the removed text as temporary virtual lines with its original indentation, in `PiFollowDelete`
+  (linked to `DiffDelete`), above their former boundary or below the last line at EOF. The
+  surviving line is not highlighted; the cursor stays at the deletion boundary. Highlights
+  and virtual lines still showing when Pi detaches go with it.
 
 Pi never waits on the editor: a busy or prompting one just misses a step.
 

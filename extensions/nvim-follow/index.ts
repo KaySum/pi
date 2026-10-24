@@ -53,8 +53,8 @@ export default function (pi: ExtensionAPI) {
     if (state.mode === 'off' || event.isError || !path || !remote) return;
     // Not awaited: Pi does not wait on the editor, and a busy one just misses a step.
     // A changed file is reread if the editor has it loaded; one only read need not be.
-    const follow = ({ ranges, cursor }: Changes, what: 'change' | 'read') =>
-      void showIn(remote, [path, ranges, HIGHLIGHT_MS, what === 'read' ? 'PiFollowRead' : 'PiFollow', cursor ?? null, what === 'change'],
+    const follow = ({ ranges, cursor, deletions }: Changes, what: 'change' | 'read') =>
+      void showIn(remote, [path, ranges, HIGHLIGHT_MS, what === 'read' ? 'PiFollowRead' : 'PiFollow', cursor ?? null, what === 'change', deletions ?? []],
         { timeout: 2000 }).catch(() => {});
     if (event.toolName === 'read') {
       // An image read is not for an editor.

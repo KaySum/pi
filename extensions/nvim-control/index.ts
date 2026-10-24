@@ -8,8 +8,10 @@ const timeoutMs = Type.Optional(Type.Integer({ minimum: 100, maximum: 60000, des
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 function result(text: string) {
+  // Not between the two halves of a character outside the BMP (an emoji, say).
+  const end = /[\uD800-\uDBFF]/.test(text[OUTPUT_LIMIT - 1] ?? '') ? OUTPUT_LIMIT - 1 : OUTPUT_LIMIT;
   const clipped = text.length > OUTPUT_LIMIT
-    ? `${text.slice(0, OUTPUT_LIMIT)}\n[Truncated: ${OUTPUT_LIMIT} of ${text.length} characters shown. Ask for less.]` : text;
+    ? `${text.slice(0, end)}\n[Truncated: ${end} of ${text.length} characters shown. Ask for less.]` : text;
   return { content: [{ type: 'text' as const, text: clipped }], details: {} };
 }
 

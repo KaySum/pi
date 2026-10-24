@@ -411,3 +411,14 @@ test("answering a prompt does not let the keys after the answer into Pi's termin
     await editor.request('nvim_ui_detach');
   }
 });
+
+test('output is never cut inside a character', async t => {
+  const { run } = load(await attached(t));
+  for (const prefix of ['a', '']) { // Odd and even: the cut falls inside an emoji, or between two.
+    const shown = await run('nvim_control_lua', { code: `return ... .. string.rep('🦀', 9000)`, args: [prefix] });
+    const body = shown.slice(0, shown.indexOf('\n[Truncated'));
+    assert.ok(body.isWellFormed(), `with ${JSON.stringify(prefix)} in front, the cut split an emoji`);
+    assert.ok(body.length >= 16383 && body.length <= 16384);
+    assert.match(shown, new RegExp(`\\[Truncated: ${body.length} of ${prefix.length + 18000} characters shown`));
+  }
+});

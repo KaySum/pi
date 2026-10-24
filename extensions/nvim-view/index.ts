@@ -6,7 +6,8 @@ import { bufferOf, type Layout, type View } from './api.ts';
 
 /** view.lua, installed in each attachment: it sends a view whenever the editor's changes. */
 const MODULE = readFileSync(new URL('./view.lua', import.meta.url), 'utf8');
-const SNAPSHOT = 'return remote.nvim_view and remote.nvim_view.snapshot() or vim.NIL';
+// A view now, and whether it is new: one sent, as if it had come by itself.
+const SNAPSHOT = 'if not remote.nvim_view then return vim.NIL end return { remote.nvim_view.current() }';
 
 type Stats = { count: number; built: number };
 
@@ -64,14 +65,17 @@ export default function (pi: ExtensionAPI) {
   let attached: Remote | undefined;
 
   const install = (remote: Remote) => remote.lua(MODULE);
+  const publish = (view: View) => {
+    latest = view;
+    pi.events.emit('nvim-view:changed', view);
+  };
 
   const nvim = useRemote(pi, remote => {
     attached = remote;
     remote.on('nvim-view:changed', (view: View, sent: Stats) => {
       if (attached !== remote) return;
-      latest = view;
       stats = sent;
-      pi.events.emit('nvim-view:changed', view);
+      publish(view);
     });
     // Not awaited: Pi does not wait on the editor; a refresh installs it if this could not.
     void install(remote).catch(() => {});
@@ -85,12 +89,18 @@ export default function (pi: ExtensionAPI) {
   async function refresh() {
     const remote = nvim();
     if (!remote) return undefined;
-    let view = await remote.lua(SNAPSHOT) as View | null;
-    if (!view) {
+    let answer = await remote.lua(SNAPSHOT) as [View, boolean] | null;
+    if (!answer) {
       await install(remote);
-      view = await remote.lua(SNAPSHOT) as View | null;
+      answer = await remote.lua(SNAPSHOT) as [View, boolean] | null;
     }
-    return (latest = view ?? undefined);
+    // Asked of an editor since gone, or replaced: its answer is no longer the view.
+    if (!answer || attached !== remote) return undefined;
+    const [view, changed] = answer;
+    // New, it goes to everyone, as a view sent by itself would.
+    if (changed) publish(view);
+    else latest = view;
+    return view;
   }
 
   pi.events.on('nvim-view:get', request => (request as { reply?: (view?: View) => void })?.reply?.(latest));

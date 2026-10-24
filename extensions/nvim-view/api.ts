@@ -88,15 +88,16 @@ export type View = {
   omitted: number;
 };
 
-export const windowOf = (view: View, id: number | undefined) => view.windows.find(win => win.id === id);
-export const bufferOf = (view: View, id: number | undefined) => view.buffers.find(buf => buf.id === id);
+// Lookups in a view, or in none: `windowOf(view(), id)` while not attached is undefined.
+export const windowOf = (view: View | undefined, id: number | undefined) => view?.windows.find(win => win.id === id);
+export const bufferOf = (view: View | undefined, id: number | undefined) => view?.buffers.find(buf => buf.id === id);
 /** The buffer of a file, by its absolute path. */
-export const bufferFor = (view: View, path: string) => view.buffers.find(buf => buf.name === path);
+export const bufferFor = (view: View | undefined, path: string) => view?.buffers.find(buf => buf.name === path);
 
 export type ViewHandle = {
   /** The latest view, at once; undefined while Pi is not attached to Neovim. */
   (): View | undefined;
-  /** A view made now, rather than the latest sent. */
+  /** A view made now, rather than the latest sent: the latest from then, for every extension. */
   refresh(): Promise<View | undefined>;
 };
 
@@ -120,7 +121,14 @@ export function useView(pi: ExtensionAPI, onChange?: (view: View) => void): View
   }, {
     refresh: () => new Promise<View | undefined>(resolve => {
       let answered = false;
-      pi.events.emit('nvim-view:refresh', { reply: (view: Promise<View | undefined>) => { answered = true; resolve(view); } });
+      // A view that is new reaches every extension's `latest` and `onChange`, as
+      // `nvim-view:changed`; this one's `latest` is the view in any case.
+      pi.events.emit('nvim-view:refresh', {
+        reply: (view: Promise<View | undefined>) => {
+          answered = true;
+          resolve(view.then(fresh => (fresh && (latest = fresh), fresh)));
+        },
+      });
       if (!answered) resolve(undefined); // nvim-view is not loaded.
     }),
   });

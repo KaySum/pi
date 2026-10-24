@@ -82,8 +82,10 @@ local function window(win, current, previous, cwd)
 		leftcol = view.leftcol,
 		skipcol = view.skipcol,
 		cursor = { cursor[1], cursor[2] },
-		-- getcwd() for a window is slow; most have no directory of their own.
-		cwd = vim.fn.haslocaldir(info.winnr, info.tabnr) ~= 0 and vim.fn.getcwd(info.winnr, info.tabnr) or cwd,
+		-- getcwd() for a window is slow; most have no directory of their own, nor their tab.
+		cwd = (vim.fn.haslocaldir(info.winnr, info.tabnr) ~= 0 or vim.fn.haslocaldir(-1, info.tabnr) ~= 0)
+				and vim.fn.getcwd(info.winnr, info.tabnr)
+			or cwd,
 		float = config.relative ~= "" and {
 			relative = config.relative,
 			zindex = config.zindex,
@@ -192,16 +194,38 @@ function state.snapshot()
 	}
 end
 
--- Build a snapshot and send it, if it is not the one sent last.
-local function send()
+--- A snapshot now, and whether it differs from the last sent: if so, it is the last sent.
+function state.current()
 	local start = vim.uv.hrtime()
 	local view = state.snapshot()
 	state.built = (vim.uv.hrtime() - start) / 1e6
 	if vim.deep_equal(view, state.sent) then
-		return
+		return view, false
 	end
 	state.sent, state.count = view, state.count + 1
-	remote.notify("nvim-view:changed", view, { count = state.count, built = state.built })
+	return view, true
+end
+
+-- Send a snapshot, if it is not the one sent last.
+local function send()
+	local view, changed = state.current()
+	if changed then
+		remote.notify("nvim-view:changed", view, { count = state.count, built = state.built })
+	end
+end
+
+-- Where the floats are: moving one by the API fires no autocommand, so after each command,
+-- while idle, this is compared; a cheap look, unlike a snapshot, which here would loop.
+local function floats()
+	local where = {}
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		local config = vim.api.nvim_win_get_config(win)
+		if config.relative ~= "" then
+			local row, col = unpack(vim.api.nvim_win_get_position(win))
+			table.insert(where, table.concat({ win, row, col, config.width, config.height, config.zindex or 0 }, ","))
+		end
+	end
+	return table.concat(where, ";")
 end
 
 state.timer = vim.uv.new_timer()
@@ -217,6 +241,16 @@ local function changed()
 		end
 	end))
 end
+vim.api.nvim_create_autocmd("SafeState", {
+	group = remote.group,
+	callback = function()
+		local where = floats()
+		if where ~= state.floats then
+			state.floats = where
+			changed()
+		end
+	end,
+})
 vim.api.nvim_create_autocmd(EVENTS, {
 	group = remote.group,
 	callback = function(ev)

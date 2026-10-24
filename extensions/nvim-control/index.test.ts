@@ -477,3 +477,21 @@ test('whatever a call is aborted with, null included, is what it rejects with', 
     }
   }
 });
+
+test('time running out inside a request while typing still says how much was typed', async t => {
+  const { remote } = typing(await attached(t), async (n, type) => {
+    const value = await type();
+    // The editor turns busy right after the first part, handling nothing for a while.
+    if (n === 1) editor.notify('nvim_exec_lua', ['local s = vim.uv.hrtime(); while vim.uv.hrtime() - s < 6e8 do end', []]);
+    return value;
+  });
+  const { run } = load(remote);
+  await scratch();
+  try {
+    await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(10000)}<Esc>`, timeoutMs: 200 }),
+      /timeoutMs ran out after typing 4096 of \d+ bytes of keys; the rest were not typed/);
+  } finally {
+    await lua('return 1'); // Once the editor is free again.
+    await editor.request('nvim_input', ['<Esc>']);
+  }
+});

@@ -187,25 +187,31 @@ export default function (pi: ExtensionAPI) {
       // Neovim's input buffer holds about 16 KB and takes only what fits, so the keys go in
       // parts well below that, each once the one before is taken.
       const keys = Array.from(params.keys.matchAll(KEY), ([key]) => key);
-      for (let at = 0; at < keys.length;) {
-        inTime();
-        // At a prompt the editor runs no Lua, so the focus cannot be checked: only the one key
-        // that answers it goes in that way. The keys after it may go anywhere once it closes,
-        // so they wait for the check, as any others do.
-        const { blocking } = await remote.request('nvim_get_mode', [], options) as { blocking: boolean };
-        const [part, next] = blocking ? [keys[at], at + 1] : partOf(keys, at);
-        at = next;
-        const written = blocking ? await remote.request('nvim_input', [part], options) as number : await remote.lua(TYPE, [part], options) as number;
-        if (written < 0) {
-          throw new Error(typed
-            ? `Stopped after typing ${typed} of ${total} bytes of keys: focus moved to Pi's own terminal, where the rest would be typed into Pi`
-            : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with nvim_control_lua first, or use nvim_control_lua.");
+      try {
+        for (let at = 0; at < keys.length;) {
+          inTime();
+          // At a prompt the editor runs no Lua, so the focus cannot be checked: only the one key
+          // that answers it goes in that way. The keys after it may go anywhere once it closes,
+          // so they wait for the check, as any others do.
+          const { blocking } = await remote.request('nvim_get_mode', [], options) as { blocking: boolean };
+          const [part, next] = blocking ? [keys[at], at + 1] : partOf(keys, at);
+          at = next;
+          const written = blocking ? await remote.request('nvim_input', [part], options) as number : await remote.lua(TYPE, [part], options) as number;
+          if (written < 0) {
+            throw new Error(typed
+              ? `Stopped after typing ${typed} of ${total} bytes of keys: focus moved to Pi's own terminal, where the rest would be typed into Pi`
+              : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with nvim_control_lua first, or use nvim_control_lua.");
+          }
+          typed += written;
+          if (written < Buffer.byteLength(part)) {
+            throw new Error(`Neovim took only ${written} of ${Buffer.byteLength(part)} bytes of keys; the rest were not typed`);
+          }
+          await taken();
         }
-        typed += written;
-        if (written < Buffer.byteLength(part)) {
-          throw new Error(`Neovim took only ${written} of ${Buffer.byteLength(part)} bytes of keys; the rest were not typed`);
-        }
-        await taken();
+      } catch (error) {
+        // However far a request had got when the time ran out, say how much was typed.
+        if (/did not answer within/.test(errorText(error))) throw new Error(`timeoutMs ran out after typing ${typed} of ${total} bytes of keys; the rest were not typed`);
+        throw error;
       }
       const mode = await remote.request('nvim_get_mode', [], options) as { mode: string; blocking: boolean };
       if (mode.blocking) return result(`mode ${mode.mode} (waiting at a prompt: answer it with nvim_control_keys, often <CR> or <Esc>)`);

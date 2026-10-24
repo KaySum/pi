@@ -69,7 +69,7 @@ dependency install, RPC client or discovery code is needed in the consumer.
 | `screen({ signal }?)` | The rendered screen as text, including floating windows, popups and prompts. |
 | `on(name, handler)`, `channel` | Receive `rpcnotify(channel, name, ...)`, or answer `rpcrequest`. Returns an unsubscribe. |
 | `resize(columns, rows)` | Change the UI size (default 120×40). |
-| `connect()` | A separate RPC channel (`request`, `notify`, `on`, `close`, `channel`). |
+| `connect()` | A separate RPC channel (`request`, `notify`, `on`, `onClose`, `close`, `channel`). |
 | `restart()` | Replace the instance; resolves to the new handle. |
 | `apiVersion` | `1` |
 

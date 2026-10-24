@@ -86,14 +86,17 @@ test('a span of characters, and a sign by the line', async () => {
   assert.deepEqual([signRow, sign.sign_text.trim(), sign.sign_hl_group], [0, '▶', 'WarningMsg']);
 });
 
-/** The editor's screen as the user sees it, 60 by 8, while `work` runs. */
-async function screen<T>(work: (rows: () => Promise<string[]>) => Promise<T>) {
+/** The editor's screen as the user sees it, 60 by 8, while `work` runs; `resize` resizes it. */
+async function screen<T>(work: (rows: () => Promise<string[]>, resize: (width: number, height: number) => Promise<unknown>) => Promise<T>) {
   const ui = await connect(socket);
   const grid = createScreen();
   ui.on('redraw', (...batches: unknown[]) => grid.apply(batches));
   try {
     await ui.request('nvim_ui_attach', [60, 8, { ext_linegrid: true }]);
-    return await work(async () => { await lua('vim.cmd.redraw()'); await delay(50); return grid.lines(); });
+    return await work(
+      async () => { await lua('vim.cmd.redraw()'); await delay(50); return grid.lines(); },
+      (width, height) => ui.request('nvim_ui_try_resize', [width, height]),
+    );
   } finally { ui.close(); }
 }
 
@@ -164,6 +167,23 @@ test('fill gives blank lines and indentation the background too', async () => {
     assert.equal(words(line).length, columns);
     assert.ok(line.every((chunk: string[]) => chunk[1] === 'DiffDelete'), JSON.stringify(line));
   }
+});
+
+test('fill measures a tab where it falls, and fills again when the editor grows', async () => {
+  const path = await file();
+  await open(path);
+  const padded = async () => {
+    const [[, , details]] = await shown(path);
+    return lua('local width = 0; for _, c in ipairs(...) do width = width + vim.fn.strdisplaywidth(c[1], width) end; return width', details.virt_lines[0]);
+  };
+  await text.place({ path, line: 2, text: [['a', 'Title'], ['\t', 'ErrorMsg']], position: 'below', fill: true });
+  assert.equal(await padded(), await lua('return vim.o.columns'));
+  await screen(async (_rows, resize) => {
+    await resize(100, 8);
+    await delay(50);
+    assert.equal(await lua('return vim.o.columns'), 100);
+    assert.equal(await padded(), 100);
+  });
 });
 
 test('a style of its own becomes a highlight group, kept across a colorscheme', async () => {
@@ -284,6 +304,25 @@ test('a mark changed while hidden stays hidden until undo, then shows the change
   assert.equal((await shown(path)).length, 1);
 });
 
+test('a mark changed while hidden comes back with every undo, not only the first', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  const [id] = await text.place({ path, line: 2, text: 'OLD', invalidate: true });
+  await lua('vim.cmd("normal! 2Gdd")');
+  await text.update(id, { text: 'NEW' });
+  await screen(async rows => {
+    for (const cycle of [1, 2, 3]) {
+      await lua('vim.cmd.undo()');
+      assert.ok((await rows()).some(row => /^target +NEW/.test(row)), `undo ${cycle}`);
+      assert.equal((await text.list())[0].invalid, undefined);
+      await lua('vim.cmd.redo()');
+      assert.ok(!(await rows()).some(row => /NEW|OLD/.test(row)), `redo ${cycle}`);
+      assert.equal((await text.list())[0].invalid, true);
+    }
+  });
+  assert.deepEqual((await text.list()).map(m => m.id), [id]);
+});
+
 test('a reload that brings back a hidden mark\'s text shows it again, where it was', async () => {
   const path = await file('a\ntarget\nb\n');
   await open(path);
@@ -292,6 +331,7 @@ test('a reload that brings back a hidden mark\'s text shows it again, where it w
   await lua('vim.cmd("edit!")');
   const [mark] = await text.list();
   assert.deepEqual([mark.line, mark.invalid], [2, undefined]);
+  assert.ok((await extmarks(path)).every(m => !m[3].invalid));
 });
 
 test('a mark that cannot be drawn leaves nothing drawn, placed or updated', async () => {

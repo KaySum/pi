@@ -16,7 +16,8 @@ local DEFAULTS = {
 local state = remote.nvim_virtual_text
 if not state then
 	-- `marks[id]` is { group, spec, ns, extmarks, anchor, generation, stale }: `spec` is the mark as
-	-- given, its file resolved to `buf`; `extmarks[1]` spans its lines and moves with them, and
+	-- given, its file resolved to `buf`; `extmarks` by part (`span`, `sign`, `text`), the span
+	-- covering its lines and moving with them; and
 	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables.
@@ -52,6 +53,13 @@ if not state then
 		group = remote.group,
 		callback = function(ev)
 			state.reanchor(ev.buf)
+		end,
+	})
+	-- Filled lines are padded to the editor's width, which has changed.
+	vim.api.nvim_create_autocmd("VimResized", {
+		group = remote.group,
+		callback = function()
+			state.refill()
 		end,
 	})
 	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
@@ -132,10 +140,11 @@ local function text_width(buf)
 	return width > 0 and width or vim.o.columns
 end
 
+-- Measured in sequence: a tab's width depends on the column it starts at.
 local function width_of(chunks)
 	local width = 0
 	for _, chunk in ipairs(chunks) do
-		width = width + vim.fn.strdisplaywidth(chunk[1])
+		width = width + vim.fn.strdisplaywidth(chunk[1], width)
 	end
 	return width
 end
@@ -280,12 +289,13 @@ local function locate(buf, needles, near)
 end
 
 local function delete(buf, ns, extmarks)
-	for _, extmark in ipairs(extmarks) do
+	for _, extmark in pairs(extmarks) do
 		pcall(vim.api.nvim_buf_del_extmark, buf, ns, extmark)
 	end
 end
 
-local function render(buf, ns, spec, strict, extmarks)
+-- `reuse`: the extmarks to draw over, by part, keeping their ids.
+local function render(buf, ns, spec, strict, extmarks, reuse)
 	local needles = spec.match and needles_of(spec.match)
 	if needles then
 		local found = locate(buf, needles, spec.line or 1)
@@ -301,8 +311,9 @@ local function render(buf, ns, spec, strict, extmarks)
 	end
 	local first, last = row(spec.line), row(spec.endLine or spec.line)
 	local base = { priority = spec.priority, invalidate = spec.invalidate, strict = false }
-	local function put(line, col, opts)
-		table.insert(extmarks, vim.api.nvim_buf_set_extmark(buf, ns, line, col, vim.tbl_extend("force", base, opts)))
+	local function put(part, line, col, opts)
+		opts = vim.tbl_extend("force", base, opts, { id = reuse[part] })
+		extmarks[part] = vim.api.nvim_buf_set_extmark(buf, ns, line, col, opts)
 	end
 
 	-- First, as `current` reads it: whole lines unless columns are given, then characters.
@@ -315,12 +326,12 @@ local function render(buf, ns, spec, strict, extmarks)
 	else
 		span.end_row, span.end_col, span.hl_eol = last + 1, 0, spec.highlight ~= nil
 	end
-	put(first, col, span)
+	put("span", first, col, span)
 
 	-- On a span, a sign would show on every line of it.
 	if spec.sign then
 		local sign = type(spec.sign) == "string" and { spec.sign } or spec.sign
-		put(first, 0, {
+		put("sign", first, 0, {
 			sign_text = sign[1],
 			sign_hl_group = highlight(sign[2]) or highlight(spec.hl) or "PiVirtualText",
 		})
@@ -346,21 +357,40 @@ local function render(buf, ns, spec, strict, extmarks)
 				opts.virt_text_pos = POSITIONS[position]
 			end
 		end
-		put(at, (position == "overlay" or position == "inline") and spec.col or 0, opts)
+		put("text", at, (position == "overlay" or position == "inline") and spec.col or 0, opts)
 	end
 	return needles or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
 end
 
 -- Draw `spec`; returns its namespace, extmarks and anchor. `strict`: a `match` not found
 -- fails, rather than leave the mark where it was. One that fails leaves nothing drawn.
-local function draw(group, spec, strict)
+-- `old`: the mark this replaces, drawn over in its buffer, so that undo, which restores
+-- extmarks by id, still knows them; its parts not drawn now go. One hidden by a deletion is
+-- drawn anew: drawn over where it is, Neovim would keep it hidden.
+local function draw(group, spec, strict, old)
 	local buf, ns = buffer(spec), namespace(group)
 	spec.buf, spec.path = buf, nil
+	local reuse = {}
+	if old and old.spec.buf == buf and old.ns == ns then
+		for part, extmark in pairs(old.extmarks) do
+			local found = vim.api.nvim_buf_get_extmark_by_id(buf, ns, extmark, { details = true })
+			if found[1] and not found[3].invalid then
+				reuse[part] = extmark
+			end
+		end
+	end
 	local extmarks = {}
-	local ok, anchor = pcall(render, buf, ns, spec, strict, extmarks)
+	local ok, anchor = pcall(render, buf, ns, spec, strict, extmarks, reuse)
 	if not ok then
-		delete(buf, ns, extmarks)
+		delete(buf, ns, vim.tbl_filter(function(extmark)
+			return not vim.tbl_contains(vim.tbl_values(reuse), extmark)
+		end, vim.tbl_values(extmarks)))
 		error(anchor, 0)
+	end
+	if old then
+		delete(old.spec.buf, old.ns, vim.tbl_filter(function(extmark)
+			return not vim.tbl_contains(vim.tbl_values(extmarks), extmark)
+		end, vim.tbl_values(old.extmarks)))
 	end
 	return ns, extmarks, anchor
 end
@@ -382,7 +412,7 @@ end
 -- them has hidden it.
 local function current(mark)
 	local spec = vim.deepcopy(mark.spec)
-	local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, mark.extmarks[1], { details = true })
+	local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, mark.extmarks.span, { details = true })
 	if not found[1] then
 		return spec, false
 	end
@@ -410,16 +440,17 @@ local function arm(id, mark)
 	end
 end
 
--- Draw `spec` as mark `id`, in place of what it was only once drawn. `moved`: only moved, so
--- a `ttl` runs on as it was.
+-- Draw `spec` as mark `id`, over what it was. `moved`: only moved, so a `ttl` runs on as it was.
 local function install(id, group, spec, strict, moved)
-	local mark = { group = group, spec = spec }
-	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, strict)
 	local old = state.marks[id]
-	if old then
-		erase(old)
-		mark.generation = old.generation
+	if old and not moved then
+		-- Drawn apart first: one that cannot be drawn fails before the old is touched.
+		local trial = vim.deepcopy(spec)
+		local ns, extmarks = draw(group, trial, strict)
+		delete(trial.buf, ns, extmarks)
 	end
+	local mark = { group = group, spec = spec, generation = old and old.generation }
+	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, strict, old)
 	state.marks[id] = mark
 	if not moved then
 		arm(id, mark)
@@ -461,8 +492,9 @@ function state.update(group, id, patch)
 	if invalid and not moves then
 		-- Hidden by a deletion: only its own extmarks come back on undo, so they stay, and the
 		-- change is drawn then. Drawn once now, to fail now if it cannot be.
-		local ns, extmarks = draw(group, vim.deepcopy(spec), false)
-		delete(spec.buf, ns, extmarks)
+		local trial = vim.deepcopy(spec)
+		local ns, extmarks = draw(group, trial, false)
+		delete(trial.buf, ns, extmarks)
 		mark.spec, mark.stale = spec, true
 		arm(id, mark)
 		return true
@@ -478,6 +510,18 @@ function state.refresh(buf)
 			local spec, invalid = current(mark)
 			if not invalid then
 				install(id, mark.group, spec, false, true)
+			end
+		end
+	end
+end
+
+--- Pad filled lines anew, but those hidden by a deletion: drawn over, they would show again.
+function state.refill()
+	for id, mark in pairs(state.marks) do
+		if mark.spec.fill and not mark.stale then
+			local spec, invalid = current(mark)
+			if not invalid then
+				pcall(install, id, mark.group, spec, false, true)
 			end
 		end
 	end

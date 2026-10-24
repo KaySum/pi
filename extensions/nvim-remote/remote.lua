@@ -1,9 +1,11 @@
 -- The editor's side of nvim-remote: a context for each attached Pi, and whatever a Pi creates
 -- through it removed when that Pi goes, however it goes. Every Pi that attaches runs this
 -- again; the state survives and only the functions are replaced, so several Pis can share
--- one editor.
-local M = type(package.loaded.nvim_remote) == 'table' and package.loaded.nvim_remote or {}
-package.loaded.nvim_remote = M
+-- one editor. `NAME` carries a version: Pis whose state would not fit together each keep
+-- their own, rather than one replacing functions the other's state was not made for.
+local NAME = ...
+local M = type(package.loaded[NAME]) == 'table' and package.loaded[NAME] or {}
+package.loaded[NAME] = M
 M.contexts = M.contexts or {}
 
 local SWEEP_MS = 500

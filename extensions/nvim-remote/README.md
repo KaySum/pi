@@ -104,7 +104,9 @@ channels of attached Pis every 0.5 s: a Pi that crashed or was killed is detache
 way, within half a second.
 
 Several Pis can control one editor; each has its own `remote`, and detaching one leaves the
-others' setup alone.
+others' setup alone. Their state is in `package.loaded['nvim_remote.v1']` (`.contexts`, by
+channel); the version changes only when that state does, so Pis with nvim-remotes that do not
+fit together each keep their own.
 
 ## Development
 

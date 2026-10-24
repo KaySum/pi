@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs';
 import { connectRpc } from '../nvim-service/rpc.mjs';
 
 const MODULE = readFileSync(new URL('./remote.lua', import.meta.url), 'utf8');
-const ATTACH = `local source, channel, info = ...
-return assert(loadstring(source, '@nvim-remote/remote.lua'))().attach(channel, info)`;
+/** Where remote.lua keeps its state in the editor. Raise the version when that state changes incompatibly. */
+export const MODULE_NAME = 'nvim_remote.v1';
+const ATTACH = `local source, name, channel, info = ...
+return assert(loadstring(source, '@nvim-remote/remote.lua'))(name).attach(channel, info)`;
+const use = (fn: string) => `return require(${JSON.stringify(MODULE_NAME)}).${fn}(...)`;
 
 const DEFAULT_TIMEOUT = 10000;
 // What answers a prompt, or only looks: everything else waits behind it.
@@ -73,7 +76,7 @@ export async function attach(socket: string, { pid = process.pid, cwd = process.
   try {
     const { channel } = rpc;
     const nvimPid = await within(options, signal => rpc.request('nvim_call_function', ['getpid', []], signal)) as number;
-    const { terminal } = await within(options, signal => rpc.request('nvim_exec_lua', [ATTACH, [MODULE, channel, { pid, cwd }]], signal)) as { terminal?: number };
+    const { terminal } = await within(options, signal => rpc.request('nvim_exec_lua', [ATTACH, [MODULE, MODULE_NAME, channel, { pid, cwd }]], signal)) as { terminal?: number };
 
     // A handler's failure is reported, not swallowed by the RPC client, and an async one's
     // rejection does not go unhandled, which would end Pi.
@@ -110,7 +113,7 @@ export async function attach(socket: string, { pid = process.pid, cwd = process.
        * and `remote.terminal` is Pi's terminal buffer, if Pi runs in one of the editor's.
        */
       lua: (code: string, args: unknown[] = [], options: CallOptions = {}): Promise<any> =>
-        call('nvim_exec_lua', ['return require("nvim_remote").run(...)', [channel, code, args]], options),
+        call('nvim_exec_lua', [use('run'), [channel, code, args]], options),
       /** Any Neovim API method, without waiting or checking for a prompt. */
       notify: (method: string, args: unknown[] = []) => rpc.notify(method, args),
       /** Receive `remote.notify(name, ...)`. Returns an unsubscribe. */
@@ -120,7 +123,7 @@ export async function attach(socket: string, { pid = process.pid, cwd = process.
         const id = ++nextAutocmd;
         autocmds.set(id, guard(`autocmd(${JSON.stringify(events)})`, handler));
         try {
-          const autocmd = await call('nvim_exec_lua', ['return require("nvim_remote").autocmd(...)', [channel, id, events, autocmdOptions]], options) as number;
+          const autocmd = await call('nvim_exec_lua', [use('autocmd'), [channel, id, events, autocmdOptions]], options) as number;
           return async (options: CallOptions = {}) => {
             autocmds.delete(id);
             if (!rpc.closed) await call('nvim_exec_lua', ['pcall(vim.api.nvim_del_autocmd, ...)', [autocmd]], options);
@@ -133,7 +136,7 @@ export async function attach(socket: string, { pid = process.pid, cwd = process.
       onClose: (handler: (error: Error) => void): (() => void) => rpc.onClose(handler),
       /** Undo what this Pi set up in the editor, then disconnect. Resolves to the cleanups' errors. */
       async close(options: CallOptions = { timeout: 1000 }): Promise<string[]> {
-        try { return await within(options, signal => rpc.request('nvim_exec_lua', ['return require("nvim_remote").detach(...)', [channel]], signal)) ?? []; }
+        try { return await within(options, signal => rpc.request('nvim_exec_lua', [use('detach'), [channel]], signal)) ?? []; }
         catch (error) { return rpc.closed ? [] : [errorText(error)]; } // Gone or stuck: the editor cleans up itself.
         finally { rpc.close(); }
       },

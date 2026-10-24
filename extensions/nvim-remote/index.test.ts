@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
-import { connect } from './remote.ts';
+import { MODULE_NAME as MODULE, connect } from './remote.ts';
 import { useRemote, type Remote } from './api.ts';
 import register from './index.ts';
 
@@ -107,7 +107,7 @@ test('a session attaches, announces the handle, and shows the chip; shutdown und
   assert.equal(status['nvim-remote'], undefined);
   assert.equal(remote.closed, true);
   assert.equal(await lua('return #vim.api.nvim_get_autocmds({ event = "User", pattern = "PiSession" })'), 0);
-  assert.equal(await lua('return require("nvim_remote").contexts[...] == nil', remote.channel), true);
+  assert.equal(await lua(`return require("${MODULE}").contexts[...] == nil`, remote.channel), true);
 });
 
 test('every new session (/new, /resume, /fork, /reload) replaces the connection, and extensions set up again', async () => {
@@ -127,7 +127,7 @@ test('every new session (/new, /resume, /fork, /reload) replaces the connection,
     assert.equal(status['nvim-remote'], 'nvim');
     await fireSecond('session_shutdown', { reason: 'quit' });
   }
-  assert.equal(await lua('return vim.tbl_count(require("nvim_remote").contexts)'), 0);
+  assert.equal(await lua(`return vim.tbl_count(require("${MODULE}").contexts)`), 0);
 });
 
 test('when the editor drops the connection, Pi lets go, says why, and can reconnect', async () => {
@@ -192,7 +192,7 @@ test('cleanups that fail in the editor are reported at shutdown', async () => {
 });
 
 // Found by a stress suite: connecting and disconnecting must never overlap.
-const contexts = () => lua('return vim.tbl_count(require("nvim_remote").contexts)');
+const contexts = () => lua(`return vim.tbl_count(require("${MODULE}").contexts)`);
 
 test('reconnects asked for at once leave exactly one attachment', async () => {
   process.env.NVIM = socket;

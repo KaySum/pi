@@ -3,7 +3,7 @@ import { after, test, type TestContext } from 'node:test';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
-import { assertCurrent, attach, connect, type AutocmdEvent, type Remote } from './remote.ts';
+import { MODULE_NAME as MODULE, assertCurrent, attach, connect, type AutocmdEvent, type Remote } from './remote.ts';
 
 // Stands in for the user's editor; `editor` is the user, acting on it directly.
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
@@ -28,7 +28,7 @@ async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<T>
   }
 }
 
-const contextOf = (channel: number) => lua('local c = require("nvim_remote").contexts[...]; return c and { group = c.group, ns = c.ns } or vim.NIL', channel);
+const contextOf = (channel: number) => lua(`local c = require("${MODULE}").contexts[...]; return c and { group = c.group, ns = c.ns } or vim.NIL`, channel);
 
 // Attaching
 
@@ -39,7 +39,7 @@ test('attaching reports the editor and registers a context for this Pi', async t
   assert.equal(remote.info.channel, remote.channel);
   assert.equal(remote.info.terminal, undefined); // Not running in one of the editor's terminals.
   assert.equal(remote.closed, false);
-  assert.deepEqual(await lua('local c = require("nvim_remote").contexts[...]; return { c.pid, c.cwd }', remote.channel), [process.pid, '/work']);
+  assert.deepEqual(await lua(`local c = require("${MODULE}").contexts[...]; return { c.pid, c.cwd }`, remote.channel), [process.pid, '/work']);
 });
 
 test('the user hears about Pis attaching and detaching', async () => {
@@ -75,6 +75,17 @@ test('several Pis share an editor, and a new one leaves the others attached', as
   const [a, b] = [await contextOf(first.channel), await contextOf(second.channel)];
   assert.notEqual(a.group, b.group);
   assert.notEqual(a.ns, b.ns);
+});
+
+test("a Pi of another version keeps its state apart, and is left alone", async t => {
+  // What an editor would hold if a Pi with an incompatible nvim-remote had attached first.
+  await lua(`package.loaded['nvim_remote.v0'] = { contexts = { [999999] = 'theirs' }, untouched = true }`);
+  t.after(() => lua(`package.loaded['nvim_remote.v0'] = nil`));
+  const remote = await attach(socket);
+  assert.equal(await remote.lua('return remote.channel'), remote.channel);
+  await remote.close();
+  assert.deepEqual(await lua(`local old = package.loaded['nvim_remote.v0']; return { old.untouched, old.contexts[999999] }`), [true, 'theirs']);
+  assert.equal(await lua(`return package.loaded[...] ~= nil`, MODULE), true);
 });
 
 test('attaching to a socket nothing listens on fails', async () => {
@@ -269,7 +280,7 @@ test('an autocommand Neovim refuses is reported, and leaves nothing behind', asy
 const residue = (channel: number, group: number, ns: number) => lua(`local chan, group, ns = ...
   local marks = 0
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do marks = marks + #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
-  return { context = require('nvim_remote').contexts[chan] ~= nil, group = pcall(vim.api.nvim_get_autocmds, { group = group }), marks = marks }`,
+  return { context = require('${MODULE}').contexts[chan] ~= nil, group = pcall(vim.api.nvim_get_autocmds, { group = group }), marks = marks }`,
   channel, group, ns);
 
 /** Sets up in the editor what a Pi might: an autocommand, highlights, a command, through `remote`. */
@@ -324,7 +335,7 @@ test('a Pi that is killed is cleaned up by the editor itself', async () => {
   child.kill('SIGKILL');
   await eventually(() => lua('return vim.g.killed_cleaned'));
   assert.equal(await lua('return #vim.api.nvim_get_autocmds({ event = "User", pattern = "PiKilled" })'), 0);
-  assert.equal(await lua('return require("nvim_remote").contexts[...] == nil', channel), true);
+  assert.equal(await lua(`return require("${MODULE}").contexts[...] == nil`, channel), true);
 });
 
 test('one Pi detaching leaves another Pi\'s setup alone', async t => {
@@ -373,5 +384,5 @@ test('a process in an editor terminal attaches through $NVIM and is matched to i
   assert.equal(terminal, buf);
   // Deleting the terminal ends the process; the editor then lets go of it.
   await lua('vim.api.nvim_buf_delete(..., { force = true })', buf);
-  await eventually(() => lua('return require("nvim_remote").contexts[...] == nil', channel));
+  await eventually(() => lua(`return require("${MODULE}").contexts[...] == nil`, channel));
 });

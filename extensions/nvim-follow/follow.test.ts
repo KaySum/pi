@@ -213,6 +213,29 @@ test("older deletion timers leave newer virtual lines intact, including across f
   void code;
 });
 
+test("edits default to the added color and preserve custom highlight definitions", async (t) => {
+  await layout(t);
+  const path = await file("colors.txt", "changed\n");
+  await follow(path, [[1, 1]]);
+  assert.equal(
+    await lua(
+      'return vim.api.nvim_get_hl(0, { name = "PiFollow", link = true }).link',
+    ),
+    "DiffAdd",
+  );
+  t.after(() =>
+    lua('vim.api.nvim_set_hl(0, "PiFollow", { link = "DiffAdd" })'),
+  );
+  await lua('vim.api.nvim_set_hl(0, "PiFollow", { link = "Search" })');
+  await follow(path, [[1, 1]]);
+  assert.equal(
+    await lua(
+      'return vim.api.nvim_get_hl(0, { name = "PiFollow", link = true }).link',
+    ),
+    "Search",
+  );
+});
+
 // Where it shows
 
 test("the file opens beside Pi at the change, and Pi keeps focus and terminal mode", async (t) => {

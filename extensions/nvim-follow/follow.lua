@@ -99,7 +99,7 @@ function state.show(path, ranges, ms, group, cursor, reread, deletions)
 	end
 
 	buf = vim.api.nvim_win_get_buf(win)
-	vim.api.nvim_set_hl(0, "PiFollow", { link = "IncSearch", default = true })
+	vim.api.nvim_set_hl(0, "PiFollow", { link = "DiffAdd", default = true })
 	vim.api.nvim_set_hl(0, "PiFollowRead", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "PiFollowDelete", { link = "DiffDelete", default = true })
 	vim.api.nvim_buf_clear_namespace(buf, state.ns, 0, -1)

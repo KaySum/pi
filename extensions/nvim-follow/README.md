@@ -34,7 +34,7 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
   went.
 - **Reads:** a read is shown at the lines it asked for (`offset` and `limit`); one of a whole
   file just opens it. Image reads and failed ones are not shown.
-- **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `IncSearch`, and
+- **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `DiffAdd`, and
   the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. Pure deletions
   show the removed text as temporary virtual lines with its original indentation, in `PiFollowDelete`
   (linked to `DiffDelete`), above their former boundary or below the last line at EOF. Edit

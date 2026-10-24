@@ -1,0 +1,242 @@
+import assert from 'node:assert/strict';
+import { after, test, type TestContext } from 'node:test';
+import { mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { launch } from '../nvim-service/service.mjs';
+import { attach, connect, type Remote } from '../nvim-remote/remote.ts';
+import { FOLLOW, type Range } from './core.ts';
+
+const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
+const { socket } = await service.ready;
+after(() => service.stop());
+const editor = await connect(socket); // The user.
+after(() => editor.close());
+const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
+const remote: Remote = await attach(socket, { onError: () => {} });
+after(() => remote.close());
+const follow = (path: string, ranges: Range[] = [], ms = 150) => remote.lua(FOLLOW, [path, ranges, ms]);
+
+const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-follow-')));
+after(() => rm(dir, { recursive: true, force: true }));
+const file = async (name: string, text: string) => { const path = join(dir, name); await writeFile(path, text); return path; };
+const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+
+/** Like sidekick: the user's window on the left, Pi's terminal on the right, focused and typing. */
+async function layout(t: TestContext): Promise<{ code: number; term: number }> {
+  const [code, term] = await lua(`vim.cmd('silent! only | enew')
+    local code = vim.api.nvim_get_current_win()
+    vim.cmd('vsplit | terminal')
+    vim.cmd.startinsert()
+    return { code, vim.api.nvim_get_current_win() }`);
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 't');
+  t.after(() => lua('vim.cmd.stopinsert(); vim.cmd("silent! only | silent! %bwipeout!")'));
+  return { code, term };
+}
+const shown = (win: number) => lua('local w = ...; return { vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(w)), vim.api.nvim_win_get_cursor(w)[1] }', win);
+const marks = (win: number) => lua(`local w = ...
+  local state = require('nvim_remote.v1').contexts[${remote.channel}].nvim_follow
+  return vim.tbl_map(function(m) return { m[2], m[4].end_row } end,
+    vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(w), state.ns, 0, -1, { details = true }))`, win);
+
+async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<T> {
+  for (const end = Date.now() + ms; ; await delay(20)) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > end) assert.fail(`not within ${ms} ms`);
+  }
+}
+
+// Where it shows
+
+test('the file opens beside Pi at the change, and Pi keeps focus and terminal mode', async t => {
+  const { code, term } = await layout(t);
+  const path = await file('a.txt', lines(100));
+  assert.equal(await follow(path, [[60, 62]]), 'shown');
+  assert.deepEqual(await shown(code), [path, 60]);
+  assert.equal(await lua('return vim.api.nvim_get_current_win()'), term);
+  assert.equal((await editor.request('nvim_get_mode', [])).mode, 't');
+});
+
+test('a window already showing the file is used, over the one the user came from', async t => {
+  const { code, term } = await layout(t);
+  const path = await file('b.txt', lines(30)), other = await file('c.txt', 'x\n');
+  const showing = await lua(`local code, term, path, other = ...
+    vim.api.nvim_win_call(code, function() vim.cmd.edit(vim.fn.fnameescape(other)) end)
+    vim.api.nvim_set_current_win(code)
+    vim.cmd('belowright split ' .. vim.fn.fnameescape(path))
+    local showing = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(code)
+    vim.api.nvim_set_current_win(term) -- Came from the other window, not the one showing the file.
+    return showing`, code, term, path, other);
+  await follow(path, [[20, 20]]);
+  assert.deepEqual(await shown(showing), [path, 20]);
+  assert.deepEqual(await shown(code), [other, 1]);
+});
+
+test('otherwise the window the user came from is used, over others', async t => {
+  const { code, term } = await layout(t);
+  const [left, right] = await lua(`local code, term = ...
+    vim.api.nvim_set_current_win(code)
+    vim.cmd('belowright split | enew')
+    local right = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(term) -- Came from the split.
+    return { code, right }`, code, term);
+  const path = await file('d.txt', lines(5));
+  await follow(path, [[3, 3]]);
+  assert.deepEqual(await shown(right), [path, 3]);
+  assert.deepEqual(await shown(left), ['', 1]);
+});
+
+test("the window the user is typing in is left alone, even when it is the only one", async t => {
+  const { code, term } = await layout(t);
+  const path = await file('e.txt', lines(5));
+  // Typing in a second normal window: the first one is used instead.
+  const typing = await lua(`local code = ...
+    vim.cmd.stopinsert()
+    vim.api.nvim_set_current_win(code)
+    vim.cmd('belowright split | enew')
+    return vim.api.nvim_get_current_win()`, code);
+  await editor.request('nvim_input', ['i']);
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'i');
+  await follow(path, [[2, 2]]);
+  assert.deepEqual(await shown(typing), ['', 1]);
+  assert.deepEqual(await shown(code), [path, 2]);
+  // Typing in the only normal window: nothing to show it in.
+  await lua(`local code, typing = ...; vim.api.nvim_win_close(code, true)`, code, typing);
+  assert.equal(await follow(await file('f.txt', 'x\n')), 'no window');
+  assert.deepEqual(await shown(typing), ['', 1]);
+  await editor.request('nvim_input', ['<Esc>']);
+  void term;
+});
+
+test('in normal mode, with no other window, the window the user is in is used', async t => {
+  await layout(t);
+  const only = await lua(`vim.cmd.stopinsert(); vim.cmd('silent! only | enew'); return vim.api.nvim_get_current_win()`);
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'n');
+  const path = await file('g.txt', lines(9));
+  assert.equal(await follow(path, [[7, 7]]), 'shown');
+  assert.deepEqual(await shown(only), [path, 7]);
+});
+
+test('floating windows and other special windows are never used', async t => {
+  const { code } = await layout(t);
+  await lua(`local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_open_win(buf, false, { relative = 'editor', row = 1, col = 1, width = 10, height = 2 })
+    vim.cmd('botright split'); vim.cmd.help(); vim.cmd.wincmd('p')`);
+  const path = await file('h.txt', lines(4));
+  await follow(path, [[4, 4]]);
+  assert.deepEqual(await shown(code), [path, 4]);
+});
+
+// What it leaves alone
+
+test('a file already open is reread', async t => {
+  const { code } = await layout(t);
+  const path = await file('i.txt', 'old\n');
+  await follow(path);
+  await lua('vim.cmd("rightbelow split | enew")'); // The buffer stays loaded, now hidden.
+  await writeFile(path, 'new\n');
+  await follow(path, [[1, 1]]);
+  assert.deepEqual(await lua(`return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, -1, true)`, path), ['new']);
+  void code;
+});
+
+test('unsaved changes are never reloaded over', async t => {
+  const { code } = await layout(t);
+  const path = await file('j.txt', 'disk\n');
+  await follow(path);
+  await lua('vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(...), 0, -1, true, { "mine" })', code);
+  await writeFile(path, 'pi\n');
+  assert.equal(await follow(path, [[1, 1]]), 'modified');
+  assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(...), 0, -1, true)', code), ['mine']);
+});
+
+test("the user's jumplist and alternate file stay theirs", async t => {
+  const { code } = await layout(t);
+  const mine = await file('mine.txt', lines(20)), other = await file('other.txt', 'x\n');
+  const history = `local w = ...
+    return { #vim.fn.getjumplist(w)[1], vim.api.nvim_win_call(w, function() return vim.fn.expand('#:p') end) }`;
+  await lua(`local w, a, b = ...
+    vim.api.nvim_win_call(w, function() vim.cmd.edit(vim.fn.fnameescape(a)); vim.cmd.edit(vim.fn.fnameescape(b)) end)`, code, mine, other);
+  const before = await lua(history, code);
+  assert.equal(before[1], mine);
+  await follow(await file('pi1.txt', lines(30)), [[25, 25]]);
+  await follow(await file('pi2.txt', lines(30)), [[5, 5]]);
+  assert.deepEqual(await lua(history, code), before);
+});
+
+test('a file that is gone is not opened', async t => {
+  await layout(t);
+  assert.equal(await follow(join(dir, 'never-written.txt')), 'missing');
+  assert.equal(await lua('return vim.fn.bufnr(...)', join(dir, 'never-written.txt')), -1);
+});
+
+test('odd file names open as themselves', async t => {
+  const { code } = await layout(t);
+  for (const name of ['with space.txt', 'per%cent#hash.txt', 'ünï cödé.txt', "quote'd.txt"]) {
+    const path = await file(name, lines(3));
+    assert.equal(await follow(path, [[2, 2]]), 'shown');
+    assert.deepEqual(await shown(code), [path, 2]);
+  }
+});
+
+test('a path through a symlink finds the buffer already open for the real file', async t => {
+  const { code } = await layout(t);
+  const real = await file('real.txt', lines(5));
+  const link = join(dir, 'link.txt');
+  await symlink(real, link);
+  await follow(real);
+  const count = await lua('return #vim.api.nvim_list_bufs()');
+  await lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 1, true, { "unsaved" })', real);
+  assert.equal(await follow(link, [[2, 2]]), 'modified'); // Recognized as the same, modified file.
+  assert.equal(await lua('return #vim.api.nvim_list_bufs()'), count);
+  void code;
+});
+
+// The cursor and the highlight
+
+test('ranges past the end are clamped, and no ranges leaves the cursor where it was', async t => {
+  const { code } = await layout(t);
+  const path = await file('k.txt', lines(3));
+  await follow(path, [[9, 12]]);
+  assert.deepEqual(await shown(code), [path, 3]);
+  await lua('vim.api.nvim_win_set_cursor(..., { 2, 0 })', code);
+  await follow(path, []);
+  assert.deepEqual(await shown(code), [path, 2]);
+});
+
+test('the changed lines flash, then clear; a quick second change keeps its own', async t => {
+  const { code } = await layout(t);
+  const path = await file('l.txt', lines(20));
+  await follow(path, [[3, 4], [10, 10]], 150);
+  assert.deepEqual(await marks(code), [[2, 4], [9, 10]]);
+  await eventually(async () => (await marks(code)).length === 0);
+  await follow(path, [[5, 5]], 150);
+  await delay(100);
+  await follow(path, [[6, 6]], 300); // The first timer fires during this one's.
+  await delay(150);
+  assert.deepEqual(await marks(code), [[5, 6]]);
+});
+
+test('highlights live apart from what other features put in remote.ns, and go on detach', async t => {
+  const { code } = await layout(t);
+  const own = await attach(socket, { onError: () => {} });
+  const path = await file('m.txt', lines(5));
+  // Another feature of the same Pi marks the buffer through remote.ns.
+  await own.lua(`local path = ...
+    vim.cmd('badd ' .. vim.fn.fnameescape(path))
+    vim.fn.bufload(vim.fn.bufnr(path))
+    vim.api.nvim_buf_set_extmark(vim.fn.bufnr(path), remote.ns, 0, 0, { hl_group = 'Search', end_col = 1 })`, [path]);
+  await own.lua(FOLLOW, [path, [[2, 3]], 60000]);
+  const count = (ns: string) => own.lua(`local path = ...
+    local ns = ${ns}
+    return #vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, {})`, [path]);
+  assert.equal(await count('remote.ns'), 1); // Not cleared by follow.
+  assert.equal(await count('remote.nvim_follow.ns'), 1);
+  const ns = await own.lua('return remote.nvim_follow.ns');
+  await own.close();
+  assert.equal(await lua('return #vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(...), select(2, ...), 0, -1, {})', path, ns), 0);
+  void code;
+});

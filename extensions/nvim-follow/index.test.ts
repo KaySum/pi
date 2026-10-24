@@ -199,7 +199,10 @@ test("edit and write deletions show removed text virtually without highlighting 
       );
       assert.equal(mark[1], 1);
       assert.equal(mark[3].hl_group, undefined);
-      assert.deepEqual(mark[3].virt_lines, [[["two", "PiFollowDelete"]]]);
+      assert.deepEqual(
+        mark[3].virt_lines.map((line: unknown[]) => [line[0]]),
+        [[["two", "PiFollowDelete"]]],
+      );
     }
   } finally {
     await shutdown();
@@ -238,7 +241,10 @@ test("edit and write replacements display both old and new lines regardless of b
         );
         assert.equal(marks[0][3].hl_group, "PiFollow");
         assert.equal(marks[0][3].end_row, replacement.includes("\n") ? 3 : 2);
-        assert.deepEqual(marks[1][3].virt_lines, [[["old", "PiFollowDelete"]]]);
+        assert.deepEqual(
+          marks[1][3].virt_lines.map((line: unknown[]) => [line[0]]),
+          [[["old", "PiFollowDelete"]]],
+        );
       }
     }
   } finally {

@@ -39,8 +39,10 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
   file just opens it. Image reads and failed ones are not shown.
 - **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `DiffAdd`, and
   the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. Pure deletions
-  show the removed text as temporary virtual lines with its original indentation, in `PiFollowDelete`
-  (linked to `DiffDelete`), above their former boundary or below the last line at EOF.
+  show the removed text as temporary virtual lines with its original indentation, in `PiFollowDelete`.
+  Their background fills the code area, including for blank lines, using the widest window
+  currently showing the buffer; padding is recalculated on the next follow.
+  They use `DiffDelete` by default and sit above their former boundary or below the last line at EOF.
   Every replacement shows its old lines above the highlighted new lines, whether the block
   shrinks, grows, or stays the same size, including single-line edits. Writes show the old
   block between the common start and end, just like their added-code highlight. For pure deletions, the

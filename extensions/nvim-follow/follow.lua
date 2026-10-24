@@ -271,11 +271,21 @@ function state.show(path, ranges, ms, group, cursor, reread, deletions)
 	if deletions == vim.NIL then
 		deletions = nil
 	end
+	-- Virtual lines don't support hl_eol. Pad in display cells, not bytes, so tabs,
+	-- wide characters and empty lines receive the same full-width deletion background.
+	-- Extmarks belong to the buffer: cover the widest window currently showing it.
+	local width = 0
+	for _, view in ipairs(vim.fn.win_findbuf(buf)) do
+		width = math.max(width, vim.api.nvim_win_get_width(view) - vim.fn.getwininfo(view)[1].textoff)
+	end
 	for _, deletion in ipairs(deletions or {}) do
 		local virtual = {}
-		for _, text in ipairs(deletion.lines) do
-			table.insert(virtual, { { text, "PiFollowDelete" } })
-		end
+		vim.api.nvim_win_call(win, function()
+			for _, text in ipairs(deletion.lines) do
+				local padding = string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(text)))
+				table.insert(virtual, { { text, "PiFollowDelete" }, { padding, "PiFollowDelete" } })
+			end
+		end)
 		local above = deletion.line <= count
 		vim.api.nvim_buf_set_extmark(
 			buf,

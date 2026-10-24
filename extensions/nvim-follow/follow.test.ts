@@ -105,7 +105,10 @@ test("deleted lines appear above their boundary, below EOF, and clear on timeout
   let mark = (await details())[0];
   assert.equal(mark[1], 1);
   assert.equal(mark[3].virt_lines_above, true);
-  assert.deepEqual(mark[3].virt_lines, [[["two", "PiFollowDelete"]]]);
+  assert.deepEqual(
+    mark[3].virt_lines.map((line: unknown[]) => [line[0]]),
+    [[["two", "PiFollowDelete"]]],
+  );
   assert.equal(mark[3].hl_group, undefined);
   assert.deepEqual(await shown(code), [path, 2]);
   assert.deepEqual(
@@ -125,6 +128,73 @@ test("deleted lines appear above their boundary, below EOF, and clear on timeout
   await follow(path, [[1, 1]]);
   assert.equal((await details()).length, 1);
   assert.equal((await details())[0][3].virt_lines, undefined);
+});
+
+test("deletion backgrounds fill the code width for blank, tabbed and wide-character lines", async (t) => {
+  const { code } = await layout(t);
+  const path = await file("full-width-deletion.txt", "one\nthree\n");
+  await follow(path);
+  const other = await lua(
+    `local w = ...
+    return vim.api.nvim_win_call(w, function()
+      vim.cmd('botright split')
+      return vim.api.nvim_get_current_win()
+    end)`,
+    code,
+  );
+  const text = [
+    "",
+    "    short",
+    "trailing  ",
+    "\t界 → 😀",
+    "long ".repeat(100),
+  ];
+  await lua(
+    "local w = ...; vim.bo[vim.api.nvim_win_get_buf(w)].tabstop = 4",
+    code,
+  );
+  const check = async () => {
+    await show(remote, [
+      path,
+      [],
+      1000,
+      "PiFollow",
+      [2, 0],
+      true,
+      [{ line: 2, lines: text }],
+    ]);
+    return lua(
+      `local w, text = ...
+      local b = vim.api.nvim_win_get_buf(w)
+      local width = 0
+      for _, view in ipairs(vim.fn.win_findbuf(b)) do
+        width = math.max(width, vim.api.nvim_win_get_width(view) - vim.fn.getwininfo(view)[1].textoff)
+      end
+      local ns = require('nvim_remote.v1').contexts[${remote.channel}].nvim_follow.ns
+      local virtual = vim.api.nvim_buf_get_extmarks(b, ns, 0, -1, { details = true })[1][4].virt_lines
+      return vim.api.nvim_win_call(w, function()
+        local result = {}
+        for i, line in ipairs(virtual) do
+          table.insert(result, { original = line[1], padding = line[2], expected = math.max(0, width - vim.fn.strdisplaywidth(text[i])) })
+        end
+        return { width = width, lines = result }
+      end)`,
+      code,
+      text,
+    );
+  };
+  const before = await check();
+  for (const [i, line] of before.lines.entries()) {
+    assert.deepEqual(line.original, [text[i], "PiFollowDelete"]);
+    assert.deepEqual(line.padding, [
+      " ".repeat(line.expected),
+      "PiFollowDelete",
+    ]);
+  }
+  await lua("vim.api.nvim_win_close(..., true)", other);
+  const after = await check();
+  assert.ok(after.width < before.width);
+  assert.equal(after.lines[0].padding[0].length, after.width);
 });
 
 test("empty files show deleted text, and detach removes virtual lines", async (t) => {
@@ -173,11 +243,14 @@ test("a shrinking replacement displays deleted text and highlights the new line"
   );
   assert.equal(details.length, 2);
   assert.equal(details[0][3].hl_group, "PiFollow");
-  assert.deepEqual(details[1][3].virt_lines, [
-    [["first", "PiFollowDelete"]],
-    [["second", "PiFollowDelete"]],
-    [["third", "PiFollowDelete"]],
-  ]);
+  assert.deepEqual(
+    details[1][3].virt_lines.map((line: unknown[]) => [line[0]]),
+    [
+      [["first", "PiFollowDelete"]],
+      [["second", "PiFollowDelete"]],
+      [["third", "PiFollowDelete"]],
+    ],
+  );
   assert.equal(details[1][3].virt_lines_above, true);
 });
 
@@ -206,9 +279,10 @@ test("older deletion timers leave newer virtual lines intact, including across f
   await display(a, "new", 1500);
   await display(b, "other file", 300);
   await eventually(async () => (await deleted(b)).length === 0);
-  assert.deepEqual((await deleted(a))[0][3].virt_lines, [
-    [["new", "PiFollowDelete"]],
-  ]);
+  assert.deepEqual(
+    (await deleted(a))[0][3].virt_lines.map((line: unknown[]) => [line[0]]),
+    [[["new", "PiFollowDelete"]]],
+  );
   await eventually(async () => (await deleted(a)).length === 0);
   void code;
 });

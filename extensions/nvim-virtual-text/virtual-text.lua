@@ -269,7 +269,7 @@ local function draw(group, spec, strict)
 	local first, last = row(spec.line), row(spec.endLine or spec.line)
 	local anchor = needles
 		or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
-	local base = { priority = spec.priority, strict = false }
+	local base = { priority = spec.priority, invalidate = spec.invalidate, strict = false }
 
 	-- Whole lines unless columns are given: then a span of characters.
 	local span = vim.tbl_extend("force", base, { hl_group = highlight(spec.highlight) })
@@ -329,12 +329,13 @@ local function remove(id)
 	erase(mark)
 end
 
--- The mark's spec, its lines and columns where edits have moved them.
+-- The mark's spec, its lines and columns where edits have moved them, and whether deleting
+-- them has hidden it.
 local function current(mark)
 	local spec = vim.deepcopy(mark.spec)
 	local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, mark.extmarks[1], { details = true })
 	if not found[1] then
-		return spec
+		return spec, false
 	end
 	local row, col, details = found[1], found[2], found[3]
 	spec.line = row + 1
@@ -344,7 +345,7 @@ local function current(mark)
 	else
 		spec.endLine = math.max(spec.line, details.end_row)
 	end
-	return spec
+	return spec, details.invalid == true
 end
 
 -- Draw `spec` as mark `id`. `moved`: only moved, so a `ttl` runs on as it was.
@@ -399,13 +400,16 @@ function state.update(group, id, patch)
 	return true
 end
 
---- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is.
+--- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is;
+--- one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec = current(mark)
 			local found = locate(buf, mark.anchor, spec.line)
-			if found and found ~= spec.line then
+			if not found and spec.invalidate then
+				remove(id)
+			elseif found and found ~= spec.line then
 				spec.endLine = spec.endLine and spec.endLine + found - spec.line
 				spec.line = found
 				erase(mark)
@@ -439,8 +443,9 @@ end
 function state.list(group, filter)
 	local marks = {}
 	for id, mark in pairs(matching(group ~= vim.NIL and group or nil, filter)) do
-		local spec = current(mark)
+		local spec, invalid = current(mark)
 		spec.id, spec.group, spec.path = id, mark.group, vim.api.nvim_buf_get_name(spec.buf)
+		spec.invalid = invalid or nil
 		table.insert(marks, spec)
 	end
 	table.sort(marks, function(a, b)

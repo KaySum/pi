@@ -207,6 +207,25 @@ test('reloaded from disk, marks move back onto their text', async () => {
   assert.deepEqual(await lines(), { [byLine]: [4, 4], [byMatch]: [5, 5], [span]: [3, 4] });
 });
 
+test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  await open(path);
+  const [hidden, kept] = await text.place([
+    { path, line: 2, endLine: 3, text: 'note', highlight: 'Visual', invalidate: true },
+    { path, line: 4, text: 'stays' },
+  ]);
+  const invalid = async () => Object.fromEntries((await text.list()).map(m => [m.id, m.invalid ?? false]));
+  await lua('vim.cmd("normal! 2Gdj")');
+  assert.deepEqual(await invalid(), { [hidden]: true, [kept]: false });
+  assert.ok((await extmarks(path)).filter(m => m[3].invalid).length >= 2);
+  await lua('vim.cmd.undo()');
+  assert.deepEqual(await invalid(), { [hidden]: false, [kept]: false });
+
+  await writeFile(path, 'a\nd\n');
+  await lua('vim.cmd.edit()');
+  assert.deepEqual((await text.list()).map(m => [m.id, m.line]), [[kept, 2]]);
+});
+
 test('an update whose match is not found leaves the mark as it was', async () => {
   const path = await file();
   const [id] = await text.place({ path, match: 'two', text: 'note' });

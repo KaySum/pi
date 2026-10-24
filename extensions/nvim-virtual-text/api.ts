@@ -55,13 +55,21 @@ export type Mark = {
   wrap?: boolean | number;
   /** `above` and `below`: give each line's background the whole window's width. */
   fill?: boolean;
+  /**
+   * Hide it while all its lines are deleted, back on undo; and remove it if a reload from
+   * disk leaves its text nowhere.
+   */
+  invalidate?: boolean;
   /** Remove it after this many milliseconds. */
   ttl?: number;
   priority?: number;
 };
 
-/** A mark as `list` gives it: as placed and updated, where edits have moved it, its file found. */
-export type Placed = Mark & { id: number; group: string; buf: number; path: string; line: number };
+/**
+ * A mark as `list` gives it: as placed and updated, where edits have moved it, its file found;
+ * `invalid` while `invalidate` hides it.
+ */
+export type Placed = Mark & { id: number; group: string; buf: number; path: string; line: number; invalid?: true };
 /** What `update` changes: `null` takes an option away. */
 export type Patch = { [K in keyof Mark]?: Mark[K] | null };
 type Where = { path?: string; buf?: number };

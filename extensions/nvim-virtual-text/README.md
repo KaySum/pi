@@ -65,13 +65,15 @@ on every new attachment.
 | `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
 | `wrap` | For `above` and `below`: break lines at spaces to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
 | `fill` | For `above` and `below`: give each line's background the window's whole width, whatever its size. |
+| `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Reloaded from disk with its text nowhere, it's removed. |
 | `ttl` | Remove the mark after this many milliseconds. |
 | `priority` | As for extmarks. |
 
 Marks are extmarks, so they move with the text as it's edited in the buffer. Every mark also
 keeps the text of its lines (or its `match`). When the file is reloaded from disk (`:edit`,
 or autoread after Pi edits it), a mark whose lines no longer hold that text moves to the
-nearest place that does. A mark whose text is gone stays where it was.
+nearest place that does. A mark whose text is gone stays where it was, unless it
+`invalidate`s.
 
 ## Development
 

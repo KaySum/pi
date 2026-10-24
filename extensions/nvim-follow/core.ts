@@ -40,47 +40,97 @@ const linesOf = (text: string) => {
   return lines;
 };
 
+/** 1-based line and 0-based byte column, as Neovim's cursor takes them. */
+export type Cursor = [line: number, column: number];
+/** The lines to mark, and where the cursor goes: the start of the first change. */
+export type Changes = { ranges: Range[]; cursor?: Cursor };
+
+/** How much `a` and `b` share at the start and at the end, never splitting a surrogate pair. */
+function shared(a: string, b: string): [prefix: number, suffix: number] {
+  const most = Math.min(a.length, b.length);
+  let prefix = 0;
+  while (prefix < most && a[prefix] === b[prefix]) prefix++;
+  if (prefix && prefix < most && /[\uD800-\uDBFF]/.test(a[prefix - 1])) prefix--;
+  let suffix = 0;
+  while (suffix < most - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+  if (suffix && suffix < most - prefix && /[\uDC00-\uDFFF]/.test(b[b.length - suffix])) suffix--;
+  return [prefix, suffix];
+}
+
 /**
- * Where each edit landed. An old text is unique in the file before, while a new text may
- * also occur elsewhere, so edits are placed by where their old text was, shifted by the
- * edits above them. An edit the tool matched loosely (other whitespace or line endings) is
- * placed by its new text instead, if that occurs exactly once after.
+ * How far left to move the window `text[start, end)` that a pure insertion or deletion leaves:
+ * "ab" inserted after "ab" could equally be the first or the second. Prefer the nearest place
+ * that starts a line, as diff tools do; otherwise leave it.
  */
-export function editRanges(before: string, after: string, edits: Edit[]): Range[] {
+function slide(text: string, start: number, end: number): number {
+  const lineStart = (at: number) => at === 0 || text[at - 1] === '\n';
+  if (lineStart(start)) return 0;
+  for (let k = 0; start - k > 0 && text[start - k - 1] === text[end - k - 1];) {
+    k++;
+    if (lineStart(start - k)) return k;
+  }
+  return 0;
+}
+
+/** What changed in `after` given the old and new windows, a pure insertion or deletion slid to a line start. */
+function narrow(before: string, after: string, oldStart: number, oldEnd: number, newStart: number, newEnd: number) {
+  const k = oldStart === oldEnd ? slide(after, newStart, newEnd) : newStart === newEnd ? slide(before, oldStart, oldEnd) : 0;
+  return { start: newStart - k, end: newEnd - k };
+}
+
+/** The lines `text[start, end)` spans, and the cursor at `start`. Empty marks the line it is on. */
+function span(text: string, start: number, end: number): { range: Range; cursor: Cursor } {
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const first = newlines(text.slice(0, start)) + 1;
+  // A change ending in a newline ends on that line, not the next.
+  const last = Math.max(first, newlines(text.slice(0, end > start && text[end - 1] === '\n' ? end - 1 : end)) + 1);
+  return { range: [first, last], cursor: [first, Buffer.byteLength(text.slice(lineStart, start))] };
+}
+
+function changes(spans: { start: number; end: number }[], after: string): Changes {
+  const shown = spans.sort((a, b) => a.start - b.start).map(({ start, end }) => span(after, start, end));
+  return { ranges: shown.map(s => s.range), cursor: shown[0]?.cursor };
+}
+
+/**
+ * Where each edit landed, narrowed to what it changed: the context an old text carries to be
+ * unique, which its new text repeats, is left out. An old text is unique in the file before,
+ * while a new text may also occur elsewhere, so edits are placed by where their old text was,
+ * shifted by the edits above them, and that is checked against the file after. An edit the
+ * tool matched loosely (other whitespace or line endings) is placed by its new text instead,
+ * if that occurs exactly once after.
+ */
+export function editChanges(before: string, after: string, edits: Edit[]): Changes {
   const located = edits
     .map(edit => ({ ...edit, at: edit.oldText ? before.indexOf(edit.oldText) : -1 }))
     .sort((a, b) => a.at - b.at);
-  const ranges: Range[] = [];
+  const spans: { start: number; end: number }[] = [];
   let shift = 0;
   for (const { oldText, newText, at } of located) {
-    if (at >= 0) {
-      const first = newlines(before.slice(0, at)) + 1 + shift;
-      shift += newlines(newText) - newlines(oldText);
-      ranges.push([first, first + newlines(newText.replace(/\n$/, ''))]);
+    const placed = at >= 0 ? at + shift : -1;
+    if (at >= 0) shift += newText.length - oldText.length;
+    if (placed >= 0 && after.startsWith(newText, placed)) {
+      const [prefix, suffix] = shared(oldText, newText);
+      spans.push(narrow(before, after, at + prefix, at + oldText.length - suffix, placed + prefix, placed + newText.length - suffix));
       continue;
     }
     const found = newText ? after.indexOf(newText) : -1;
     if (found < 0 || after.indexOf(newText, found + 1) >= 0) continue;
-    const first = newlines(after.slice(0, found)) + 1;
-    ranges.push([first, first + newlines(newText.replace(/\n$/, ''))]);
+    spans.push({ start: found, end: found + newText.length });
   }
-  return ranges.sort((a, b) => a[0] - b[0]);
+  return changes(spans, after);
 }
 
 /**
- * What a write changed: the lines between those it kept at the start and at the end. A new
- * file is all change; a deletion marks the line where text went. Nothing for no change.
+ * What a write changed: everything between what the file kept at its start and at its end.
+ * A new file is all change; a deletion marks where text went. Nothing when the lines are the
+ * same, a final newline aside.
  */
-export function writeRanges(before: string | undefined, after: string): Range[] {
-  const old = linesOf(before ?? ''), next = linesOf(after);
-  if (before === after || !next.length) return [];
-  let start = 0;
-  while (start < old.length && start < next.length && old[start] === next[start]) start++;
-  if (start === old.length && start === next.length) return []; // Only the final newline changed.
-  let end = 0;
-  while (end < old.length - start && end < next.length - start && old[old.length - 1 - end] === next[next.length - 1 - end]) end++;
-  const first = Math.min(start + 1, next.length);
-  return [[first, Math.max(first, next.length - end)]];
+export function writeChanges(before: string | undefined, after: string): Changes {
+  const old = before ?? '';
+  if (!after || linesOf(old).join('\n') === linesOf(after).join('\n')) return { ranges: [] };
+  const [prefix, suffix] = shared(old, after);
+  return changes([narrow(old, after, prefix, old.length - suffix, prefix, after.length - suffix)], after);
 }
 
 /**

@@ -16,7 +16,8 @@ after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
 const remote: Remote = await attach(socket, { onError: () => {} });
 after(() => remote.close());
-const follow = (path: string, ranges: Range[] = [], ms = 150) => remote.lua(FOLLOW, [path, ranges, ms]);
+const follow = (path: string, ranges: Range[] = [], ms = 150, cursor: [number, number] | null = null) =>
+  remote.lua(FOLLOW, [path, ranges, ms, 'PiFollow', cursor]);
 
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-follow-')));
 after(() => rm(dir, { recursive: true, force: true }));
@@ -205,6 +206,21 @@ test('ranges past the end are clamped, and no ranges leaves the cursor where it 
   await lua('vim.api.nvim_win_set_cursor(..., { 2, 0 })', code);
   await follow(path, []);
   assert.deepEqual(await shown(code), [path, 2]);
+});
+
+test('the cursor goes to the exact column given, clamped to the line and the file', async t => {
+  const { code } = await layout(t);
+  const path = await file('n.txt', 'short\nconst ünï = "→ x";\nlast\n');
+  const at = () => lua('return vim.api.nvim_win_get_cursor(...)', code);
+  await follow(path, [[2, 2]], 150, [2, 19]); // The byte column of "x", past ü, ï and →.
+  assert.deepEqual(await at(), [2, 19]);
+  assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(...), 1, 2, true)[1]:sub(20, 20)', code), 'x');
+  await follow(path, [[1, 1]], 150, [1, 99]); // Past the end of the line: on its last character.
+  assert.deepEqual(await at(), [1, 4]);
+  await follow(path, [[9, 9]], 150, [9, 3]); // Past the end of the file.
+  assert.deepEqual(await at(), [3, 3]);
+  await follow(path, [[2, 2]], 150, null); // None given: the first range's start.
+  assert.deepEqual(await at(), [2, 0]);
 });
 
 test('the changed lines flash, then clear; a quick second change keeps its own', async t => {

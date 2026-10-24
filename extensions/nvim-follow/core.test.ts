@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { editRanges, editsOf, pathOf, readRanges, writeRanges } from './core.ts';
+import { editChanges, editsOf, pathOf, readRanges, writeChanges } from './core.ts';
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
 const apply = (text: string, edits: { oldText: string; newText: string }[]) =>
@@ -45,63 +45,105 @@ test('an edit is placed by its old text, shifted by the edits above it', () => {
     { oldText: 'line 2\n', newText: 'a\nb\nc\n' }, // Two lines more, above line 8.
     { oldText: 'line 5\nline 6\n', newText: 'five\n' }, // One line fewer, also above.
   ];
-  assert.deepEqual(editRanges(before, apply(before, edits), edits), [[2, 4], [7, 7], [9, 9]]);
+  assert.deepEqual(editChanges(before, apply(before, edits), edits), { ranges: [[2, 4], [7, 7], [9, 9]], cursor: [2, 0] });
 });
 
 test('a new text that also occurs elsewhere does not mislead', () => {
   const before = lines(50);
   const edits = [{ oldText: 'line 40\n', newText: 'line 3\n' }];
-  assert.deepEqual(editRanges(before, apply(before, edits), edits), [[40, 40]]);
+  // Only the digits differ: the change is "3" where "40" was.
+  assert.deepEqual(editChanges(before, apply(before, edits), edits), { ranges: [[40, 40]], cursor: [40, 5] });
+});
+
+test('context an old text carries to be unique is left out', () => {
+  const before = 'function a() {\n  return 1;\n}\n\nfunction b() {\n  return 1;\n}\n';
+  // The old text repeats the line above and below so that it is unique; only "2" is new.
+  const edits = [{ oldText: 'function b() {\n  return 1;\n}', newText: 'function b() {\n  return 2;\n}' }];
+  assert.deepEqual(editChanges(before, apply(before, edits), edits), { ranges: [[6, 6]], cursor: [6, 9] });
+});
+
+test('the cursor goes to the column where the change starts, counted in bytes', () => {
+  const before = 'const ünïcode = "→ old";\n';
+  const edits = [{ oldText: '"→ old"', newText: '"→ new"' }];
+  // "const ünïcode = \"→ " is 17 characters but 21 bytes: ü, ï are 2 bytes and → is 3.
+  assert.deepEqual(editChanges(before, apply(before, edits), edits), { ranges: [[1, 1]], cursor: [1, 23] });
+  const emoji = 'a 😀 b\n';
+  const edit = [{ oldText: '😀 b', newText: '😀 c' }];
+  assert.deepEqual(editChanges(emoji, apply(emoji, edit), edit).cursor, [1, 7]); // After a 4-byte emoji.
 });
 
 test('edits within a line, deletions, and edits at the very end', () => {
   const before = 'const a = 1;\nconst b = 2;\nconst c = 3;';
-  assert.deepEqual(editRanges(before, '', [{ oldText: 'b = 2', newText: 'b = 20' }]), [[2, 2]]);
-  assert.deepEqual(editRanges(before, '', [{ oldText: 'const b = 2;\n', newText: '' }]), [[2, 2]]); // Where it went.
-  assert.deepEqual(editRanges(before, '', [{ oldText: 'c = 3;', newText: 'c = 3;\nconst d = 4;' }]), [[3, 4]]);
+  const change = (oldText: string, newText: string) => editChanges(before, before.replace(oldText, newText), [{ oldText, newText }]);
+  assert.deepEqual(change('b = 2', 'b = 20'), { ranges: [[2, 2]], cursor: [2, 11] });
+  assert.deepEqual(change('const b = 2;\n', ''), { ranges: [[2, 2]], cursor: [2, 0] }); // Where it went.
+  assert.deepEqual(change('c = 3;', 'c = 3;\nconst d = 4;'), { ranges: [[3, 4]], cursor: [3, 12] });
 });
 
 test('an edit matched loosely is placed by its new text, when that is unambiguous', () => {
   const before = 'one\r\ntwo\r\nthree\r\n'; // The tool matched "two\n" against CRLF.
   const after = 'one\r\nTWO\r\nthree\r\n';
-  assert.deepEqual(editRanges(before, after, [{ oldText: 'two\n', newText: 'TWO' }]), [[2, 2]]);
-  const twice = 'TWO\nTWO\n';
-  assert.deepEqual(editRanges('x\ny\n', twice, [{ oldText: 'z', newText: 'TWO' }]), []); // Could be either.
-  assert.deepEqual(editRanges('x\n', 'x\n', [{ oldText: 'z', newText: '' }]), []); // Nothing to look for.
+  assert.deepEqual(editChanges(before, after, [{ oldText: 'two\n', newText: 'TWO' }]), { ranges: [[2, 2]], cursor: [2, 0] });
+  assert.deepEqual(editChanges('x\ny\n', 'TWO\nTWO\n', [{ oldText: 'z', newText: 'TWO' }]), { ranges: [], cursor: undefined }); // Either.
+  assert.deepEqual(editChanges('x\n', 'x\n', [{ oldText: 'z', newText: '' }]), { ranges: [], cursor: undefined }); // Nothing to look for.
+});
+
+test('where an edit should be is checked against the file after it', () => {
+  // The old text is found, but the tool also changed something above it (line endings, say):
+  // the reckoned place holds other text, so the new text is looked for instead.
+  const before = 'a\r\nb\nkeep\nold\n';
+  const after = 'a\nb\nkeep\nnew\n';
+  assert.deepEqual(editChanges(before, after, [{ oldText: 'old', newText: 'new' }]), { ranges: [[4, 4]], cursor: [4, 0] });
 });
 
 test('ranges come out in file order whatever order the edits came in', () => {
   const before = lines(20);
   const edits = [{ oldText: 'line 15\n', newText: 'x\n' }, { oldText: 'line 1\n', newText: 'y\n' }, { oldText: 'line 9\n', newText: 'z\n' }];
-  assert.deepEqual(editRanges(before, apply(before, edits), edits), [[1, 1], [9, 9], [15, 15]]);
+  assert.deepEqual(editChanges(before, apply(before, edits), edits), { ranges: [[1, 1], [9, 9], [15, 15]], cursor: [1, 0] });
 });
 
 // Writes
 
-test('a write marks the lines between those it kept', () => {
+test('a write marks what changed between what it kept, with the cursor where that starts', () => {
   const before = lines(10);
-  assert.deepEqual(writeRanges(before, before.replace('line 4\n', 'four\nmore\n')), [[4, 5]]);
-  assert.deepEqual(writeRanges(before, before + 'line 11\n'), [[11, 11]]); // Appended.
-  assert.deepEqual(writeRanges(before, 'line 0\n' + before), [[1, 1]]); // Prepended.
-  assert.deepEqual(writeRanges(before, before.replace('line 2\n', 'two\n').replace('line 9\n', 'nine\n')), [[2, 9]]); // Spread out.
+  assert.deepEqual(writeChanges(before, before.replace('line 4\n', 'four\nmore\n')), { ranges: [[4, 5]], cursor: [4, 0] });
+  assert.deepEqual(writeChanges(before, before + 'line 11\n'), { ranges: [[11, 11]], cursor: [11, 0] }); // Appended.
+  assert.deepEqual(writeChanges(before, 'line 0\n' + before), { ranges: [[1, 1]], cursor: [1, 0] }); // A whole new line.
+  assert.deepEqual(writeChanges(before, before.replace('line 2\n', 'two\n').replace('line 9\n', 'nine\n')), { ranges: [[2, 9]], cursor: [2, 0] });
+  assert.deepEqual(writeChanges(before, before.replace('line 7', 'line 77')), { ranges: [[7, 7]], cursor: [7, 6] }); // Within a line.
 });
 
 test('a write that removes lines marks where they were', () => {
-  assert.deepEqual(writeRanges(lines(5), lines(5).replace('line 3\n', '')), [[3, 3]]);
-  assert.deepEqual(writeRanges(lines(5), 'line 1\nline 2\n'), [[2, 2]]); // The end went: the last line left.
+  assert.deepEqual(writeChanges(lines(5), lines(5).replace('line 3\n', '')), { ranges: [[3, 3]], cursor: [3, 0] }); // At the start of where it was.
+  assert.deepEqual(writeChanges(lines(5), 'line 1\nline 2\n'), { ranges: [[3, 3]], cursor: [3, 0] }); // The end went: just after the last line left.
 });
 
 test('a new file is all change; an unchanged or emptied one marks nothing', () => {
-  assert.deepEqual(writeRanges(undefined, 'a\nb\nc\n'), [[1, 3]]);
-  assert.deepEqual(writeRanges('', 'a\n'), [[1, 1]]);
-  assert.deepEqual(writeRanges(lines(3), lines(3)), []);
-  assert.deepEqual(writeRanges(lines(3), ''), []);
+  assert.deepEqual(writeChanges(undefined, 'a\nb\nc\n'), { ranges: [[1, 3]], cursor: [1, 0] });
+  assert.deepEqual(writeChanges('', 'a\n'), { ranges: [[1, 1]], cursor: [1, 0] });
+  assert.deepEqual(writeChanges(lines(3), lines(3)), { ranges: [] });
+  assert.deepEqual(writeChanges(lines(3), ''), { ranges: [] });
 });
 
-test('repeated lines and a missing final newline do not confuse the diff', () => {
-  assert.deepEqual(writeRanges('a\na\na\n', 'a\na\na\na\n'), [[4, 4]]);
-  assert.deepEqual(writeRanges('a\nb', 'a\nb\n'), []); // The same lines.
-  assert.deepEqual(writeRanges('a\nb\n', 'a\nB'), [[2, 2]]);
+test('repeated lines and a missing final newline do not confuse it', () => {
+  assert.deepEqual(writeChanges('a\na\na\n', 'a\na\na\na\n'), { ranges: [[4, 4]], cursor: [4, 0] });
+  assert.deepEqual(writeChanges('a\nb', 'a\nb\n'), { ranges: [] }); // The same lines.
+  assert.deepEqual(writeChanges('a\nb\n', 'a\nB'), { ranges: [[2, 2]], cursor: [2, 0] });
+});
+
+test('an insertion or deletion that could go in several places goes at a line start', () => {
+  // "a0" inserted above "a1": character by character it could be "0\na" after the first "a".
+  const insert = [{ oldText: 'a1\n', newText: 'a0\na1\n' }];
+  assert.deepEqual(editChanges('x\na1\n', 'x\na0\na1\n', insert), { ranges: [[2, 2]], cursor: [2, 0] });
+  // A duplicated line removed: marked, like any deletion, at the line now where it was.
+  assert.deepEqual(writeChanges('a\nsame\nsame\nb\n', 'a\nsame\nb\n'), { ranges: [[3, 3]], cursor: [3, 0] });
+  // Within a line, nothing to slide to: left where the characters differ.
+  assert.deepEqual(writeChanges('abcabc\n', 'abcXabc\n'), { ranges: [[1, 1]], cursor: [1, 3] });
+});
+
+test('a surrogate pair is never split', () => {
+  // The two emoji share their first UTF-16 unit; the change must start before it, not inside.
+  assert.deepEqual(writeChanges('x 😀\n', 'x 😁\n'), { ranges: [[1, 1]], cursor: [1, 2] });
 });
 
 // Reads

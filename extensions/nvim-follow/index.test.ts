@@ -121,6 +121,22 @@ test('an edit is shown where it landed, not where its new text first occurs', as
   await shutdown();
 });
 
+test('the cursor lands on the character that changed, not on the context around it', async () => {
+  const { follow, tool, shutdown } = await pi();
+  const code = await layout();
+  const path = join(dir, 'ctx.ts');
+  await writeFile(path, 'function a() {\n  return 1;\n}\n\nfunction b() {\n  return "→ 1";\n}\n');
+  await follow('on');
+  // As Pi writes edits: the lines around the change come along, so the old text is unique.
+  const oldText = 'function b() {\n  return "→ 1";\n}', newText = 'function b() {\n  return "→ 2";\n}';
+  await tool('edit', { path: 'ctx.ts', edits: [{ oldText, newText }] }, edit(oldText, newText));
+  await showing(code, path, 6);
+  // Byte 14 on line 6: the "2", past the 3-byte arrow.
+  assert.deepEqual(await lua('return vim.api.nvim_win_get_cursor(...)', code), [6, 14]);
+  assert.equal(await lua('local w = ...; local c = vim.api.nvim_win_get_cursor(w); return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), c[1] - 1, c[1], true)[1]:sub(c[2] + 1, c[2] + 1)', code), '2');
+  await shutdown();
+});
+
 test('several edits in one call: the first is where the cursor goes', async () => {
   const { follow, tool, shutdown } = await pi();
   const code = await layout();

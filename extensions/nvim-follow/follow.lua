@@ -1,7 +1,8 @@
 -- Show `path` in the editor at `ranges` ({ first, last } lines), highlighted in `group` for
--- `ms`. Runs through nvim-remote, with `remote` in scope. Returns what happened, so a file
--- left alone can be told from one shown.
-local path, ranges, ms, group = ...
+-- `ms`, with the cursor at `cursor` ({ line, byte column }) or else the first range's start.
+-- Runs through nvim-remote, with `remote` in scope. Returns what happened, so a file left
+-- alone can be told from one shown.
+local path, ranges, ms, group, cursor = ...
 
 -- This attachment's own highlights, apart from what other features put in remote.ns, and
 -- gone with it.
@@ -66,8 +67,13 @@ vim.defer_fn(function()
   if state.shown == shown and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, state.ns, 0, -1) end
 end, ms)
 
-if ranges[1] then
-  vim.api.nvim_win_set_cursor(win, { math.min(ranges[1][1], count), 0 })
+if cursor == vim.NIL then cursor = nil end
+cursor = cursor or (ranges[1] and { ranges[1][1], 0 })
+if cursor then
+  local line = math.max(1, math.min(cursor[1], count))
+  local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
+  -- In normal mode the cursor sits on a character, so the last one is as far as it goes.
+  vim.api.nvim_win_set_cursor(win, { line, math.max(0, math.min(cursor[2], #text - 1)) })
   vim.api.nvim_win_call(win, function() vim.cmd('normal! zz') end)
 end
 return 'shown'

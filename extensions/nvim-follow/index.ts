@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { readFile } from 'node:fs/promises';
 import { useRemote } from '../nvim-remote/api.ts';
-import { FOLLOW, editRanges, editsOf, pathOf, readRanges, writeRanges } from './core.ts';
+import { FOLLOW, editChanges, editsOf, pathOf, readRanges, writeChanges, type Changes } from './core.ts';
 
 const HIGHLIGHT_MS = 1500;
 // Pi loads extensions afresh on /reload and for every session, in the same process; the
@@ -52,20 +52,20 @@ export default function (pi: ExtensionAPI) {
     const remote = nvim();
     if (state.mode === 'off' || event.isError || !path || !remote) return;
     // Not awaited: Pi does not wait on the editor, and a busy one just misses a step.
-    const follow = (ranges: unknown[], group: string) =>
-      void remote.lua(FOLLOW, [path, ranges, HIGHLIGHT_MS, group], { timeout: 2000 }).catch(() => {});
+    const follow = ({ ranges, cursor }: Changes, group: string) =>
+      void remote.lua(FOLLOW, [path, ranges, HIGHLIGHT_MS, group, cursor ?? null], { timeout: 2000 }).catch(() => {});
     if (event.toolName === 'read') {
       // An image read is not for an editor.
-      if (state.mode === 'all' && !event.content.some(block => block.type === 'image')) follow(readRanges(event.input), 'PiFollowRead');
+      if (state.mode === 'all' && !event.content.some(block => block.type === 'image')) follow({ ranges: readRanges(event.input) }, 'PiFollowRead');
       return;
     }
     if (!changes(event.toolName)) return;
     const after = await readFile(path, 'utf8').catch(() => undefined);
     if (after === undefined) return;
-    const ranges = event.toolName === 'write'
-      ? writeRanges(had ? old : undefined, after)
-      : old === undefined ? [] : editRanges(old, after, editsOf(event.input));
-    follow(ranges, 'PiFollow');
+    const changed = event.toolName === 'write'
+      ? writeChanges(had ? old : undefined, after)
+      : old === undefined ? { ranges: [] } : editChanges(old, after, editsOf(event.input));
+    follow(changed, 'PiFollow');
   });
 
   pi.registerCommand('follow', {

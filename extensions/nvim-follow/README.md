@@ -17,10 +17,13 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
 
 ## What it does
 
-- **Where:** an edit is shown where it landed: found from where its old text was before the
-  change, so a new text that also occurs elsewhere does not mislead. An edit the tool matched
-  loosely (other whitespace or line endings) is placed by its new text, if that occurs once.
-  A write is shown at the lines it changed; a new file at its top.
+- **Where:** the cursor goes to the character where a change starts, and only the lines that
+  changed flash: the context Pi's edits carry to be unique is left out. An edit is found from
+  where its old text was before the change, so a new text that also occurs elsewhere does not
+  mislead; one the tool matched loosely (other whitespace or line endings) is placed by its new
+  text, if that occurs once. A write is shown at what it changed, a new file at its top. An
+  added or removed line that could be placed several ways is placed at a line start, as diff
+  tools do.
 - **Window:** one already showing the file; else the one you came from; else another normal
   window in the tab. The window you are in is used only in normal mode, and only when there
   is no other, so it is never taken while you type. Terminals, help and floating windows

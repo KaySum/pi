@@ -2,9 +2,11 @@
 -- (tabs, splits, windows, buffers), sent to Pi as `nvim-view:changed` whenever it changes.
 -- It runs through nvim-remote, with `remote` in scope.
 
--- Changes come in bursts (a split opens: WinNew, WinEnter, BufEnter, WinResized…): one
--- snapshot for each burst, sent only if it differs from the last.
-local DEBOUNCE_MS = 30
+-- A view goes as soon as the editor is free after a change: a burst (a split opens: WinNew,
+-- WinEnter, BufEnter, WinResized…) all fires before then, and makes one. While changes keep
+-- coming (typing, scrolling), one goes at most every INTERVAL_MS, and none is held back
+-- longer. Sent only if it differs from the last.
+local INTERVAL_MS = 30
 local EVENTS = {
 	"WinNew", "WinClosed", "WinEnter", "WinResized", "WinScrolled",
 	"BufEnter", "BufAdd", "BufNew", "BufDelete", "BufUnload", "BufHidden", "BufWipeout",
@@ -163,7 +165,7 @@ function state.snapshot()
 	-- Unlisted buffers nobody sees (plugins' scratch buffers, say) are left out, but counted.
 	local buffers, hidden = {}, 0
 	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		if option(buf, "buflisted") == 1 or shown[buf] or buf == remote.terminal then
+		if shown[buf] or buf == remote.terminal or vim.fn.buflisted(buf) == 1 then
 			table.insert(buffers, buffer(buf))
 		else
 			hidden = hidden + 1
@@ -247,13 +249,20 @@ end
 
 state.timer = vim.uv.new_timer()
 remote.on_detach(function()
+	state.closed = true -- A view already scheduled must not go to a channel that is gone.
 	state.timer:stop()
 	state.timer:close()
 end)
 local function changed()
-	state.timer:stop()
-	state.timer:start(DEBOUNCE_MS, 0, vim.schedule_wrap(function()
-		if remote.nvim_view == state then
+	if state.pending then
+		return -- The view to come will see this change too: it is made when it is sent.
+	end
+	state.pending = true
+	local since = (vim.uv.hrtime() - (state.last or 0)) / 1e6
+	state.timer:start(math.max(0, INTERVAL_MS - since), 0, vim.schedule_wrap(function()
+		state.pending = false
+		if not state.closed then
+			state.last = vim.uv.hrtime()
 			send()
 		end
 	end))

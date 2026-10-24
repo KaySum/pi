@@ -32,7 +32,11 @@ would be typed into Pi. `editor_keys` refuses then; the model can focus another 
 needs no focus.
 
 A busy editor (in Lua, a plugin's say) still answers calls but takes in typed keys only when
-it is done, so `editor_keys` waits until they are taken before saying what they did. At a
+it is done, so `editor_keys` waits until they are taken before saying what they did. Neovim
+takes only as much typed input as fits in its 16 KB input buffer, so long keys are sent in
+parts of at most 4 KB, each once the last is taken, cut between whole key names and
+characters; none are dropped. (For pasting text, `editor_lua` and the buffer API are still
+the better tool.) At a
 hit-enter prompt it says so, and further keys answer it; `editor_lua` fails at once there.
 
 ## Not here

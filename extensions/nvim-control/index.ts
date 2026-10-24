@@ -23,6 +23,24 @@ return { buffer = buf, file = vim.api.nvim_buf_get_name(buf), line = cursor[1], 
 
 type State = { buffer: number; file: string; line: number; column: number; modified: boolean; terminal: boolean; message: string };
 
+const PART_BYTES = 4096;
+// A key's name in Neovim notation (<Esc>, <lt>, <C-w>), else one character.
+const KEY = /<[A-Za-z0-9-]+>|[\s\S]/gu;
+
+/** `keys` cut into parts of at most PART_BYTES, never inside a key's name or a character. */
+export function parts(keys: string): string[] {
+  const out: string[] = [];
+  let part = '', bytes = 0;
+  for (const [key] of keys.matchAll(KEY)) {
+    const size = Buffer.byteLength(key);
+    if (bytes + size > PART_BYTES && part) { out.push(part); part = ''; bytes = 0; }
+    part += key;
+    bytes += size;
+  }
+  if (part) out.push(part);
+  return out;
+}
+
 function describe(mode: string, s: State) {
   const file = s.file ? JSON.stringify(s.file) : '[No Name]';
   return `mode ${mode} | buffer ${s.buffer} ${file}${s.modified ? ' [+]' : ''}${s.terminal ? ' (your own terminal)' : ''} | ${s.line}:${s.column}`
@@ -126,17 +144,28 @@ export default function (pi: ExtensionAPI) {
         const state = await remote.lua(STATE, [], options) as State;
         if (state.terminal) throw new Error("The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with editor_lua first, or use editor_lua.");
       }
-      if (params.keys) await remote.request('nvim_input', [params.keys], options);
+      const end = Date.now() + options.timeout;
       // A busy editor (in Lua, a plugin's or a call's that timed out) still answers calls, but
       // takes in typed keys only when it is done: wait for them to be taken, or for a prompt.
-      for (const end = Date.now() + options.timeout; params.keys;) {
-        const waiting = await remote.lua('return vim.fn.getchar(1) ~= 0', [], options).catch(error => {
-          if ((error as { blocking?: boolean }).blocking) return false; // The keys opened a prompt.
-          throw error;
-        });
-        if (!waiting) break;
-        if (Date.now() > end) throw new Error(`Neovim did not take in the keys within ${options.timeout} ms; it is busy`);
-        await delay(20);
+      async function taken() {
+        for (;;) {
+          const waiting = await remote.lua('return vim.fn.getchar(1) ~= 0', [], options).catch(error => {
+            if ((error as { blocking?: boolean }).blocking) return false; // The keys opened a prompt.
+            throw error;
+          });
+          if (!waiting) return;
+          if (Date.now() > end) throw new Error(`Neovim did not take in the keys within ${options.timeout} ms; it is busy`);
+          await delay(20);
+        }
+      }
+      // Neovim's input buffer holds about 16 KB and takes only what fits, so the keys go in
+      // parts well below that, each once the one before is taken.
+      for (const part of parts(params.keys)) {
+        const written = await remote.request('nvim_input', [part], options) as number;
+        if (written < Buffer.byteLength(part)) {
+          throw new Error(`Neovim took only ${written} of ${Buffer.byteLength(part)} bytes of keys; the rest were not typed`);
+        }
+        await taken();
       }
       const mode = await remote.request('nvim_get_mode', [], options) as { mode: string; blocking: boolean };
       if (mode.blocking) return result(`mode ${mode.mode} (waiting at a prompt: answer it with editor_keys, often <CR> or <Esc>)`);

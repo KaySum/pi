@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test, type TestContext } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { register as registerHooks } from 'node:module';
+import { registerHooks } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
@@ -10,10 +10,11 @@ import type { Remote } from '../nvim-remote/api.ts';
 
 // Pi's packages are installed with nvim-service, and found from there, as Pi finds them.
 const from = new URL('../nvim-service/index.ts', import.meta.url).href;
-registerHooks(`data:text/javascript,${encodeURIComponent(`export async function resolve(specifier, context, next) {
-  return next(specifier, specifier.startsWith('@earendil-works/') ? { ...context, parentURL: ${JSON.stringify(from)} } : context);
-}`)}`);
-const { default: register } = await import('./index.ts');
+registerHooks({
+  resolve: (specifier, context, next) =>
+    next(specifier, specifier.startsWith('@earendil-works/') ? { ...context, parentURL: from } : context),
+});
+const { default: register, parts } = await import('./index.ts');
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -157,6 +158,28 @@ test('editor_keys waits for a busy editor to take in the keys before saying what
   assert.match(state, /^mode n \| .*\[\+\] \| 1:4/);
 });
 
+test('editor_keys delivers every key, however many: none are dropped when Neovim takes only part', async t => {
+  const { run } = load(await attached(t));
+  const text = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(97 + (i % 26))).join('');
+  for (const insert of [text(20000), text(100000), 'λ🦀'.repeat(4000)]) {
+    const buf = await scratch();
+    const state = await run('editor_keys', { keys: `i${insert}<Esc>`, timeoutMs: 30000 });
+    assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, insert.length);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), insert);
+    assert.match(state, /^mode n \| /, 'the closing <Esc> arrived too');
+  }
+});
+
+test('editor_keys never splits a key name or a character between the parts it sends', async t => {
+  const { run } = load(await attached(t));
+  // A <lt> and an emoji either side of where 4 KB parts would be cut.
+  for (const pad of [4090, 4091, 4092, 4093, 4094, 4095]) {
+    const buf = await scratch();
+    await run('editor_keys', { keys: `i${'a'.repeat(pad)}<lt>😀b<Esc>` });
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), `${'a'.repeat(pad)}<😀b`);
+  }
+});
+
 test("editor_keys reports the last message, such as an error the keys caused", async t => {
   const { run } = load(await attached(t));
   await scratch();
@@ -259,4 +282,14 @@ test('the footer shows control while it is on and Pi is attached', async t => {
 
 test('without an attachment the footer shows nothing, even with control on', () => {
   assert.equal(load(undefined).status['nvim-control'], undefined);
+});
+
+test('keys are cut into parts of at most 4 KB, between whole key names and characters', () => {
+  assert.deepEqual(parts(''), []);
+  assert.deepEqual(parts('ihello<Esc>'), ['ihello<Esc>']);
+  const cut = parts('a'.repeat(4094) + '<Esc>' + '🦀'.repeat(2000));
+  assert.ok(cut.every(part => Buffer.byteLength(part) <= 4096));
+  assert.ok(cut[1].startsWith('<Esc>'), 'the key name went whole into the next part');
+  assert.equal(cut.join(''), 'a'.repeat(4094) + '<Esc>' + '🦀'.repeat(2000));
+  assert.ok(cut.every(part => !/^[\uDC00-\uDFFF]/.test(part)), 'no part starts inside a character');
 });

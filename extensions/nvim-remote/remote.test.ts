@@ -3,7 +3,7 @@ import { after, test, type TestContext } from 'node:test';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
-import { attach, connect, type AutocmdEvent, type Remote } from './remote.ts';
+import { assertCurrent, attach, connect, type AutocmdEvent, type Remote } from './remote.ts';
 
 // Stands in for the user's editor; `editor` is the user, acting on it directly.
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
@@ -79,6 +79,13 @@ test('several Pis share an editor, and a new one leaves the others attached', as
 
 test('attaching to a socket nothing listens on fails', async () => {
   await assert.rejects(attach('/tmp/nvim-remote-nothing-here.sock'), /ENOENT|ECONNREFUSED/);
+});
+
+test('an RPC client from before Pi was restarted is named as the problem', () => {
+  // As after /reload once nvim-service's rpc.mjs gained onClose: Node still has the old one.
+  const stale = { request: () => Promise.resolve(), notify: () => {}, on: () => () => {}, close: () => {} };
+  assert.throws(() => assertCurrent(stale), /nvim-service changed since Pi started.*restart Pi/);
+  assert.doesNotThrow(() => assertCurrent({ ...stale, onClose: () => () => {} }));
 });
 
 // Running Lua

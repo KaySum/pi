@@ -9,7 +9,9 @@ Not to be confused with [nvim-service](../nvim-service/README.md), a private, he
 that Pi owns. This is the editor you are typing in. A later `pi-remote` would be the other
 direction: Neovim controlling Pi.
 
-Needs nvim-service installed (it reuses its RPC client) and Neovim 0.10+.
+Needs nvim-service installed (it reuses its RPC client) and Neovim 0.10+. After updating
+nvim-service, quit and restart Pi: `/reload` does not reload its `.mjs` files, and
+nvim-remote says so if it finds the old ones.
 
 Detection is `$NVIM`, which Neovim sets to its socket in every terminal it starts. A Pi
 started by sidekick inside tmux or zellij is not under Neovim and does not attach. Neither

@@ -40,10 +40,20 @@ async function within<T>(options: CallOptions, work: (signal?: AbortSignal) => P
   }
 }
 
+/**
+ * Throws if nvim-service's RPC client lacks what this needs. /reload loads this file afresh
+ * but not that one, which Node keeps as it was when Pi started.
+ */
+export function assertCurrent(rpc: Partial<Rpc>) {
+  if (typeof rpc.onClose === 'function') return;
+  throw new Error('nvim-service changed since Pi started, and its RPC client is older than nvim-remote needs; quit and restart Pi');
+}
+
 /** A raw channel of its own to the editor: no prompt check, no timeout, no cleanup. */
 export async function connect(socket: string, { signal }: { signal?: AbortSignal } = {}): Promise<Rpc & { channel: number }> {
   const rpc = await connectRpc(socket, signal);
   try {
+    assertCurrent(rpc);
     const { id } = await rpc.request('nvim_get_chan_info', [0], signal) as { id: number };
     return Object.assign(rpc, { channel: id });
   } catch (error) { rpc.close(); throw error; }

@@ -181,6 +181,39 @@ test('a float moved by the API is seen, yet an idle editor makes no views', asyn
   } finally { await shutdown(); }
 });
 
+test('changes no event reports are seen: a cursor elsewhere, an unseen buffer edited or unloaded', async () => {
+  const { view, changes, shutdown } = await pi();
+  try {
+    const path = await file('hidden.ts', 1);
+    const [other, hidden] = await lua(`vim.o.hidden = true
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c' })
+      vim.cmd('split')
+      local other = vim.fn.win_getid(vim.fn.winnr('#'))
+      vim.cmd('edit ' .. vim.fn.fnameescape(...))
+      local hidden = vim.api.nvim_get_current_buf()
+      vim.cmd('enew')
+      return { other, hidden }`, path);
+    await eventually(() => view()?.buffers.some(b => b.id === hidden && b.loaded && !b.windows.length));
+    await delay(100);
+    const latest = () => changes.at(-1)!;
+
+    await editor.request('nvim_win_set_cursor', [other, [2, 0]]); // Not the current window.
+    await eventually(() => windowOf(latest(), other)?.cursor[0] === 2);
+
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "first" })', hidden); // Modified, unseen.
+    await eventually(() => bufferOf(latest(), hidden)?.modified);
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "second", "third" })', hidden); // Again.
+    await eventually(() => bufferOf(latest(), hidden)?.lines === 2);
+
+    await lua('vim.cmd("bunload! " .. ...)', hidden);
+    const unloaded = await eventually(() => bufferOf(latest(), hidden)?.loaded === false && bufferOf(latest(), hidden));
+    assert.deepEqual([unloaded.lines, unloaded.bytes], [undefined, undefined]);
+  } finally {
+    await lua('vim.o.hidden = false');
+    await shutdown();
+  }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {
@@ -205,6 +238,20 @@ test('a refresh brings every extension the view it made, and one from a Pi gone 
     bus.emit('nvim-view:stopped', {}); // and the editor goes before this extension takes it.
     assert.equal(await asked, undefined);
     assert.equal(handle(), undefined);
+  }
+  // Asked before a newer view came, its answer does not replace that view.
+  {
+    const bus = new EventEmitter();
+    const api = { events: { on: (c: string, h: (d: unknown) => void) => bus.on(c, h), emit: (c: string, d: unknown) => bus.emit(c, d) }, on() {} } as unknown as ExtensionAPI;
+    const handle = useView(api);
+    const older = { windows: [], buffers: [], omitted: 0 } as unknown as View, newer = { ...older, omitted: 1 };
+    let answer!: (view: View) => void;
+    bus.on('nvim-view:refresh', (request: { reply(view: Promise<View>): void }) => request.reply(new Promise(resolve => { answer = resolve; })));
+    const asked = handle.refresh();
+    answer(older);
+    bus.emit('nvim-view:changed', newer);
+    assert.equal(await asked, older); // What the refresh found, as it found it;
+    assert.equal(handle(), newer); // the latest, still the newer.
   }
   // Asked, then Pi goes before the answer: it is no view.
   const late = await pi();

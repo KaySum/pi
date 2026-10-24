@@ -60,8 +60,10 @@ view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 Whenever what you see changes: windows opened, closed, entered, resized or scrolled; buffers
 entered, added, deleted, written, modified or retyped; tabs; the editor resized; the mode;
 the directory; terminals; text changed; the cursor moved; options set; language servers
-attaching; the terminal's focus; floats moved (seen once the editor is idle, since moving
-one fires no event). Changes are gathered for 30 ms, so a burst (a split opening
+attaching; the terminal's focus. Some changes fire no event at all: a float changed, a
+cursor moved in a window that isn't current, a buffer edited or unloaded while unseen, all
+by plugins through the API. Those are seen once the editor is idle, by a quick look (a few
+microseconds) at what they change. Changes are gathered for 30 ms, so a burst (a split opening
 fires half a dozen) makes one view, and a view the same as the last isn't sent at all.
 
 A view takes about 0.1 ms to make with a few windows, and under 0.5 ms with 17 windows in 6

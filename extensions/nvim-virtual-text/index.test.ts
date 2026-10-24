@@ -108,6 +108,12 @@ test('/nvim-virtual-text-add places at your cursor, or where it says; /nvim-virt
     assert.deepEqual(await run('nvim-virtual-text-add', 'position=sideways x'), ['position=sideways is not a value position takes: eol, right, overlay, inline, after, above, below or a column', 'warning']);
     assert.deepEqual(await run('nvim-virtual-text-add', 'path=placed.ts match=nowhere x'), [`not found in ${path}: nowhere`, 'warning']);
 
+    // A color for highlight: the lines' background, as a style of its own.
+    await run('nvim-virtual-text-add', 'line=1 highlight=#1e2030');
+    const colored = (await virtualText(nvim!, 'user').list()).at(-1)!;
+    assert.deepEqual(colored.highlight, { bg: '#1e2030' });
+    await virtualText(nvim!, 'user').remove(colored.id);
+
     const [mine] = await virtualText(nvim!, 'user').list();
     assert.deepEqual([mine.text, mine.position, mine.hl], ['a note\nover two lines', 'below', { fg: '#ff9e64' }]);
     const report = (await run('nvim-virtual-text'))[0];

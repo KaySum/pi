@@ -21,7 +21,8 @@ cursor of your window: the one you were last in, not Pi's terminal. Options are 
 (below), offered as you type: `path` (from Pi's working directory), `line`, `endLine`,
 `col`, `endCol`, `match`, `columns`, `position`, `hl`, `highlight`, `sign`, `indent`, `wrap`, `fill`,
 `ttl`, `invalidate`, `priority`. `fg`, `bg`, `bold`, `italic` and `underline` make a style for
-the text. Quote a value with spaces, and write `\n` for a new line:
+the text; `hl=#rrggbb` is short for `fg=#rrggbb`, and `highlight=#rrggbb` gives the lines
+marked that background. Quote a value with spaces, and write `\n` for a new line:
 
 ```
 /nvim-virtual-text-add position=below fg=#ff9e64 wrap=true Why this retries\nbefore giving up

@@ -41,6 +41,14 @@ test('fg, bg, bold, italic and underline make a style for the text', () => {
   assert.throws(() => markOf('hl=Title fg=#ff0000 hot', at, resolve), /not both/);
 });
 
+test('a color for hl colors the text, and for highlight the lines\' background', () => {
+  assert.deepEqual(markOf('hl=#FF9E64 bold=true hot', at, resolve), { buf: 3, line: 12, text: 'hot', hl: { fg: '#FF9E64', bold: true } });
+  assert.deepEqual(markOf('highlight=#1e2030 bg=#2d1b0e x', at, resolve), { buf: 3, line: 12, text: 'x', highlight: { bg: '#1e2030' }, hl: { bg: '#2d1b0e' } });
+  assert.deepEqual(markOf('hl=Title highlight=Visual x', at, resolve), { buf: 3, line: 12, text: 'x', hl: 'Title', highlight: 'Visual' });
+  assert.throws(() => markOf('hl=#ff0000 fg=#00ff00 x', at, resolve), /hl=#… or fg=#…/);
+  assert.throws(() => markOf('hl=Title bold=true x', at, resolve), /not both/);
+});
+
 test('completion offers option keys, then the values some take, and stops once the text begins', () => {
   assert.deepEqual(completeAdd('pos')?.map(item => item.value), ['position=']);
   assert.deepEqual(completeAdd('wrap=true pos')?.map(item => item.value), ['wrap=true position=']);

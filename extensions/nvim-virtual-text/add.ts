@@ -10,12 +10,13 @@ const POSITIONS = ['eol', 'right', 'overlay', 'inline', 'after', 'above', 'below
 const STYLE = ['fg', 'bg', 'bold', 'italic', 'underline'] as const;
 const KEYS: readonly string[] = [...NUMBERS, ...FLAGS, ...FLAGS_OR_NUMBERS, ...STRINGS, 'position'];
 const OPTION = /\s*(\w+)=("(?:[^"\\]|\\.)*"|\S*)/y;
+const COLOR = /^#[0-9a-f]{6}$/i;
 
 const DESCRIPTIONS: Record<string, string> = {
   path: 'File, from the working directory (default: your window\'s)', line: 'Line (default: your cursor\'s)',
   endLine: 'Last line marked', col: 'Byte column', endCol: 'Last byte column', match: 'Code to find instead of a line',
-  columns: 'Mark just the matched text', position: 'eol, right, overlay, inline, after, above, below or a column', hl: 'Highlight group of the text',
-  highlight: 'Highlight group for the lines marked', sign: 'Sign column text', indent: 'true or columns',
+  columns: 'Mark just the matched text', position: 'eol, right, overlay, inline, after, above, below or a column', hl: 'Highlight group, or #rrggbb color, of the text',
+  highlight: 'Highlight group, or #rrggbb background, for the lines marked', sign: 'Sign column text', indent: 'true or columns',
   wrap: 'true or columns', fill: 'Background across the window', ttl: 'Milliseconds before it goes',
   invalidate: 'Hide while its lines are deleted', priority: 'Extmark priority', fg: 'Text color, #rrggbb',
   bg: 'Background color, #rrggbb', bold: 'true', italic: 'true', underline: 'true',
@@ -53,9 +54,16 @@ export function parseAdd(args: string): { options: Record<string, unknown>; text
 export function markOf(args: string, at: { buf: number; line: number } | undefined, resolve: (path: string) => string): Mark {
   const { options, text } = parseAdd(args);
   const { path, ...rest } = options as Mark & Style & { path?: string };
-  const style = Object.fromEntries(STYLE.filter(key => key in rest).map(key => [key, rest[key]]));
+  const style: Style = Object.fromEntries(STYLE.filter(key => key in rest).map(key => [key, rest[key]]));
   for (const key of STYLE) delete (rest as Record<string, unknown>)[key];
+  // A color for hl is the text's (fg), for highlight the lines' background (bg); a name, a group.
+  if (typeof rest.hl === 'string' && COLOR.test(rest.hl)) {
+    if (style.fg !== undefined) throw new Error('Give hl=#… or fg=#…, not both');
+    style.fg = rest.hl;
+    delete rest.hl;
+  }
   if (Object.keys(style).length && rest.hl !== undefined) throw new Error('Give hl, or fg, bg, bold, italic and underline, not both');
+  if (typeof rest.highlight === 'string' && COLOR.test(rest.highlight)) rest.highlight = { bg: rest.highlight };
   if (!text && rest.highlight === undefined && rest.sign === undefined) throw new Error('Usage: /nvim-virtual-text-add [option=value …] <text>');
   const where = path !== undefined ? { path: resolve(path), line: rest.line ?? (rest.match ? undefined : 1) }
     : at ? { buf: at.buf, line: rest.line ?? at.line }

@@ -64,10 +64,11 @@ const USAGE = 'Usage: /nvim-control [on|off]';
 export default function (pi: ExtensionAPI) {
   // Outside Neovim there is no editor to control, and no tools to cost the model anything.
   if (!process.env.NVIM) return;
-  const setting = ((globalThis as { [SETTING]?: Setting })[SETTING] ??= { on: true });
+  // Off until asked for: giving the model the editor the user is working in is their call.
+  const setting = ((globalThis as { [SETTING]?: Setting })[SETTING] ??= { on: false });
   let context: ExtensionContext | undefined;
   // Shown only while attached: without an editor there is nothing to control.
-  const show = () => context?.ui.setStatus('nvim-control', setting.on && nvim() ? 'control' : undefined);
+  const show = () => context?.ui.setStatus('nvim-control', nvim() ? `control ${setting.on ? 'on' : 'off'}` : undefined);
   const nvim = useRemote(pi, show);
   pi.events.on('nvim-remote:stopped', show);
 

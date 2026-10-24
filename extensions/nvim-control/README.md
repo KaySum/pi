@@ -12,12 +12,12 @@ two tools' descriptions are in the system prompt.
 
 Both take `timeoutMs` (default 10000). Output is cut at 16 KB.
 
-`/nvim-control off` takes the tools away from the model, so it cannot use them and their
-descriptions leave the system prompt; `/nvim-control on` gives them back, and `/nvim-control`
-alone toggles. Control starts on, and keeps its setting across `/reload` and session
-switches until Pi exits. Toggling changes the system prompt, so Pi's prompt cache is rebuilt
-once on the next turn. While control is on and Pi is attached, the status bar shows `control`
-(status key `nvim-control`).
+Control starts off: the model gets the tools only once you let it, with `/nvim-control on`.
+`/nvim-control off` takes them away again, so it cannot use them and their descriptions leave
+the system prompt; `/nvim-control` alone toggles. The setting is kept across `/reload` and
+session switches until Pi exits. Toggling changes the system prompt, so Pi's prompt cache is
+rebuilt once on the next turn. While Pi is attached, the status bar shows `control on` or
+`control off` (status key `nvim-control`).
 
 `nvim_control_lua` is arbitrary code running in your editor, with your unsaved buffers: the same
 trust as the bash tool, but where you are working. The model is told these are your editor,

@@ -23,7 +23,7 @@ const editor = await connect(socket); // The user.
 after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
 
-// The Neovim these tests may run under stays out of them; control starts on each time.
+// The Neovim these tests may run under stays out of them; control starts off each time.
 const clean = () => {
   process.env.NVIM = socket;
   delete (globalThis as Record<symbol, unknown>)[Symbol.for('pi.nvim-control')];
@@ -218,40 +218,40 @@ test('at a prompt, nvim_control_keys says so and can answer it; nvim_control_lua
 
 const ours = (active: string[]) => active.filter(name => name.startsWith('nvim_control_'));
 
-test("control starts on: the model has the editor's tools", () => {
+test("control starts off: the model does not have the editor's tools until asked", () => {
   const { active } = load();
-  assert.deepEqual(ours(active()).sort(), ['nvim_control_keys', 'nvim_control_lua']);
+  assert.deepEqual(active(), ['read', 'bash']);
 });
 
-test('/nvim-control off takes the tools away from the model, and on gives them back; others stay', async () => {
+test('/nvim-control on gives the model the tools, and off takes them away; others stay', async () => {
   const { command, active, notes } = load();
+  await command('on');
+  assert.deepEqual(active(), ['read', 'bash', 'nvim_control_lua', 'nvim_control_keys']);
+  assert.deepEqual(notes.at(-1), ['The model can control your editor', 'info']);
+  await command('on'); // Already on: not added twice.
+  assert.equal(ours(active()).length, 2);
   await command('off');
   assert.deepEqual(active(), ['read', 'bash']);
   assert.deepEqual(notes.at(-1), ['The model can no longer control your editor', 'info']);
   await command('off'); // Already off: still off.
   assert.deepEqual(active(), ['read', 'bash']);
-  await command('on');
-  assert.deepEqual(active(), ['read', 'bash', 'nvim_control_lua', 'nvim_control_keys']);
-  assert.deepEqual(notes.at(-1), ['The model can control your editor', 'info']);
-  await command('on'); // Not added twice.
-  assert.equal(ours(active()).length, 2);
 });
 
 test('/nvim-control alone toggles', async () => {
   const { command, active } = load();
   await command();
-  assert.deepEqual(ours(active()), []);
+  assert.equal(ours(active()).length, 2); // Off by default, so on.
   await command();
-  assert.equal(ours(active()).length, 2);
+  assert.deepEqual(ours(active()), []);
 });
 
-test('control stays off across /reload', async () => {
+test('control stays on across /reload once turned on, and off once turned off', async () => {
   const first = load();
-  await first.command('off');
-  const second = load(); // Everything loaded afresh: the tools are registered, so active again,
-  assert.deepEqual(ours(second.active()), []); // until the session starts with control off.
-  await second.command('on');
-  assert.equal(ours(load().active()).length, 2);
+  await first.command('on');
+  assert.equal(ours(load().active()).length, 2); // Everything loaded afresh, still on.
+  const second = load();
+  await second.command('off');
+  assert.deepEqual(ours(load().active()), []);
 });
 
 test('/nvim-control offers its two options, and explains itself for anything else', async () => {
@@ -260,28 +260,32 @@ test('/nvim-control offers its two options, and explains itself for anything els
   assert.deepEqual(complete('')?.map(item => item.value), ['on', 'off']);
   assert.deepEqual(complete('of')?.map(item => item.value), ['off']);
   assert.equal(complete('x'), null);
-  for (const args of ['maybe', 'on off', 'OFF']) {
+  for (const args of ['maybe', 'on off', 'ON']) {
     await command(args);
     assert.deepEqual(notes.at(-1), ['Usage: /nvim-control [on|off]', 'warning']);
   }
-  assert.equal(ours(active()).length, 2); // Nothing changed.
+  assert.deepEqual(ours(active()), []); // Nothing changed.
 });
 
-test('the footer shows control while it is on and Pi is attached', async t => {
+test('the footer says whether control is on or off while Pi is attached', async t => {
   const { status, command, stop, ready } = load(await attached(t));
-  assert.equal(status['nvim-control'], 'control');
-  await command('off');
-  assert.equal(status['nvim-control'], undefined);
+  assert.equal(status['nvim-control'], 'control off');
   await command('on');
-  assert.equal(status['nvim-control'], 'control');
-  stop(); // No editor: nothing to control.
+  assert.equal(status['nvim-control'], 'control on');
+  await command('off');
+  assert.equal(status['nvim-control'], 'control off');
+  await command('on');
+  stop(); // No editor: nothing to control, so nothing shown.
   assert.equal(status['nvim-control'], undefined);
   ready();
-  assert.equal(status['nvim-control'], 'control');
+  assert.equal(status['nvim-control'], 'control on');
 });
 
-test('without an attachment the footer shows nothing, even with control on', () => {
-  assert.equal(load(undefined).status['nvim-control'], undefined);
+test('without an attachment the footer shows nothing, on or off', async () => {
+  const fake = load(undefined);
+  assert.equal(fake.status['nvim-control'], undefined);
+  await fake.command('on');
+  assert.equal(fake.status['nvim-control'], undefined);
 });
 
 test('keys are cut into parts of at most 4 KB, between whole key names and characters', () => {

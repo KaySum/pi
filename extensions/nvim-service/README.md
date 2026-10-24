@@ -30,7 +30,8 @@ nvim --server /tmp/pi-nvim-Uby1lu/nvim.sock --remote-ui
 `PI_NVIM_BIN` selects the executable and `PI_NVIM_INIT` an alternative init file (`NONE`
 for a clean editor). The instance runs without swap files (`-n`), so files you have open
 elsewhere never raise a swap prompt, and without shada (`-i NONE`), so Pi's history stays
-out of yours.
+out of yours. It never saves a persistence.nvim session, so yours for the same directory
+is left as you left it.
 
 ## For Pi
 

@@ -12,8 +12,9 @@ opens in the Neovim Pi runs inside, at the lines it changed, which flash briefly
 | _(nothing)_ | Switch off, or back to whichever of `on` and `all` was last used. |
 
 The options are offered as completions after `/follow`. It starts off, and keeps its
-setting across `/reload` and session switches until Pi exits. While following and attached,
-the status bar shows `following edits` or `following all` (status key `nvim-follow`).
+setting across `/reload` and session switches until Pi exits. While attached, the status bar
+shows `following off`, `following edits` or `following all` (status key `nvim-follow`). The
+indicator disappears while Pi is disconnected from Neovim.
 
 ## What it does
 

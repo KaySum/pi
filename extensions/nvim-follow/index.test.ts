@@ -252,7 +252,7 @@ test("edit and write replacements display both old and new lines regardless of b
   }
 });
 
-test("following is off until asked for, and the status says when it is on", async () => {
+test("following starts off, and the status shows both on and off modes", async () => {
   const { follow, status, tool, notes, shutdown } = await pi();
   const code = await layout();
   await writeFile(join(dir, "a.txt"), lines(10));
@@ -262,7 +262,7 @@ test("following is off until asked for, and the status says when it is on", asyn
   });
   await delay(100);
   assert.deepEqual(await shown(code), ["", 1]);
-  assert.equal(status["nvim-follow"], undefined);
+  assert.equal(status["nvim-follow"], "following off");
 
   await follow();
   assert.equal(status["nvim-follow"], "following edits");
@@ -270,9 +270,28 @@ test("following is off until asked for, and the status says when it is on", asyn
   await follow("on");
   assert.equal(status["nvim-follow"], "following edits");
   await follow("off");
-  assert.equal(status["nvim-follow"], undefined);
+  assert.equal(status["nvim-follow"], "following off");
   assert.deepEqual(notes.at(-1), ["Following off", "info"]);
   await shutdown();
+});
+
+test("the off status survives reload and is hidden only while detached", async () => {
+  const first = await pi();
+  await first.follow("off");
+  await first.fire("session_shutdown", { reason: "reload" });
+  const second = await pi();
+  try {
+    await eventually(() => second.status["nvim-follow"] === "following off");
+    const remote = await new Promise<{ channel: number }>((resolve) =>
+      second.bus.emit("nvim-remote:get", { reply: resolve }),
+    );
+    await lua("vim.fn.chanclose(...)", remote.channel);
+    await eventually(() => second.status["nvim-follow"] === undefined);
+    await second.commands["nvim-remote"].handler("reconnect", second.ctx);
+    await eventually(() => second.status["nvim-follow"] === "following off");
+  } finally {
+    await second.shutdown();
+  }
 });
 
 test("an edit is shown where it landed, not where its new text first occurs", async () => {
@@ -578,12 +597,12 @@ test("/follow takes one of three options; alone it switches off, or back to the 
   assert.deepEqual(states, [
     "following all",
     "following edits",
-    undefined,
+    "following off",
     "following edits",
     "following all",
-    undefined,
+    "following off",
     "following all",
-    undefined,
+    "following off",
   ]);
   assert.deepEqual(notes.slice(0, 3), [
     ["Following edits and reads", "info"],
@@ -602,7 +621,7 @@ test("anything else /follow does not understand says how to use it, and changes 
     assert.equal(status["nvim-follow"], "following edits");
   }
   await follow("  off  "); // Spaces around are fine.
-  assert.equal(status["nvim-follow"], undefined);
+  assert.equal(status["nvim-follow"], "following off");
   await shutdown();
 });
 

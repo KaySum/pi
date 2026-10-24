@@ -79,9 +79,30 @@ test('lines above and below, split at newlines, below the last line marked', asy
 test('a span of characters, and a sign by the line', async () => {
   const path = await file('let answer = 42\n');
   await text.place({ path, line: 1, col: 4, endCol: 10, highlight: 'Search', sign: ['▶', 'WarningMsg'] });
-  const [[, row, col, details]] = await extmarks(path);
-  assert.deepEqual([row, col, details.end_row, details.end_col, details.hl_eol], [0, 4, 0, 10, false]);
-  assert.deepEqual([details.sign_text.trim(), details.sign_hl_group], ['▶', 'WarningMsg']);
+  const found = await extmarks(path);
+  const [, row, col, span] = found.find(m => m[3].hl_group)!;
+  assert.deepEqual([row, col, span.end_row, span.end_col, span.hl_eol], [0, 4, 0, 10, false]);
+  const [, signRow, , sign] = found.find(m => m[3].sign_text)!;
+  assert.deepEqual([signRow, sign.sign_text.trim(), sign.sign_hl_group], [0, '▶', 'WarningMsg']);
+});
+
+/** The editor's screen as the user sees it, 60 by 8, while `work` runs. */
+async function screen<T>(work: (rows: () => Promise<string[]>) => Promise<T>) {
+  const ui = await connect(socket);
+  const grid = createScreen();
+  ui.on('redraw', (...batches: unknown[]) => grid.apply(batches));
+  try {
+    await ui.request('nvim_ui_attach', [60, 8, { ext_linegrid: true }]);
+    return await work(async () => { await lua('vim.cmd.redraw()'); await delay(50); return grid.lines(); });
+  } finally { ui.close(); }
+}
+
+test('a sign shows by its first line only, however many it marks', async () => {
+  const path = await file('a\ntarget\nb\nc\n');
+  await open(path);
+  await text.place({ path, line: 2, endLine: 3, sign: '!', highlight: 'Visual' });
+  const rows = await screen(rows => rows());
+  assert.deepEqual(rows.slice(0, 4).map(row => row.trimEnd()), ['  a', '! target', '  b', '  c']);
 });
 
 test('indent lines up with the code, and wrap breaks at spaces', async () => {
@@ -94,6 +115,13 @@ test('indent lines up with the code, and wrap breaks at spaces', async () => {
   const [[, , below], [, , above]] = await shown(path);
   assert.deepEqual(above.virt_lines, [[['      '], ['about nested', 'PiVirtualText']]]);
   assert.deepEqual(below.virt_lines.map(words), ['  one two ', '  three four ', '  five']);
+});
+
+test('wrap keeps a word whole across highlights', async () => {
+  const path = await file();
+  await text.place({ path, line: 1, text: [['hel', 'Title'], ['lo world', 'ErrorMsg']], position: 'below', wrap: 4 });
+  const [[, , details]] = await shown(path);
+  assert.deepEqual(details.virt_lines, [[['hel', 'Title'], ['lo ', 'ErrorMsg']], [['world', 'ErrorMsg']]]);
 });
 
 test('wrap fits the window showing the buffer', async () => {
@@ -125,6 +153,17 @@ test('fill pads virtual lines to the editor, cut at the edge of narrower windows
     assert.match(rows[1], /^removed +│~/);
     assert.match(rows[0], /^one +│beside/);
   } finally { ui.close(); }
+});
+
+test('fill gives blank lines and indentation the background too', async () => {
+  const path = await file();
+  await text.place({ path, line: 1, text: 'first\n\nlast', position: 'below', indent: 4, fill: true, hl: 'DiffDelete' });
+  const [[, , details]] = await shown(path);
+  const columns = await lua('return vim.o.columns');
+  for (const line of details.virt_lines) {
+    assert.equal(words(line).length, columns);
+    assert.ok(line.every((chunk: string[]) => chunk[1] === 'DiffDelete'), JSON.stringify(line));
+  }
 });
 
 test('a style of its own becomes a highlight group, kept across a colorscheme', async () => {
@@ -224,6 +263,46 @@ test('invalidate hides a mark while its lines are deleted, and removes it when a
   await writeFile(path, 'a\nd\n');
   await lua('vim.cmd.edit()');
   assert.deepEqual((await text.list()).map(m => [m.id, m.line]), [[kept, 2]]);
+});
+
+test('a mark changed while hidden stays hidden until undo, then shows the change', async () => {
+  const path = await file('a\ntarget\nb\n');
+  await open(path);
+  const [id] = await text.place({ path, line: 2, text: 'NOTE', invalidate: true });
+  await lua('vim.cmd("normal! 2Gdd")');
+  await screen(async rows => {
+    assert.equal(await text.update(id, { text: 'CHANGED' }), true);
+    await assert.rejects(text.update(id, { match: 'nowhere' }), /not found/);
+    assert.equal((await text.list())[0].invalid, true);
+    assert.ok(!(await rows()).some(row => /NOTE|CHANGED/.test(row)));
+    await lua('vim.cmd.undo()');
+    const after = await rows();
+    assert.ok(after.some(row => /^target +CHANGED/.test(row)), after.join('\n'));
+  });
+  const [mark] = await text.list();
+  assert.deepEqual([mark.line, mark.text, mark.invalid], [2, 'CHANGED', undefined]);
+  assert.equal((await shown(path)).length, 1);
+});
+
+test('a reload that brings back a hidden mark\'s text shows it again, where it was', async () => {
+  const path = await file('a\ntarget\nb\n');
+  await open(path);
+  await text.place({ path, line: 2, text: 'NOTE', invalidate: true });
+  await lua('vim.cmd("normal! 2Gdd")');
+  await lua('vim.cmd("edit!")');
+  const [mark] = await text.list();
+  assert.deepEqual([mark.line, mark.invalid], [2, undefined]);
+});
+
+test('a mark that cannot be drawn leaves nothing drawn, placed or updated', async () => {
+  const path = await file();
+  const bad = { text: [['x', { fg: 'definitely-not-a-color' }]] as [string, { fg: string }][], highlight: 'Visual' };
+  await assert.rejects(text.place({ path, line: 1, ...bad }));
+  assert.deepEqual([await text.list(), await extmarks(path)], [[], []]);
+  const [id] = await text.place({ path, line: 1, text: 'fine', highlight: 'Visual' });
+  await assert.rejects(text.update(id, bad));
+  assert.equal((await extmarks(path)).length, 2);
+  assert.equal((await text.list())[0].text, 'fine');
 });
 
 test('an update whose match is not found leaves the mark as it was', async () => {

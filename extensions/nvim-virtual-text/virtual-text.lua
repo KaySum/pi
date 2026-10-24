@@ -15,9 +15,10 @@ local DEFAULTS = {
 
 local state = remote.nvim_virtual_text
 if not state then
-	-- `marks[id]` is { group, spec, ns, extmarks, anchor, generation }: `spec` is the mark as
+	-- `marks[id]` is { group, spec, ns, extmarks, anchor, generation, stale }: `spec` is the mark as
 	-- given, its file resolved to `buf`; `extmarks[1]` spans its lines and moves with them, and
-	-- `anchor` is the text it was placed on, found again when the file is reloaded.
+	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
+	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables.
 	state = { namespaces = {}, marks = {}, styles = {}, next = 0 }
 	remote.nvim_virtual_text = state
@@ -51,6 +52,12 @@ if not state then
 		group = remote.group,
 		callback = function(ev)
 			state.reanchor(ev.buf)
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = remote.group,
+		callback = function(ev)
+			state.refresh(ev.buf)
 		end,
 	})
 end
@@ -153,32 +160,55 @@ local function lines_of(text, default)
 	return lines
 end
 
--- Break a line of chunks at spaces so that none is wider than `width`, where it can be.
+-- Break a line of chunks at spaces so that none is wider than `width`, where it can be. A
+-- word is whole across chunks: a change of highlight is no place to break.
 local function wrap(chunks, width)
-	local lines, used = { {} }, 0
+	local words = {}
 	for _, chunk in ipairs(chunks) do
-		for word, space in chunk[1]:gmatch("(%S*)(%s*)") do
-			if word ~= "" or space ~= "" then
-				if used > 0 and word ~= "" and used + vim.fn.strdisplaywidth(word) > width then
-					table.insert(lines, {})
-					used = 0
-				end
-				local line, piece = lines[#lines], word .. space
-				local last = line[#line]
-				if last and last[2] == chunk[2] then
-					last[1] = last[1] .. piece
-				else
-					table.insert(line, { piece, chunk[2] })
-				end
-				used = used + vim.fn.strdisplaywidth(piece)
+		local text, at = chunk[1], 1
+		while at <= #text do
+			local first, last = text:find("^%s+", at)
+			local space = first ~= nil
+			if not space then
+				first, last = text:find("^%S+", at)
 			end
+			local word = words[#words]
+			if not word or (word.spaced and not space) then
+				word = { pieces = {}, width = 0, spaced = false }
+				table.insert(words, word)
+			end
+			local piece = text:sub(first, last)
+			table.insert(word.pieces, { piece, chunk[2] })
+			word.spaced = word.spaced or space
+			if not space then
+				word.width = word.width + vim.fn.strdisplaywidth(piece)
+			end
+			at = last + 1
+		end
+	end
+	local lines, used = { {} }, 0
+	for _, word in ipairs(words) do
+		if used > 0 and word.width > 0 and used + word.width > width then
+			table.insert(lines, {})
+			used = 0
+		end
+		local line = lines[#lines]
+		for _, piece in ipairs(word.pieces) do
+			local last = line[#line]
+			if last and last[2] == piece[2] then
+				last[1] = last[1] .. piece[1]
+			else
+				table.insert(line, { piece[1], piece[2] })
+			end
+			used = used + vim.fn.strdisplaywidth(piece[1])
 		end
 	end
 	return lines
 end
 
 local function virtual_lines(buf, spec, row)
-	local lines = lines_of(spec.text, highlight(spec.hl) or "PiVirtualText")
+	local default = highlight(spec.hl) or "PiVirtualText"
+	local lines = lines_of(spec.text, default)
 	local indent = 0
 	if spec.indent == true then
 		local text = vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]
@@ -196,15 +226,16 @@ local function virtual_lines(buf, spec, row)
 		end
 		lines = wrapped
 	end
+	-- Filled, a line's background is `hl`'s from edge to edge: indentation, blank lines and all.
+	local background = spec.fill and default or nil
 	return vim.tbl_map(function(line)
 		if indent > 0 then
-			table.insert(line, 1, { string.rep(" ", indent) })
+			table.insert(line, 1, { string.rep(" ", indent), background })
 		end
 		-- Virtual lines take no hl_eol. Padded to the editor's width, which is cut to the
 		-- window's, the background fills any window showing them, however it is resized.
-		if spec.fill and #line > 0 then
-			local padding = math.max(0, vim.o.columns - width_of(line))
-			table.insert(line, { string.rep(" ", padding), line[#line][2] })
+		if spec.fill then
+			table.insert(line, { string.rep(" ", math.max(0, vim.o.columns - width_of(line))), background })
 		end
 		return line
 	end, lines)
@@ -248,11 +279,13 @@ local function locate(buf, needles, near)
 	end
 end
 
--- Draw `spec`; returns its namespace, extmarks and anchor. `strict`: a `match` not found
--- fails, rather than leave the mark where it was.
-local function draw(group, spec, strict)
-	local buf, ns = buffer(spec), namespace(group)
-	spec.buf, spec.path = buf, nil
+local function delete(buf, ns, extmarks)
+	for _, extmark in ipairs(extmarks) do
+		pcall(vim.api.nvim_buf_del_extmark, buf, ns, extmark)
+	end
+end
+
+local function render(buf, ns, spec, strict, extmarks)
 	local needles = spec.match and needles_of(spec.match)
 	if needles then
 		local found = locate(buf, needles, spec.line or 1)
@@ -267,12 +300,13 @@ local function draw(group, spec, strict)
 		return math.max(1, math.min(line, count)) - 1
 	end
 	local first, last = row(spec.line), row(spec.endLine or spec.line)
-	local anchor = needles
-		or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
 	local base = { priority = spec.priority, invalidate = spec.invalidate, strict = false }
+	local function put(line, col, opts)
+		table.insert(extmarks, vim.api.nvim_buf_set_extmark(buf, ns, line, col, vim.tbl_extend("force", base, opts)))
+	end
 
-	-- Whole lines unless columns are given: then a span of characters.
-	local span = vim.tbl_extend("force", base, { hl_group = highlight(spec.highlight) })
+	-- First, as `current` reads it: whole lines unless columns are given, then characters.
+	local span = { hl_group = highlight(spec.highlight) }
 	local col = 0
 	if spec.col or spec.endCol then
 		col = spec.col or 0
@@ -281,12 +315,16 @@ local function draw(group, spec, strict)
 	else
 		span.end_row, span.end_col, span.hl_eol = last + 1, 0, spec.highlight ~= nil
 	end
+	put(first, col, span)
+
+	-- On a span, a sign would show on every line of it.
 	if spec.sign then
 		local sign = type(spec.sign) == "string" and { spec.sign } or spec.sign
-		span.sign_text = sign[1]
-		span.sign_hl_group = highlight(sign[2]) or highlight(spec.hl) or "PiVirtualText"
+		put(first, 0, {
+			sign_text = sign[1],
+			sign_hl_group = highlight(sign[2]) or highlight(spec.hl) or "PiVirtualText",
+		})
 	end
-	local extmarks = { vim.api.nvim_buf_set_extmark(buf, ns, first, col, span) }
 
 	if spec.text then
 		local position = spec.position or "eol"
@@ -308,16 +346,27 @@ local function draw(group, spec, strict)
 				opts.virt_text_pos = POSITIONS[position]
 			end
 		end
-		local at_col = (position == "overlay" or position == "inline") and spec.col or 0
-		table.insert(extmarks, vim.api.nvim_buf_set_extmark(buf, ns, at, at_col, vim.tbl_extend("force", base, opts)))
+		put(at, (position == "overlay" or position == "inline") and spec.col or 0, opts)
+	end
+	return needles or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
+end
+
+-- Draw `spec`; returns its namespace, extmarks and anchor. `strict`: a `match` not found
+-- fails, rather than leave the mark where it was. One that fails leaves nothing drawn.
+local function draw(group, spec, strict)
+	local buf, ns = buffer(spec), namespace(group)
+	spec.buf, spec.path = buf, nil
+	local extmarks = {}
+	local ok, anchor = pcall(render, buf, ns, spec, strict, extmarks)
+	if not ok then
+		delete(buf, ns, extmarks)
+		error(anchor, 0)
 	end
 	return ns, extmarks, anchor
 end
 
 local function erase(mark)
-	for _, extmark in ipairs(mark.extmarks) do
-		pcall(vim.api.nvim_buf_del_extmark, mark.spec.buf, mark.ns, extmark)
-	end
+	delete(mark.spec.buf, mark.ns, mark.extmarks)
 end
 
 local function remove(id)
@@ -348,18 +397,32 @@ local function current(mark)
 	return spec, details.invalid == true
 end
 
--- Draw `spec` as mark `id`. `moved`: only moved, so a `ttl` runs on as it was.
-local function draw_as(id, group, spec, strict, moved)
-	local generation = (state.marks[id] or { generation = 0 }).generation
-	local mark = { group = group, spec = spec, generation = moved and generation or generation + 1 }
-	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, strict)
-	state.marks[id] = mark
-	if spec.ttl and not moved then
+-- Start the mark's `ttl` again; one counting already will not remove it.
+local function arm(id, mark)
+	mark.generation = (mark.generation or 0) + 1
+	local generation = mark.generation
+	if mark.spec.ttl then
 		vim.defer_fn(function()
-			if state.marks[id] and state.marks[id].generation == mark.generation then
+			if state.marks[id] and state.marks[id].generation == generation then
 				remove(id)
 			end
-		end, spec.ttl)
+		end, mark.spec.ttl)
+	end
+end
+
+-- Draw `spec` as mark `id`, in place of what it was only once drawn. `moved`: only moved, so
+-- a `ttl` runs on as it was.
+local function install(id, group, spec, strict, moved)
+	local mark = { group = group, spec = spec }
+	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, strict)
+	local old = state.marks[id]
+	if old then
+		erase(old)
+		mark.generation = old.generation
+	end
+	state.marks[id] = mark
+	if not moved then
+		arm(id, mark)
 	end
 end
 
@@ -369,11 +432,13 @@ function state.place(group, marks)
 	local ids = {}
 	for _, spec in ipairs(marks) do
 		state.next = state.next + 1
-		draw_as(state.next, group, spec, true)
+		install(state.next, group, spec, true)
 		table.insert(ids, state.next)
 	end
 	return ids
 end
+
+local WHERE = { "path", "buf", "line", "endLine", "col", "endCol", "match" }
 
 --- Change the mark `id` of `group` by `patch`: what it does not give stays, and `vim.NIL`
 --- takes away. Lines and columns not given stay where edits have moved them. Returns
@@ -383,37 +448,56 @@ function state.update(group, id, patch)
 	if not mark or mark.group ~= group then
 		return false
 	end
-	local before = current(mark)
-	local spec = vim.deepcopy(before)
+	local spec, invalid = current(mark)
 	if patch.path then
 		spec.buf = nil
 	end
 	for key, value in pairs(patch) do
 		spec[key] = value ~= vim.NIL and value or nil
 	end
-	erase(mark)
-	local ok, err = pcall(draw_as, id, group, spec, patch.match ~= nil)
-	if not ok then
-		draw_as(id, group, before, false, true)
-		error(err, 0)
+	local moves = vim.iter(WHERE):any(function(key)
+		return patch[key] ~= nil
+	end)
+	if invalid and not moves then
+		-- Hidden by a deletion: only its own extmarks come back on undo, so they stay, and the
+		-- change is drawn then. Drawn once now, to fail now if it cannot be.
+		local ns, extmarks = draw(group, vim.deepcopy(spec), false)
+		delete(spec.buf, ns, extmarks)
+		mark.spec, mark.stale = spec, true
+		arm(id, mark)
+		return true
 	end
+	install(id, group, spec, patch.match ~= nil)
 	return true
 end
 
---- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is;
---- one that `invalidate`s goes if its text is nowhere.
+--- Draw the marks in `buf` changed while hidden, once undo has brought them back.
+function state.refresh(buf)
+	for id, mark in pairs(state.marks) do
+		if mark.stale and mark.spec.buf == buf then
+			local spec, invalid = current(mark)
+			if not invalid then
+				install(id, mark.group, spec, false, true)
+			end
+		end
+	end
+end
+
+--- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is,
+--- showing one hidden by a deletion again; one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
-			local spec = current(mark)
+			local spec, invalid = current(mark)
 			local found = locate(buf, mark.anchor, spec.line)
-			if not found and spec.invalidate then
-				remove(id)
-			elseif found and found ~= spec.line then
+			if not found then
+				if spec.invalidate then
+					remove(id)
+				end
+			elseif found ~= spec.line or invalid then
 				spec.endLine = spec.endLine and spec.endLine + found - spec.line
 				spec.line = found
-				erase(mark)
-				draw_as(id, mark.group, spec, false, true)
+				install(id, mark.group, spec, false, true)
 			end
 		end
 	end

@@ -63,9 +63,9 @@ on every new attachment.
 | `highlight` | Highlight the lines or span marked. |
 | `sign` | Up to two cells in the sign column at `line`: a string, or `[text, hl]`. In `hl` unless given its own. |
 | `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
-| `wrap` | For `above` and `below`: break lines at spaces to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
-| `fill` | For `above` and `below`: give each line's background the window's whole width, whatever its size. |
-| `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Reloaded from disk with its text nowhere, it's removed. |
+| `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
+| `fill` | For `above` and `below`: give each line `hl`'s background across the window's whole width, whatever its size, indentation and blank lines included. |
+| `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Updated while hidden without being moved, it stays hidden and shows the change once undone. Reloaded from disk, it shows again if its text is back, and is removed if its text is nowhere. |
 | `ttl` | Remove the mark after this many milliseconds. |
 | `priority` | As for extmarks. |
 

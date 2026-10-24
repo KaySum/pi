@@ -186,6 +186,20 @@ test('fill measures a tab where it falls, and fills again when the editor grows'
   });
 });
 
+test('fill measures tabs as the buffer it is in shows them, not the current one', async () => {
+  const path = await file('a\nb\n');
+  await lua('local b = vim.fn.bufadd(...); vim.fn.bufload(b); vim.bo[b].tabstop = 2; vim.cmd.enew(); vim.bo.tabstop = 8', path);
+  await text.place({ path, line: 1, text: [['a', 'Title'], ['\tb', 'ErrorMsg']], position: 'below', fill: true });
+  const [[, , details]] = await shown(path);
+  const width = await lua(`local b, chunks = ...
+    return vim.api.nvim_buf_call(b, function()
+      local width = 0
+      for _, c in ipairs(chunks) do width = width + vim.fn.strdisplaywidth(c[1], width) end
+      return width
+    end)`, await lua('return vim.fn.bufnr(...)', path), details.virt_lines[0]);
+  assert.equal(width, await lua('return vim.o.columns'));
+});
+
 test('a style of its own becomes a highlight group, kept across a colorscheme', async () => {
   const path = await file();
   await text.place({ path, line: 1, text: 'hi', hl: { fg: '#ff0000', bold: true } });
@@ -343,6 +357,22 @@ test('a mark that cannot be drawn leaves nothing drawn, placed or updated', asyn
   await assert.rejects(text.update(id, bad));
   assert.equal((await extmarks(path)).length, 2);
   assert.equal((await text.list())[0].text, 'fine');
+});
+
+test('a matched mark keeps to its lines once their text is edited, through redraws', async () => {
+  const path = await file('head\ntarget\nseparator\ntarget\ntail\n');
+  await open(path);
+  const [id] = await text.place({ path, match: 'target', line: 2, text: 'NOTE', position: 'below', fill: true });
+  await lua('vim.api.nvim_buf_set_text(0, 1, 0, 1, 6, { "changed" })');
+  await screen(async (_rows, resize) => {
+    await resize(100, 8);
+    await delay(50);
+  });
+  assert.equal((await text.list())[0].line, 2);
+  await text.update(id, { text: 'UPDATED' });
+  assert.equal((await text.list())[0].line, 2);
+  await text.update(id, { line: 4 }); // Moved, it looks for its text again.
+  assert.equal((await text.list())[0].line, 4);
 });
 
 test('an update whose match is not found leaves the mark as it was', async () => {

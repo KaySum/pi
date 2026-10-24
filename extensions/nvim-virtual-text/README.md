@@ -55,7 +55,7 @@ on every new attachment.
 | --- | --- |
 | `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it. |
 | `line`, `endLine` | 1-based lines, clamped to the buffer. `endLine` (default `line`) ends the span `highlight` covers, and is where `below` goes. |
-| `match` | Code to find instead of giving lines: the mark covers the lines it's on. Each line of `match` must be found within one of the buffer's, in order, ignoring the whitespace around it, so quoted code needn't be indented as in the file. The occurrence nearest `line` wins (the first, without it). Not found, the call is rejected. |
+| `match` | Code to find instead of giving lines: the mark covers the lines it's on. Each line of `match` must be found within one of the buffer's, in order, ignoring the whitespace around it, so quoted code needn't be indented as in the file. The occurrence nearest `line` wins (the first, without it). Not found, the call is rejected. It's looked for when the mark is placed, and when an update gives it a new `match`, `line`, `path` or `buf`. Otherwise the mark keeps to its lines as they're edited. |
 | `col`, `endCol` | 0-based byte columns: where `overlay` and `inline` go, and a character span for `highlight`. Without them `highlight` covers whole lines, to the window's edge. |
 | `text` | A string, or `[text, hl?]` chunks. A newline starts another line for `above` and `below`, and becomes a space elsewhere. |
 | `position` | `eol` (default), `right` (the window's edge), `overlay`, `inline`, `above`, `below`, or a number: that screen column, to line notes up. |

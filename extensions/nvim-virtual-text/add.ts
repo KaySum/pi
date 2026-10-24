@@ -5,7 +5,7 @@ import type { Mark, Style } from './api.ts';
 const NUMBERS = ['line', 'endLine', 'col', 'endCol', 'ttl', 'priority'] as const;
 const FLAGS = ['fill', 'invalidate', 'columns', 'bold', 'italic', 'underline'] as const;
 const FLAGS_OR_NUMBERS = ['indent', 'wrap'] as const;
-const STRINGS = ['path', 'match', 'hl', 'highlight', 'sign', 'fg', 'bg'] as const;
+const STRINGS = ['path', 'match', 'hl', 'highlight', 'numberHl', 'lineHl', 'sign', 'fg', 'bg'] as const;
 const POSITIONS = ['eol', 'right', 'overlay', 'inline', 'after', 'above', 'below'];
 const STYLE = ['fg', 'bg', 'bold', 'italic', 'underline'] as const;
 const KEYS: readonly string[] = [...NUMBERS, ...FLAGS, ...FLAGS_OR_NUMBERS, ...STRINGS, 'position'];
@@ -16,7 +16,9 @@ const DESCRIPTIONS: Record<string, string> = {
   path: 'File, from the working directory (default: your window\'s)', line: 'Line (default: your cursor\'s)',
   endLine: 'Last line marked', col: 'Byte column', endCol: 'Last byte column', match: 'Code to find instead of a line',
   columns: 'Mark just the matched text', position: 'eol, right, overlay, inline, after, above, below or a column', hl: 'Highlight group, or #rrggbb color, of the text',
-  highlight: 'Highlight group, or #rrggbb background, for the lines marked', sign: 'Sign column text', indent: 'true or columns',
+  highlight: 'Highlight group, or #rrggbb background, for the lines marked',
+  numberHl: 'Highlight group, or #rrggbb color, for their line numbers',
+  lineHl: 'Highlight group, or #rrggbb background, for the whole lines', sign: 'Sign column text', indent: 'true or columns',
   wrap: 'true or columns', fill: 'Background across the window', ttl: 'Milliseconds before it goes',
   invalidate: 'Hide while its lines are deleted', priority: 'Extmark priority', fg: 'Text color, #rrggbb',
   bg: 'Background color, #rrggbb', bold: 'true', italic: 'true', underline: 'true',
@@ -64,7 +66,9 @@ export function markOf(args: string, at: { buf: number; line: number } | undefin
   }
   if (Object.keys(style).length && rest.hl !== undefined) throw new Error('Give hl, or fg, bg, bold, italic and underline, not both');
   if (typeof rest.highlight === 'string' && COLOR.test(rest.highlight)) rest.highlight = { bg: rest.highlight };
-  if (!text && rest.highlight === undefined && rest.sign === undefined) throw new Error('Usage: /nvim-virtual-text-add [option=value …] <text>');
+  if (typeof rest.lineHl === 'string' && COLOR.test(rest.lineHl)) rest.lineHl = { bg: rest.lineHl };
+  if (typeof rest.numberHl === 'string' && COLOR.test(rest.numberHl)) rest.numberHl = { fg: rest.numberHl };
+  if (!text && [rest.highlight, rest.sign, rest.numberHl, rest.lineHl].every(part => part === undefined)) throw new Error('Usage: /nvim-virtual-text-add [option=value …] <text>');
   const where = path !== undefined ? { path: resolve(path), line: rest.line ?? (rest.match ? undefined : 1) }
     : at ? { buf: at.buf, line: rest.line ?? at.line }
     : undefined;

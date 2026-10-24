@@ -108,6 +108,26 @@ test('a sign shows by its first line only, however many it marks', async () => {
   assert.deepEqual(rows.slice(0, 4).map(row => row.trimEnd()), ['  a', '! target', '  b', '  c']);
 });
 
+test('numberHl and lineHl color the line numbers and whole rows of the lines marked, no more', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  await open(path);
+  await lua('vim.wo.number = true');
+  await text.place({ path, line: 2, endLine: 3, numberHl: { fg: '#ff0000' }, lineHl: { bg: '#203040' } });
+  const [, , , gutter] = (await extmarks(path)).find(m => m[3].number_hl_group)!;
+  assert.match(gutter.line_hl_group, /^PiVirtualText_/);
+  await screen(async rows => {
+    await rows();
+    // Screen attributes: the number column (col 1), and a cell past the text (col 20), rows 1-4.
+    const attrs = await lua('local out = {} for row = 1, 4 do out[row] = { vim.fn.screenattr(row, 1), vim.fn.screenattr(row, 20) } end return out');
+    const [plain, second, third, fourth] = attrs;
+    assert.deepEqual(fourth, plain); // The line after is not marked.
+    assert.deepEqual(second, third);
+    assert.notEqual(second[0], plain[0]); // Its number,
+    assert.notEqual(second[1], plain[1]); // and the row beyond its text.
+  });
+  await lua('vim.wo.number = false');
+});
+
 test('indent lines up with the code, and wrap breaks at spaces', async () => {
   const path = await file('top\n\t  nested\n');
   await lua('vim.o.tabstop = 4');

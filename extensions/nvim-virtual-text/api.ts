@@ -53,6 +53,10 @@ export type Mark = {
   hl?: Highlight;
   /** Highlight the lines (or columns) marked. */
   highlight?: Highlight;
+  /** Color the line numbers of the lines marked. */
+  numberHl?: Highlight;
+  /** Color the lines marked, across the whole window, under everything else on them. */
+  lineHl?: Highlight;
   /** Up to two cells in the sign column at `line`, in `hl` unless given its own. */
   sign?: string | Chunk;
   /** `above` and `below`: start at the indentation of the line they go by (`true`) or this many columns. */

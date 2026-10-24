@@ -19,10 +19,10 @@ anyway when Pi detaches.
 To place some yourself, `/nvim-virtual-text-add [option=value …] <text>` puts a note at the
 cursor of your window: the one you were last in, not Pi's terminal. Options are a mark's
 (below), offered as you type: `path` (from Pi's working directory), `line`, `endLine`,
-`col`, `endCol`, `match`, `columns`, `position`, `hl`, `highlight`, `sign`, `indent`, `wrap`, `fill`,
+`col`, `endCol`, `match`, `columns`, `position`, `hl`, `highlight`, `numberHl`, `lineHl`, `sign`, `indent`, `wrap`, `fill`,
 `ttl`, `invalidate`, `priority`. `fg`, `bg`, `bold`, `italic` and `underline` make a style for
-the text; `hl=#rrggbb` is short for `fg=#rrggbb`, and `highlight=#rrggbb` gives the lines
-marked that background. Quote a value with spaces, and write `\n` for a new line:
+the text; `hl=#rrggbb` is short for `fg=#rrggbb`, and `highlight=#rrggbb` and `lineHl=#rrggbb` give the lines
+marked that background, and `numberHl=#rrggbb` their line numbers that color. Quote a value with spaces, and write `\n` for a new line:
 
 ```
 /nvim-virtual-text-add position=below fg=#ff9e64 wrap=true Why this retries\nbefore giving up
@@ -83,6 +83,8 @@ on every new attachment.
 | `position` | `eol` (default), `right` (the window's edge), `overlay`, `inline`, `after` (inline at `endCol`, else the end of the last line), `above`, `below`, or a number: that screen column, to line notes up. |
 | `hl` | The highlight for text without its own, default `PiVirtualText`. Either a group name or a style (`{ fg, bg, sp, bold, italic, underline, undercurl, strikethrough, reverse }`), which gets a group of its own and is reapplied after `:colorscheme`. |
 | `highlight` | Highlight the lines or span marked. |
+| `numberHl` | Color the line numbers of the lines marked: a group name or a style, as for `hl`. |
+| `lineHl` | Color the lines marked across the whole window, under everything else on them: a group name or a style. |
 | `sign` | Up to two cells in the sign column at `line`: a string, or `[text, hl]`. In `hl` unless given its own. |
 | `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
 | `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |

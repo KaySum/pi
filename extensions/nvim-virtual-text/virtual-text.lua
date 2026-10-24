@@ -17,7 +17,7 @@ local state = remote.nvim_virtual_text
 if not state then
 	-- `marks[id]` is { group, spec, given, ns, extmarks, anchor, generation, stale }: `given` is
 	-- the mark as last given (placed, updated or set), for `set` to tell a change by; `spec` is the mark as
-	-- given, its file resolved to `buf`; `extmarks` by part (`span`, `sign`, `text`), the span
+	-- given, its file resolved to `buf`; `extmarks` by part (`span`, `gutter`, `sign`, `text`), the span
 	-- covering its lines and moving with them; and
 	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
 	-- changed while hidden by a deletion, drawn as it was.
@@ -509,6 +509,17 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 		span.end_row, span.end_col, span.hl_eol = last + 1, 0, spec.highlight ~= nil
 	end
 	put("span", first, col, span)
+
+	-- Over the marked lines, and no further: these show on every line an extmark spans, its end
+	-- included.
+	if spec.numberHl or spec.lineHl then
+		put("gutter", first, 0, {
+			end_row = last,
+			end_col = 0,
+			number_hl_group = highlight(spec.numberHl),
+			line_hl_group = highlight(spec.lineHl),
+		})
+	end
 
 	-- On a span, a sign would show on every line of it.
 	if spec.sign then

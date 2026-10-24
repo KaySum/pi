@@ -45,6 +45,8 @@ test('a color for hl colors the text, and for highlight the lines\' background',
   assert.deepEqual(markOf('hl=#FF9E64 bold=true hot', at, resolve), { buf: 3, line: 12, text: 'hot', hl: { fg: '#FF9E64', bold: true } });
   assert.deepEqual(markOf('highlight=#1e2030 bg=#2d1b0e x', at, resolve), { buf: 3, line: 12, text: 'x', highlight: { bg: '#1e2030' }, hl: { bg: '#2d1b0e' } });
   assert.deepEqual(markOf('hl=Title highlight=Visual x', at, resolve), { buf: 3, line: 12, text: 'x', hl: 'Title', highlight: 'Visual' });
+  assert.deepEqual(markOf('numberHl=#ff0000 lineHl=#203040', at, resolve), { buf: 3, line: 12, numberHl: { fg: '#ff0000' }, lineHl: { bg: '#203040' } });
+  assert.deepEqual(markOf('numberHl=WarningMsg', at, resolve), { buf: 3, line: 12, numberHl: 'WarningMsg' });
   assert.throws(() => markOf('hl=#ff0000 fg=#00ff00 x', at, resolve), /hl=#… or fg=#…/);
   assert.throws(() => markOf('hl=Title bold=true x', at, resolve), /not both/);
 });

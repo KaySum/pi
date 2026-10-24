@@ -98,8 +98,8 @@ export type VirtualText = {
    * Make `marks` this group's marks, resolving to their ids in order. One with the `key` of a
    * mark there is that mark: left as it is (wherever edits have moved it, its `ttl` running
    * on) if given just as it last was, else drawn as now given. The rest are placed, and the
-   * group's other marks go. All or nothing: one that cannot be drawn rejects the call, and
-   * nothing changes.
+   * group's other marks go. Checked first: one that cannot be drawn rejects the call before
+   * anything changes (a failure of Neovim's own while writing is not undone).
    */
   set(marks: Mark[], options?: CallOptions): Promise<number[]>;
   remove(ids: number | number[], options?: CallOptions): Promise<void>;

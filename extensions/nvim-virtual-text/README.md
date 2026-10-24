@@ -65,12 +65,17 @@ on every new attachment.
 | --- | --- |
 | `place(marks, options?)` | Place one mark or several. Resolves to their ids, in order. A mark that can't be placed rejects the call, and the marks before it stay. |
 | `update(id, patch, options?)` | Change a mark and keep its id. What `patch` leaves out stays; `null` takes an option away. Lines and columns it doesn't give stay where edits have moved them, and a `ttl` starts again. Resolves to whether this group had such a mark. One that can't be changed so (its new `match` isn't found, say) rejects, and the mark stays as it was. |
-| `set(marks, options?)` | Make `marks` this group's marks, resolving to their ids in order: the way to say "this is what should show now". A mark with the `key` of one already there is that mark. Given just as it last was, it's left alone, wherever edits have moved it, its `ttl` running on; given differently, it's drawn as now given, keeping its id. The rest are placed, and the group's other marks go. All or nothing: if one can't be drawn, the call rejects and nothing changes. |
+| `set(marks, options?)` | Make `marks` this group's marks, resolving to their ids in order: the way to say "this is what should show now". A mark with the `key` of one already there is that mark. Given just as it last was, it's left alone, wherever edits have moved it, its `ttl` running on; given differently, it's drawn as now given, keeping its id. The rest are placed, and the group's other marks go. Checked first: if one can't be drawn, the call rejects before anything changes. |
 | `remove(ids, options?)` | Remove marks by id. Ids already gone, or another group's, are ignored. |
 | `list(where?, options?)` | This group's marks, or only those in `{ path }` or `{ buf }`, in the order placed. Each is the mark as placed and updated, with its `id`, `group`, `buf` and `path`, and its lines and columns where edits have moved them. |
 | `clear(where?, options?)` | Remove this group's marks, or only those in `{ path }` or `{ buf }`. Resolves to how many went. |
 
 `options` are nvim-remote's `{ signal?, timeout? }`.
+
+`update` and `set` check what they're given by drawing it once before changing anything, so
+anything that can't be drawn (a bad color, a `match` not found, a missing file) leaves
+everything as it was. They don't undo a failure of Neovim itself while writing, after those
+checks have passed.
 
 | Mark | |
 | --- | --- |

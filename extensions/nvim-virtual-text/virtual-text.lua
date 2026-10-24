@@ -772,7 +772,8 @@ end
 --- Make `marks` the marks of `group`, returning their ids in order. One with the `key` of a
 --- mark there is that mark: left as it is, wherever edits have moved it, if given just as it
 --- last was, else drawn as now given. The rest are placed, and the group's other marks go.
---- All or nothing: one that cannot be drawn fails the call before anything changes.
+--- Checked first: one that cannot be drawn fails the call before anything changes. A failure
+--- of Neovim's own while writing, after that, is not undone.
 function state.set(group, marks)
 	local keyed, seen, plan = {}, {}, {}
 	for id, mark in pairs(state.marks) do

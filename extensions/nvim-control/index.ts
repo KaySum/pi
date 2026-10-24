@@ -117,13 +117,18 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  async function run<T>(ms: number | undefined, signal: AbortSignal | undefined, work: (remote: Remote, options: { timeout: number; signal?: AbortSignal }) => Promise<T>) {
+  // timeoutMs is for the whole call, as with nvim-service's tools: each request to the editor
+  // gets only what is left of it, read as it starts.
+  type Options = { readonly timeout: number; signal?: AbortSignal; end: number };
+  async function run<T>(ms: number | undefined, signal: AbortSignal | undefined, work: (remote: Remote, options: Options) => Promise<T>) {
     const remote = nvim();
     if (!remote) throw new Error('Not attached to the user\'s Neovim; /nvim-remote shows why, and /nvim-remote reconnect attaches again.');
-    try { return await work(remote, { timeout: ms ?? 10000, signal }); }
+    const limit = ms ?? 10000, end = Date.now() + limit;
+    try { return await work(remote, { get timeout() { return Math.max(1, end - Date.now()); }, signal, end }); }
     catch (error) {
-      const blocking = (error as { blocking?: boolean }).blocking;
-      throw blocking ? new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`) : error;
+      if ((error as { blocking?: boolean }).blocking) throw new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`);
+      if (/did not answer within/.test(errorText(error))) throw new Error(`Neovim did not finish within ${limit} ms; what was asked may still finish there`);
+      throw error;
     }
   }
 
@@ -158,26 +163,30 @@ export default function (pi: ExtensionAPI) {
       timeoutMs,
     }),
     execute: (_id, params, signal) => run(params.timeoutMs, signal, async (remote, options) => {
-      const end = Date.now() + options.timeout;
+      const total = Buffer.byteLength(params.keys);
+      let typed = 0;
+      // Running out of time while typing says how far it got, before any further request.
+      const inTime = () => {
+        if (Date.now() >= options.end) throw new Error(`timeoutMs ran out after typing ${typed} of ${total} bytes of keys; the rest were not typed`);
+      };
       // A busy editor (in Lua, a plugin's or a call's that timed out) still answers calls, but
       // takes in typed keys only when it is done: wait for them to be taken, or for a prompt.
       async function taken() {
         for (;;) {
+          inTime();
           const waiting = await remote.lua('return vim.fn.getchar(1) ~= 0', [], options).catch(error => {
             if ((error as { blocking?: boolean }).blocking) return false; // The keys opened a prompt.
             throw error;
           });
           if (!waiting) return;
-          if (Date.now() > end) throw new Error(`Neovim did not take in the keys within ${options.timeout} ms; it is busy`);
           await delay(20);
         }
       }
       // Neovim's input buffer holds about 16 KB and takes only what fits, so the keys go in
       // parts well below that, each once the one before is taken.
-      const total = Buffer.byteLength(params.keys);
       const keys = Array.from(params.keys.matchAll(KEY), ([key]) => key);
-      let typed = 0;
       for (let at = 0; at < keys.length;) {
+        inTime();
         // At a prompt the editor runs no Lua, so the focus cannot be checked: only the one key
         // that answers it goes in that way. The keys after it may go anywhere once it closes,
         // so they wait for the check, as any others do.

@@ -121,7 +121,7 @@ test('nvim_control_lua errors keep their message and line, and output is cut to 
 
 test('nvim_control_lua gives up after timeoutMs', async t => {
   const { run } = load(await attached(t));
-  await assert.rejects(run('nvim_control_lua', { code: 'vim.wait(1000)', timeoutMs: 150 }), /did not answer within 150 ms/);
+  await assert.rejects(run('nvim_control_lua', { code: 'vim.wait(1000)', timeoutMs: 150 }), /did not finish within 150 ms/);
   assert.equal(await run('nvim_control_lua', { code: 'return 1' }), '1'); // Still usable after.
 });
 
@@ -421,4 +421,29 @@ test('output is never cut inside a character', async t => {
     assert.ok(body.length >= 16383 && body.length <= 16384);
     assert.match(shown, new RegExp(`\\[Truncated: ${body.length} of ${prefix.length + 18000} characters shown`));
   }
+});
+
+test('timeoutMs is for the whole call: once it runs out, no further part of the keys is typed', async t => {
+  const { remote, parts } = typing(await attached(t), async (n, type) => {
+    const value = await type();
+    if (n === 1) await delay(180); // Slow between parts: longer than the whole budget.
+    return value;
+  });
+  const { run } = load(remote);
+  const buf = await scratch();
+  const start = Date.now();
+  await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(10000)}<Esc>`, timeoutMs: 100 }),
+    /timeoutMs ran out after typing 4096 of \d+ bytes of keys; the rest were not typed/);
+  assert.equal(parts(), 1);
+  assert.ok(Date.now() - start < 600, `took ${Date.now() - start} ms`);
+  await editor.request('nvim_input', ['<Esc>']);
+  assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095);
+});
+
+test('running out of timeoutMs says the call did not finish, and stops waiting then', async t => {
+  const { run } = load(await attached(t));
+  await scratch();
+  const start = Date.now();
+  await assert.rejects(run('nvim_control_lua', { code: 'vim.wait(250) return 1', timeoutMs: 150 }), /did not finish within 150 ms/);
+  assert.ok(Date.now() - start < 400, `took ${Date.now() - start} ms`);
 });

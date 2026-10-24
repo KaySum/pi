@@ -10,7 +10,9 @@ two tools' descriptions are in the system prompt.
 | `nvim_control_lua` | Run Lua in your editor and get the return value (text, or JSON). `...` receives `args`. `remote` is in scope, so what the model sets up can go when Pi does: in `remote.group` or `remote.ns`, or removed in `remote.on_detach(fn)`. |
 | `nvim_control_keys` | Type keys into the focused window, in Neovim notation, and get one line back: mode, buffer, cursor and the last message. Empty keys just looks. |
 
-Both take `timeoutMs` (default 10000). Output is cut at 16 KB.
+Both take `timeoutMs` (default 10000), for the whole call: once it runs out nothing more is
+sent, and `nvim_control_keys` says how much it had typed. What the editor was already asked
+may still finish there. Output is cut at 16 KB, never inside a character.
 
 Control starts off: the model gets the tools only once you let it, with `/nvim-control on`.
 `/nvim-control off` takes them away again, so it cannot use them and their descriptions leave

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { after, test, type TestContext } from 'node:test';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
 import { MODULE_NAME as MODULE, assertCurrent, attach, connect, type AutocmdEvent, type Remote } from './remote.ts';
@@ -28,6 +33,7 @@ async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<T>
   }
 }
 
+const contexts = () => lua(`return vim.tbl_count(require("${MODULE}").contexts)`) as Promise<number>;
 const contextOf = (channel: number) => lua(`local c = require("${MODULE}").contexts[...]; return c and { group = c.group, ns = c.ns } or vim.NIL`, channel);
 
 // Attaching
@@ -356,6 +362,76 @@ test('after the editor goes away every call fails instead of hanging', async () 
   await assert.rejects(remote.request('nvim_get_mode'), /closed/);
   await assert.rejects(remote.autocmd('User', () => {}), /closed/);
   assert.deepEqual(await remote.close(), []);
+});
+
+// Found by a stress suite (~/Code/test/nvim-remote-stress), kept here so they stay guarded
+
+test('a socket that accepts but never answers times out the attach, and is let go', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'nvim-remote-silent-'));
+  const path = join(dir, 'rpc.sock'), peers = new Set<Socket>();
+  const server = createServer(peer => {
+    peers.add(peer);
+    peer.on('data', () => {}); // Hears everything, says nothing.
+    peer.on('close', () => peers.delete(peer));
+  });
+  t.after(async () => {
+    for (const peer of peers) peer.destroy();
+    await new Promise(resolve => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  });
+  server.listen(path);
+  await once(server, 'listening');
+  await assert.rejects(attach(path, { timeout: 100 }), /within 100 ms/);
+  await eventually(() => peers.size === 0); // The connection it opened is closed.
+});
+
+test('a cleanup slower than close waits for runs once, not again when the editor sweeps', async () => {
+  const remote = await attach(socket);
+  await remote.lua(`vim.g.cleanup_runs = 0
+    remote.on_detach(function() vim.g.cleanup_runs = vim.g.cleanup_runs + 1; vim.wait(250); vim.g.cleanup_done = true end)`);
+  const errors = await remote.close({ timeout: 50 });
+  assert.ok(errors.some(error => /within 50 ms/.test(error)), errors.join('; '));
+  await eventually(() => lua('return vim.g.cleanup_done'));
+  await delay(600); // Past another sweep, which must not run it a second time.
+  assert.equal(await lua('return vim.g.cleanup_runs'), 1);
+  assert.equal(await lua(`return require("${MODULE}").contexts[...] == nil`, remote.channel), true);
+});
+
+test('a cleanup that throws a table, not a string, is reported and the rest still run', async () => {
+  const remote = await attach(socket);
+  await remote.lua(`remote.on_detach(function() vim.g.after_table_error = true end)
+    remote.on_detach(function() error({ reason = 'table' }) end)`);
+  const errors = await remote.close();
+  assert.equal(errors.length, 1);
+  assert.equal(typeof errors[0], 'string');
+  assert.equal(await lua('return vim.g.after_table_error'), true);
+});
+
+test('cleanup survives detaching again from inside, and removing its own group and buffers', async () => {
+  const remote = await attach(socket);
+  await remote.lua(`local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_extmark(buf, remote.ns, 0, 0, {})
+    remote.on_detach(function() vim.g.oldest_ran = true end)
+    remote.on_detach(function()
+      require('${MODULE}').detach(remote.channel)
+      vim.api.nvim_del_augroup_by_id(remote.group)
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)`);
+  assert.deepEqual(await remote.close(), []);
+  assert.equal(await lua('return vim.g.oldest_ran'), true);
+  assert.equal(await lua(`return require("${MODULE}").contexts[...] == nil`, remote.channel), true);
+});
+
+test('twenty Pis dying at once are all cleaned up, and one that stays is untouched', async t => {
+  const before = await contexts();
+  const survivor = await attached(t);
+  const dying = await Promise.all(Array.from({ length: 20 }, () => attach(socket)));
+  await lua('vim.g.swept = 0');
+  for (const remote of dying) await remote.lua('remote.on_detach(function() vim.g.swept = vim.g.swept + 1 end)');
+  await lua('for _, chan in ipairs(...) do vim.fn.chanclose(chan) end', dying.map(remote => remote.channel));
+  await eventually(async () => (await contexts()) === before + 1);
+  assert.equal(await lua('return vim.g.swept'), 20);
+  assert.equal(await survivor.lua('return 99'), 99);
 });
 
 // A channel of one's own

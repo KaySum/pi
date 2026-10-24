@@ -261,17 +261,44 @@ local function needles_of(match)
 	return #needles > 0 and needles or error("match is only space", 0)
 end
 
--- The lines of `buf`, read once, each trimmed when first looked at: a search seldom looks
--- far, and a reload searches for every mark.
-local function trimmed(buf)
-	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
-	return setmetatable({ n = #lines }, {
+-- The text of each buffer, as `text_of` last read it, while anything still holds it.
+local texts = setmetatable({}, { __mode = "v" })
+
+-- The text of `buf`, read once to find marks' text in, until it changes: a reload looks for
+-- every mark's, and a call may place many. `lines` are trimmed when first looked at;
+-- `joined` (see below) is them all, untrimmed, one string, in which `find` searches in C,
+-- and `starts` where each begins in it.
+local function text_of(buf)
+	local tick = vim.api.nvim_buf_get_changedtick(buf)
+	if texts[buf] and texts[buf].tick == tick then
+		return texts[buf]
+	end
+	local raw = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
+	local text = { tick = tick, n = #raw, raw = raw }
+	texts[buf] = text
+	text.lines = setmetatable({}, {
 		__index = function(cache, i)
-			local text = lines[i] and vim.trim(lines[i])
-			rawset(cache, i, text)
-			return text
+			local line = raw[i] and vim.trim(raw[i])
+			rawset(cache, i, line)
+			return line
 		end,
 	})
+	return text
+end
+
+-- `text` with `joined` and `starts`, made only once a search needs them: most marks are where
+-- they were.
+local function joined(text)
+	if not text.joined then
+		text.joined, text.starts = table.concat(text.raw, "\n"), {}
+		local at = 1
+		for i, line in ipairs(text.raw) do
+			text.starts[i] = at
+			at = at + #line + 1
+		end
+		text.starts[text.n + 1] = at -- Where a line after the last would start.
+	end
+	return text
 end
 
 local function holds(lines, needles, line)
@@ -284,19 +311,152 @@ local function holds(lines, needles, line)
 	return true
 end
 
--- The line nearest `near` where `needles` start, earlier on a tie; `lines` as `trimmed` gives.
-local function locate(lines, needles, near)
-	near = math.max(1, math.min(near, lines.n))
-	if holds(lines, needles, near) then
+-- The line, from `from` on, that byte `at` of `joined` is on.
+local function line_of(text, at, from)
+	local lo, hi = from, text.n
+	while lo < hi do
+		local mid = math.floor((lo + hi + 1) / 2)
+		if text.starts[mid] <= at then
+			lo = mid
+		else
+			hi = mid - 1
+		end
+	end
+	return lo
+end
+
+-- The lines from `first` to `last` holding `needle`, in order: those lines alone searched, in
+-- C. A needle has neither newlines nor space at its ends: it is in a trimmed line just when
+-- in the line.
+local function occurrences(text, needle, first, last)
+	joined(text)
+	local found, from = {}, text.starts[first]
+	local window, at = text.joined:sub(from, text.starts[last + 1] - 2), 1
+	while true do
+		local hit = window:find(needle, at, true)
+		if not hit then
+			return found
+		end
+		local line = line_of(text, from + hit - 1, first)
+		table.insert(found, line)
+		at = text.starts[line + 1] - from + 1
+	end
+end
+
+-- The lines that are, trimmed, just `needle`, in order, from one index of the whole text.
+local function lines_equal(text, needle)
+	if not text.exact then
+		text.exact = {}
+		for i = 1, text.n do
+			local line = text.lines[i]
+			text.exact[line] = text.exact[line] or {}
+			table.insert(text.exact[line], i)
+		end
+	end
+	return text.exact[needle] or {}
+end
+
+-- The longest of `needles`, and where it is among them: where it is found, the rest may be.
+local function longest(needles)
+	local key, offset = "", 0
+	for i, needle in ipairs(needles) do
+		if #needle > #key then
+			key, offset = needle, i - 1
+		end
+	end
+	return key, offset
+end
+
+-- Of the lines `up` and `down` give (nearest first, before and from where a start at `near`
+-- would put them), less `offset`, the nearest `near` that `accept`s, earlier on a tie.
+local function nearest(up, down, offset, near, accept)
+	local before, after = up(), down()
+	while before or after do
+		local line
+		if before and (not after or near - (before - offset) <= (after - offset) - near) then
+			line, before = before - offset, up()
+		else
+			line, after = after - offset, down()
+		end
+		if line >= 1 and accept(line) then
+			return line
+		end
+	end
+end
+
+-- The items of `list` (in order) at or after `line`, then those before it, nearest first.
+local function around(list, line)
+	local lo, hi = 1, #list + 1
+	while lo < hi do
+		local mid = math.floor((lo + hi) / 2)
+		if list[mid] < line then
+			lo = mid + 1
+		else
+			hi = mid
+		end
+	end
+	local before, after = lo - 1, lo
+	return function()
+		before = before - 1
+		return list[before + 1]
+	end, function()
+		after = after + 1
+		return list[after - 1]
+	end
+end
+
+-- The line nearest `near` where `needles` start, earlier on a tie: found where the longest of
+-- them is, searching outward, so the further it moved the longer it takes, and text that is
+-- gone takes one search of the whole text in C. `exact`: whole
+-- lines, as a mark placed by line keeps, found anywhere just as they are before within
+-- others. A needle only of space is found anywhere.
+local function locate(text, needles, near, exact)
+	near = math.max(1, math.min(near, text.n))
+	local function within(line)
+		return holds(text.lines, needles, line)
+	end
+	if within(near) then
 		return near
 	end
-	for distance = 1, lines.n do
-		if near - distance >= 1 and holds(lines, needles, near - distance) then
-			return near - distance
+	local key, offset = longest(needles)
+	if key == "" then
+		local line = math.min(near, text.n - #needles + 1)
+		return line >= 1 and line or nil
+	end
+	if exact then
+		local up, down = around(lines_equal(text, key), near + offset)
+		local line = nearest(up, down, offset, near, function(line)
+			for i, needle in ipairs(needles) do
+				if text.lines[line + i - 1] ~= needle then
+					return false
+				end
+			end
+			return true
+		end)
+		if line then
+			return line
 		end
-		if holds(lines, needles, near + distance) then
-			return near + distance
+	end
+	-- In rings ever further out, both sides: what one holds is nearer than any beyond it.
+	local base, inner, outer = near + offset, 0, 64
+	while true do
+		local best
+		local function try(first, last)
+			first, last = math.max(1, first), math.min(text.n, last)
+			for _, found in ipairs(first <= last and occurrences(text, key, first, last) or {}) do
+				local line = found - offset
+				local distance = math.abs(line - near)
+				if line >= 1 and within(line) and (not best or distance < math.abs(best - near)) then
+					best = line
+				end
+			end
 		end
+		try(base - outer + 1, base - math.max(inner, 1))
+		try(base + inner, base + outer - 1)
+		if best or (base - outer + 1 <= 1 and base + outer - 1 >= text.n) then
+			return best
+		end
+		inner, outer = outer, outer * 2
 	end
 end
 
@@ -310,7 +470,7 @@ end
 local function render(buf, ns, spec, resolve, extmarks, reuse)
 	local needles = spec.match and needles_of(spec.match)
 	if needles and resolve then
-		spec.line = locate(trimmed(buf), needles, spec.line or 1)
+		spec.line = locate(text_of(buf), needles, spec.line or 1)
 			or error(("not found in %s: %s"):format(vim.api.nvim_buf_get_name(buf), spec.match), 0)
 		spec.endLine = spec.line + #needles - 1
 	end
@@ -443,6 +603,10 @@ local function current(mark)
 	else
 		spec.endLine = math.max(spec.line, details.end_row)
 	end
+	-- Every line replaced, an extmark can be left past the last.
+	local count = vim.api.nvim_buf_line_count(spec.buf)
+	spec.line = math.min(spec.line, count)
+	spec.endLine = math.max(spec.line, math.min(spec.endLine, count))
 	return spec, details.invalid == true
 end
 
@@ -597,12 +761,12 @@ end
 --- showing one hidden by a deletion again, and drawing again one whose extmarks went with
 --- the buffer (`:bdelete`); one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
-	local lines = trimmed(buf)
+	local text = text_of(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			local found = locate(lines, mark.anchor, spec.line)
+			local found = locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
 				if spec.invalidate then
 					remove(id)

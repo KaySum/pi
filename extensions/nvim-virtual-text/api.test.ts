@@ -429,6 +429,24 @@ test('redraws keep what a reload looks for: the text the mark was placed on', as
   }
 });
 
+test('a reload finds a mark\'s line however far it moved, an exact copy before one that only holds it', async () => {
+  const path = await file('a\ntarget\nb\n');
+  await open(path);
+  const [byLine, byMatch] = await text.place([{ path, line: 2, text: 'by line' }, { path, match: 'target', text: 'by match' }]);
+  await writeFile(path, 'a\nb\n  target();\n' + 'filler\n'.repeat(500) + 'target\n');
+  await lua('vim.cmd("edit!")');
+  const lines = Object.fromEntries((await text.list()).map(m => [m.id, m.line]));
+  assert.deepEqual(lines, { [byLine]: 504, [byMatch]: 3 }); // A match is found within a line, nearest first.
+});
+
+test('a mark never claims a line past the end', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  await open(path);
+  await text.place({ path, line: 4, text: 'last' });
+  await lua('vim.api.nvim_buf_set_lines(0, 0, -1, true, { "x", "y" })');
+  assert.deepEqual((await text.list()).map(m => [m.line, m.endLine]), [[2, 2]]);
+});
+
 test('an update whose match is not found leaves the mark as it was', async () => {
   const path = await file();
   const [id] = await text.place({ path, match: 'two', text: 'note' });

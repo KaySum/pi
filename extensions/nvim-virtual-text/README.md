@@ -72,7 +72,8 @@ on every new attachment.
 Marks are extmarks, so they move with the text as it's edited in the buffer. Every mark also
 keeps the text its lines had when it was placed or moved by an update (or its `match`). When the file is reloaded from disk (`:edit`,
 or autoread after Pi edits it), a mark whose lines no longer hold that text moves to the
-nearest place that does. A mark whose text is gone stays where it was, unless it
+nearest place that does. For a mark placed by line, that's the nearest exact copy of its lines
+if there is one, however far. A mark whose text is gone stays where it was, unless it
 `invalidate`s.
 
 ## Development

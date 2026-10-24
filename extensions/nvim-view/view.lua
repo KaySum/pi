@@ -7,7 +7,8 @@
 local DEBOUNCE_MS = 30
 local EVENTS = {
 	"WinNew", "WinClosed", "WinEnter", "WinResized", "WinScrolled",
-	"BufEnter", "BufAdd", "BufDelete", "BufWipeout", "BufWinEnter", "BufWinLeave",
+	"BufEnter", "BufAdd", "BufNew", "BufDelete", "BufUnload", "BufHidden", "BufWipeout",
+	"BufWinEnter", "BufWinLeave",
 	"BufModifiedSet", "BufFilePost", "BufReadPost", "BufWritePost", "FileType",
 	"TabNew", "TabClosed", "TabEnter", "VimResized", "ModeChanged", "DirChanged",
 	"TermOpen", "TermClose", "TextChanged", "TextChangedI", "CursorMoved", "CursorMovedI",
@@ -214,22 +215,34 @@ local function send()
 	end
 end
 
--- The floats as a view shows them: changing one by the API fires no autocommand, so after
--- each command, while idle, this is compared; a cheap look, unlike a snapshot, which here
--- would loop. Everything `window` gives of a float is in it.
-local function floats()
-	local where = {}
+-- What changes with no autocommand to say so: a float's config, a cursor in a window not
+-- current, a buffer edited or unloaded while unseen, all by the API. After each command,
+-- while idle, this is compared; a cheap look, unlike a snapshot, which here would loop.
+-- Everything `window` gives of a float is in it; buffers are summed (a few microseconds
+-- for hundreds), their changedticks only rising.
+local function unreported()
+	local parts = {}
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		local cursor = vim.api.nvim_win_get_cursor(win)
+		table.insert(parts, win .. ":" .. cursor[1] .. ":" .. cursor[2])
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then
 			local row, col = unpack(vim.api.nvim_win_get_position(win))
-			table.insert(where, table.concat({
-				win, row, col, config.width, config.height, config.relative, tostring(config.zindex),
+			table.insert(parts, table.concat({
+				row, col, config.width, config.height, config.relative, tostring(config.zindex),
 				tostring(config.focusable), vim.inspect(config.border),
 			}, ","))
 		end
 	end
-	return table.concat(where, ";")
+	local ticks, loaded = 0, 0
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		ticks = ticks + vim.api.nvim_buf_get_changedtick(buf)
+		if vim.api.nvim_buf_is_loaded(buf) then
+			loaded = loaded + buf
+		end
+	end
+	table.insert(parts, ticks .. ":" .. loaded)
+	return table.concat(parts, ";")
 end
 
 state.timer = vim.uv.new_timer()
@@ -248,9 +261,9 @@ end
 vim.api.nvim_create_autocmd("SafeState", {
 	group = remote.group,
 	callback = function()
-		local where = floats()
-		if where ~= state.floats then
-			state.floats = where
+		local now = unreported()
+		if now ~= state.unreported then
+			state.unreported = now
 			changed()
 		end
 	end,

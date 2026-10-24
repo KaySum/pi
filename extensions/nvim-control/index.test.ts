@@ -467,3 +467,13 @@ test('numeric key notation reaches Neovim whole, wherever it falls', async t => 
     }
   }
 });
+
+test('whatever a call is aborted with, null included, is what it rejects with', async t => {
+  const { tools } = load(await attached(t));
+  for (const reason of [null, 0, false, 'stopped', new Error('stopped')]) {
+    for (const [name, params] of [['nvim_control_lua', { code: 'return 1' }], ['nvim_control_keys', { keys: 'ix<Esc>' }]] as const) {
+      await assert.rejects(tools[name].execute('id', params, AbortSignal.abort(reason)), (error: unknown) => error === reason,
+        `${name} aborted with ${String(reason)}`);
+    }
+  }
+});

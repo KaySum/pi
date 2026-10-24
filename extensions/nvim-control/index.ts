@@ -6,6 +6,8 @@ import { useRemote, type Remote } from '../nvim-remote/api.ts';
 const OUTPUT_LIMIT = 16384;
 const timeoutMs = Type.Optional(Type.Integer({ minimum: 100, maximum: 60000, description: 'Default 10000.' }));
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+// What a caught value says about a prompt: anything can be thrown or aborted with, null included.
+const atPrompt = (error: unknown) => (error as { blocking?: boolean } | null)?.blocking === true;
 
 function result(text: string) {
   // Not between the two halves of a character outside the BMP (an emoji, say).
@@ -126,7 +128,7 @@ export default function (pi: ExtensionAPI) {
     const limit = ms ?? 10000, end = Date.now() + limit;
     try { return await work(remote, { get timeout() { return Math.max(1, end - Date.now()); }, signal, end }); }
     catch (error) {
-      if ((error as { blocking?: boolean }).blocking) throw new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`);
+      if (atPrompt(error)) throw new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`);
       if (/did not answer within/.test(errorText(error))) throw new Error(`Neovim did not finish within ${limit} ms; what was asked may still finish there`);
       throw error;
     }
@@ -175,7 +177,7 @@ export default function (pi: ExtensionAPI) {
         for (;;) {
           inTime();
           const waiting = await remote.lua('return vim.fn.getchar(1) ~= 0', [], options).catch(error => {
-            if ((error as { blocking?: boolean }).blocking) return false; // The keys opened a prompt.
+            if (atPrompt(error)) return false; // The keys opened a prompt.
             throw error;
           });
           if (!waiting) return;

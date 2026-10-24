@@ -41,13 +41,13 @@ async function pi({ remote = true } = {}) {
   registerVirtualText(api);
   await fire('session_start');
   const nvim = remote ? await ready : undefined;
-  const run = async (name: string) => { await commands[name].handler('', ctx); return notes.at(-1)!; };
+  const run = async (name: string, args = '') => { await commands[name].handler(args, ctx); return notes.at(-1)!; };
   return { nvim, run, commands, shutdown: () => fire('session_shutdown') };
 }
 
 test('the commands are named without spaces, and say when Pi is not attached', async () => {
   const { commands, run } = await pi({ remote: false });
-  assert.deepEqual(Object.keys(commands).sort(), ['nvim-virtual-text', 'nvim-virtual-text-clear']);
+  assert.deepEqual(Object.keys(commands).sort(), ['nvim-virtual-text', 'nvim-virtual-text-add', 'nvim-virtual-text-clear', 'nvim-virtual-text-remove']);
   assert.deepEqual(await run('nvim-virtual-text'), ['Pi is not attached to Neovim', 'warning']);
   assert.deepEqual(await run('nvim-virtual-text-clear'), ['Pi is not attached to Neovim', 'warning']);
 });
@@ -92,4 +92,33 @@ test('/nvim-virtual-text shows every mark by group, and what is special about ea
     assert.deepEqual(await run('nvim-virtual-text-clear'), ['Removed 5 marks', 'info']);
     assert.match((await run('nvim-virtual-text'))[0], /^0 marks in 0 groups, 0 files\n/);
   } finally { await shutdown(); }
+});
+
+test('/nvim-virtual-text-add places at your cursor, or where it says; /nvim-virtual-text-remove takes them away by id', async () => {
+  const { nvim, run, shutdown } = await pi();
+  try {
+    const path = join(dir, 'placed.ts');
+    await writeFile(path, 'one\ntwo\nthree\nfour\n');
+    // Like sidekick: your window with the cursor on line 3, then Pi's terminal, focused.
+    await editor.request('nvim_exec_lua', [`vim.cmd('silent! only | edit ' .. vim.fn.fnameescape(...))
+      vim.api.nvim_win_set_cursor(0, { 3, 0 })
+      vim.cmd('vsplit | terminal')`, [path]]);
+    assert.deepEqual(await run('nvim-virtual-text-add', 'position=below fg=#ff9e64 a note\\nover two lines'), ['Placed #1 at placed.ts:3', 'info']);
+    assert.deepEqual(await run('nvim-virtual-text-add', `path=placed.ts match="four" sign=! here`), ['Placed #2 at placed.ts:4', 'info']);
+    assert.deepEqual(await run('nvim-virtual-text-add', 'position=sideways x'), ['position=sideways is not a value position takes: eol, right, overlay, inline, above, below or a column', 'warning']);
+    assert.deepEqual(await run('nvim-virtual-text-add', 'path=placed.ts match=nowhere x'), [`not found in ${path}: nowhere`, 'warning']);
+
+    const [mine] = await virtualText(nvim!, 'user').list();
+    assert.deepEqual([mine.text, mine.position, mine.hl], ['a note\nover two lines', 'below', { fg: '#ff9e64' }]);
+    const report = (await run('nvim-virtual-text'))[0];
+    assert.match(report, /^user \(2\)$/m);
+    assert.match(report, /#1 placed.ts:3 below "a note⏎over two lines"/);
+
+    assert.deepEqual(await run('nvim-virtual-text-remove', '#1 7'), ['Removed #1; no mark #7', 'warning']);
+    assert.deepEqual(await run('nvim-virtual-text-remove', '2'), ['Removed #2', 'info']);
+    assert.deepEqual(await run('nvim-virtual-text-remove', 'nothing'), ['Usage: /nvim-virtual-text-remove <id …>', 'warning']);
+  } finally {
+    await editor.request('nvim_exec_lua', ['vim.cmd("silent! only | enew! | silent! %bwipeout!")', []]);
+    await shutdown();
+  }
 });

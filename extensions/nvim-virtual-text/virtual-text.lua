@@ -782,12 +782,17 @@ function state.reanchor(buf)
 	end
 end
 
+--- Remove the marks `ids` of `group` (of any group if nil); returns those that were there.
 function state.remove(group, ids)
+	group = group ~= vim.NIL and group or nil
+	local removed = {}
 	for _, id in ipairs(ids) do
-		if state.marks[id] and state.marks[id].group == group then
+		if state.marks[id] and (not group or state.marks[id].group == group) then
 			remove(id)
+			table.insert(removed, id)
 		end
 	end
+	return removed
 end
 
 local function matching(group, filter)

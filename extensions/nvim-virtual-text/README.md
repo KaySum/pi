@@ -16,6 +16,21 @@ by a deletion, or was changed while hidden. Also how many buffers are watched fo
 how many styles have been made. `/nvim-virtual-text-clear` removes every mark. They all go
 anyway when Pi detaches.
 
+To place some yourself, `/nvim-virtual-text-add [option=value …] <text>` puts a note at the
+cursor of your window: the one you were last in, not Pi's terminal. Options are a mark's
+(below), offered as you type: `path` (from Pi's working directory), `line`, `endLine`,
+`col`, `endCol`, `match`, `position`, `hl`, `highlight`, `sign`, `indent`, `wrap`, `fill`,
+`ttl`, `invalidate`, `priority`. `fg`, `bg`, `bold`, `italic` and `underline` make a style for
+the text. Quote a value with spaces, and write `\n` for a new line:
+
+```
+/nvim-virtual-text-add position=below fg=#ff9e64 wrap=true Why this retries\nbefore giving up
+/nvim-virtual-text-add match="async function fetchAll(" highlight=Visual sign=▶ Start here
+```
+
+They go in the group `user`. `/nvim-virtual-text-remove <id …>` removes marks by the ids
+`/nvim-virtual-text` shows, from any group.
+
 The default highlights are linked, unless you define them: `PiVirtualText` to `Comment`, and
 `PiVirtualTextInfo`, `…Hint`, `…Warn`, `…Error` and `…Ok` to the `DiagnosticVirtualText` group
 of that name.

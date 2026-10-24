@@ -1,9 +1,25 @@
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { relative } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { useRemote, type Remote } from '../nvim-remote/api.ts';
-import { call, type Chunk, type Placed } from './api.ts';
+import { completeAdd, markOf } from './add.ts';
+import { call, virtualText, type Chunk, type Placed } from './api.ts';
 
 const SHOWN = 50;
+/** The group of the marks you place yourself. */
+const GROUP = 'user';
+// Your window: the one you are in unless it is Pi's terminal (or another like it), else the
+// one you came from, else any showing a file.
+const YOURS = `local function yours(win)
+  return win ~= 0 and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative == ''
+    and vim.bo[vim.api.nvim_win_get_buf(win)].buftype == ''
+end
+local wins = { vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr('#')) }
+for _, win in ipairs(vim.list_extend(wins, vim.api.nvim_tabpage_list_wins(0))) do
+  if yours(win) then return { buf = vim.api.nvim_win_get_buf(win), line = vim.api.nvim_win_get_cursor(win)[1] } end
+end`;
+// What went wrong, without the "Lua:" and stack trace an error from the editor carries.
+const errorText = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
 type Inspected = Placed & { stale?: true };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -16,8 +32,10 @@ const preview = (text: Placed['text']) => {
 };
 
 /** One line for a mark: where, how, what and what is special about it. */
+const shortPath = (path: string, cwd: string) => relative(cwd, path).startsWith('..') ? path : relative(cwd, path) || path;
+
 function describe(mark: Inspected, cwd: string) {
-  const path = relative(cwd, mark.path).startsWith('..') ? mark.path : relative(cwd, mark.path);
+  const path = shortPath(mark.path, cwd);
   const lines = mark.endLine && mark.endLine !== mark.line ? `${mark.line}-${mark.endLine}` : `${mark.line}`;
   const flags = [
     mark.match !== undefined && 'match',
@@ -27,7 +45,7 @@ function describe(mark: Inspected, cwd: string) {
     mark.stale && 'changed while hidden',
   ].filter(Boolean);
   const text = mark.text === undefined ? '' : ` ${mark.position ?? 'eol'} "${preview(mark.text)}"`;
-  return `  #${mark.id} ${path || mark.path}:${lines}${text}${flags.length ? `  [${flags.join(', ')}]` : ''}`;
+  return `  #${mark.id} ${path}:${lines}${text}${flags.length ? `  [${flags.join(', ')}]` : ''}`;
 }
 
 async function report(remote: Remote, cwd: string) {
@@ -64,6 +82,39 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const remote = attached(ctx);
       if (remote) ctx.ui.notify(await report(remote, ctx.cwd), 'info');
+    },
+  });
+
+  pi.registerCommand('nvim-virtual-text-add', {
+    description: 'Place virtual text at your cursor: [option=value …] <text>, options as for a mark (position=below, hl=…, fg=#…)',
+    getArgumentCompletions: completeAdd,
+    handler: async (args, ctx) => {
+      const remote = attached(ctx);
+      if (!remote) return;
+      try {
+        const mark = markOf(args, await remote.lua(YOURS) ?? undefined, path => resolve(ctx.cwd, path));
+        const [id] = await virtualText(remote, GROUP).place(mark);
+        const placed = (await virtualText(remote, GROUP).list()).find(m => m.id === id)!;
+        ctx.ui.notify(`Placed #${id} at ${shortPath(placed.path, ctx.cwd)}:${placed.line}`, 'info');
+      } catch (error) { ctx.ui.notify(errorText(error), 'warning'); }
+    },
+  });
+
+  pi.registerCommand('nvim-virtual-text-remove', {
+    description: 'Remove virtual text by the ids /nvim-virtual-text shows: <id …>',
+    handler: async (args, ctx) => {
+      const ids = [...args.matchAll(/\d+/g)].map(Number);
+      if (!ids.length) return ctx.ui.notify('Usage: /nvim-virtual-text-remove <id …>', 'warning');
+      const remote = attached(ctx);
+      if (!remote) return;
+      const result = await remote.lua('return remote.nvim_virtual_text ~= nil') && await call(remote, 'remove', [null, ids]);
+      const removed: number[] = Array.isArray(result) ? result : [];
+      const missing = ids.filter(id => !removed.includes(id));
+      const said = [
+        removed.length && `removed ${removed.map(id => `#${id}`).join(', ')}`,
+        missing.length && `no mark ${missing.map(id => `#${id}`).join(', ')}`,
+      ].filter(Boolean).join('; ');
+      ctx.ui.notify(said[0].toUpperCase() + said.slice(1), missing.length ? 'warning' : 'info');
     },
   });
 

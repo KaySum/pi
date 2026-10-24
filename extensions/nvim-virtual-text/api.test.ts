@@ -128,6 +128,28 @@ test('numberHl and lineHl color the line numbers and whole rows of the lines mar
   await lua('vim.wo.number = false');
 });
 
+test('a gutter whose last line is deleted colors only what is left, not the line after', async () => {
+  for (const extra of [{}, { text: 'note' }]) {
+    for (const color of [{ numberHl: { fg: '#ff0000', bold: true } }, { lineHl: { bg: '#123456' } }]) {
+      const path = await file('head\nfirst\nsecond\ntail\n');
+      await open(path);
+      await lua('vim.wo.number = true');
+      await text.place({ path, line: 2, endLine: 3, ...color, ...extra });
+      await screen(async rows => {
+        await lua('vim.cmd("normal! 3Gdd")');
+        await rows();
+        // Rows on screen: head, first (marked), tail (not). The number column, and past the text.
+        const [head, first, tail] = await lua('local out = {} for row = 1, 3 do out[row] = { vim.fn.screenattr(row, 1), vim.fn.screenattr(row, 30) } end return out');
+        assert.deepEqual(tail, head, JSON.stringify({ color, extra }));
+        assert.notDeepEqual(first, head, JSON.stringify({ color, extra }));
+      });
+      assert.deepEqual((await text.list()).map(m => [m.line, m.endLine]), [[2, 2]]);
+      await lua('vim.wo.number = false');
+      await text.clear();
+    }
+  }
+});
+
 test('indent lines up with the code, and wrap breaks at spaces', async () => {
   const path = await file('top\n\t  nested\n');
   await lua('vim.o.tabstop = 4');

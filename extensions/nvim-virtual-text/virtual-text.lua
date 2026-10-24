@@ -828,6 +828,10 @@ local function astray(mark, spec)
 		if not found[1] or found[3].invalid or found[1] ~= line - 1 then
 			return true
 		end
+		-- The gutter colors every row it spans: it ends on the mark's last line, no further.
+		if part == "gutter" and found[3].end_row ~= (spec.endLine or spec.line) - 1 then
+			return true
+		end
 		-- Text within the line, too, belongs where the mark's columns are.
 		local within = spec.position == "inline" or spec.position == "overlay" or spec.position == "after"
 		if part == "text" and within and found[2] ~= text_col(spec.buf, spec, line - 1) then

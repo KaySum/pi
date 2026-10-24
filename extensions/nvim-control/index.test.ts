@@ -81,54 +81,54 @@ test('outside Neovim there are no tools, so they cost nothing, and no command', 
 
 test("inside, two tools for the user's editor, each told apart from the private instance's", () => {
   const { tools } = load();
-  assert.deepEqual(Object.keys(tools).sort(), ['editor_keys', 'editor_lua']);
+  assert.deepEqual(Object.keys(tools).sort(), ['nvim_control_keys', 'nvim_control_lua']);
   for (const tool of Object.values(tools)) assert.match(tool.promptSnippet!, /user's/);
   // Without a snippet a tool is left out of the system prompt's list.
-  assert.match(tools.editor_lua.promptGuidelines!.join(' '), /real editor.*nvim_lua and nvim_keys are your private Neovim/);
-  assert.match(tools.editor_lua.promptGuidelines!.join(' '), /never quit Neovim/);
+  assert.match(tools.nvim_control_lua.promptGuidelines!.join(' '), /real editor.*nvim_lua and nvim_keys are your private Neovim/);
+  assert.match(tools.nvim_control_lua.promptGuidelines!.join(' '), /never quit Neovim/);
 });
 
 test('without an attachment, the tools say so and how to fix it', async () => {
   const { run } = load(undefined);
-  await assert.rejects(run('editor_lua', { code: 'return 1' }), /Not attached.*\/nvim-remote reconnect/);
-  await assert.rejects(run('editor_keys', { keys: '' }), /Not attached/);
+  await assert.rejects(run('nvim_control_lua', { code: 'return 1' }), /Not attached.*\/nvim-remote reconnect/);
+  await assert.rejects(run('nvim_control_keys', { keys: '' }), /Not attached/);
 });
 
-// editor_lua
+// nvim_control_lua
 
-test('editor_lua returns text, or JSON for anything else, and receives args', async t => {
+test('nvim_control_lua returns text, or JSON for anything else, and receives args', async t => {
   const { run } = load(await attached(t));
-  assert.equal(await run('editor_lua', { code: 'return "plain text"' }), 'plain text');
-  assert.deepEqual(JSON.parse(await run('editor_lua', { code: 'return { a = 1, b = { true } }' })), { a: 1, b: [true] }); // Keys in any order.
-  assert.equal(await run('editor_lua', { code: 'local x = 1' }), 'null');
-  assert.equal(await run('editor_lua', { code: 'return select("#", ...) .. ":" .. (...)', args: ['first', 2] }), '2:first');
+  assert.equal(await run('nvim_control_lua', { code: 'return "plain text"' }), 'plain text');
+  assert.deepEqual(JSON.parse(await run('nvim_control_lua', { code: 'return { a = 1, b = { true } }' })), { a: 1, b: [true] }); // Keys in any order.
+  assert.equal(await run('nvim_control_lua', { code: 'local x = 1' }), 'null');
+  assert.equal(await run('nvim_control_lua', { code: 'return select("#", ...) .. ":" .. (...)', args: ['first', 2] }), '2:first');
 });
 
-test("editor_lua reaches the user's buffers, unsaved changes included", async t => {
+test("nvim_control_lua reaches the user's buffers, unsaved changes included", async t => {
   const { run } = load(await attached(t));
   const buf = await scratch();
   await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "typed but not saved" })', buf);
-  assert.equal(await run('editor_lua', { code: 'return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', args: [buf] }), 'typed but not saved');
+  assert.equal(await run('nvim_control_lua', { code: 'return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', args: [buf] }), 'typed but not saved');
 });
 
-test('editor_lua errors keep their message and line, and output is cut to 16 KB', async t => {
+test('nvim_control_lua errors keep their message and line, and output is cut to 16 KB', async t => {
   const { run } = load(await attached(t));
-  await assert.rejects(run('editor_lua', { code: 'local a = 1\nerror("boom")' }), /nvim-remote:2: boom/);
-  const long = await run('editor_lua', { code: 'return string.rep("x", 20000)' });
+  await assert.rejects(run('nvim_control_lua', { code: 'local a = 1\nerror("boom")' }), /nvim-remote:2: boom/);
+  const long = await run('nvim_control_lua', { code: 'return string.rep("x", 20000)' });
   assert.equal(long.length > 16384 && long.length < 16600, true);
   assert.match(long, /\[Truncated: 16384 of 20000 characters shown\. Ask for less\.\]$/);
 });
 
-test('editor_lua gives up after timeoutMs', async t => {
+test('nvim_control_lua gives up after timeoutMs', async t => {
   const { run } = load(await attached(t));
-  await assert.rejects(run('editor_lua', { code: 'vim.wait(1000)', timeoutMs: 150 }), /did not answer within 150 ms/);
-  assert.equal(await run('editor_lua', { code: 'return 1' }), '1'); // Still usable after.
+  await assert.rejects(run('nvim_control_lua', { code: 'vim.wait(1000)', timeoutMs: 150 }), /did not answer within 150 ms/);
+  assert.equal(await run('nvim_control_lua', { code: 'return 1' }), '1'); // Still usable after.
 });
 
-test('what editor_lua sets up through remote goes when Pi detaches', async () => {
+test('what nvim_control_lua sets up through remote goes when Pi detaches', async () => {
   const remote = Object.assign(await attach(socket, { onError: () => {} }), { apiVersion: 1 as const });
   const { run } = load(remote);
-  await run('editor_lua', { code: `vim.api.nvim_create_autocmd('User', { group = remote.group, pattern = 'ModelMade', callback = function() end })
+  await run('nvim_control_lua', { code: `vim.api.nvim_create_autocmd('User', { group = remote.group, pattern = 'ModelMade', callback = function() end })
     vim.keymap.set('n', '<leader>zz', '<Nop>')
     remote.on_detach(function() vim.keymap.del('n', '<leader>zz') end)` });
   await remote.close();
@@ -136,57 +136,57 @@ test('what editor_lua sets up through remote goes when Pi detaches', async () =>
   assert.equal(await lua('return vim.fn.maparg("<leader>zz", "n")'), '');
 });
 
-// editor_keys
+// nvim_control_keys
 
-test('editor_keys types into the focused window and says what changed', async t => {
+test('nvim_control_keys types into the focused window and says what changed', async t => {
   const { run } = load(await attached(t));
   const buf = await scratch();
-  const state = await run('editor_keys', { keys: 'ihello there<Esc>' });
+  const state = await run('nvim_control_keys', { keys: 'ihello there<Esc>' });
   assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)', buf), ['hello there']);
   assert.match(state, new RegExp(`^mode n \\| buffer ${buf} \\[No Name\\] \\[\\+\\] \\| 1:11`));
-  assert.match(await run('editor_keys', { keys: '' }), /^mode n \| /); // Just looking.
+  assert.match(await run('nvim_control_keys', { keys: '' }), /^mode n \| /); // Just looking.
 });
 
-test('editor_keys waits for a busy editor to take in the keys before saying what they did', async t => {
+test('nvim_control_keys waits for a busy editor to take in the keys before saying what they did', async t => {
   const { run } = load(await attached(t));
   const buf = await scratch();
   // Busy in Lua: calls are still answered, but typed keys wait until it is done.
   editor.notify('nvim_exec_lua', ['vim.wait(400)', []]);
   await delay(50);
-  const state = await run('editor_keys', { keys: 'ibusy<Esc>' });
+  const state = await run('nvim_control_keys', { keys: 'ibusy<Esc>' });
   assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)', buf), ['busy']);
   assert.match(state, /^mode n \| .*\[\+\] \| 1:4/);
 });
 
-test('editor_keys delivers every key, however many: none are dropped when Neovim takes only part', async t => {
+test('nvim_control_keys delivers every key, however many: none are dropped when Neovim takes only part', async t => {
   const { run } = load(await attached(t));
   const text = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(97 + (i % 26))).join('');
   for (const insert of [text(20000), text(100000), 'λ🦀'.repeat(4000)]) {
     const buf = await scratch();
-    const state = await run('editor_keys', { keys: `i${insert}<Esc>`, timeoutMs: 30000 });
+    const state = await run('nvim_control_keys', { keys: `i${insert}<Esc>`, timeoutMs: 30000 });
     assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, insert.length);
     assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), insert);
     assert.match(state, /^mode n \| /, 'the closing <Esc> arrived too');
   }
 });
 
-test('editor_keys never splits a key name or a character between the parts it sends', async t => {
+test('nvim_control_keys never splits a key name or a character between the parts it sends', async t => {
   const { run } = load(await attached(t));
   // A <lt> and an emoji either side of where 4 KB parts would be cut.
   for (const pad of [4090, 4091, 4092, 4093, 4094, 4095]) {
     const buf = await scratch();
-    await run('editor_keys', { keys: `i${'a'.repeat(pad)}<lt>😀b<Esc>` });
+    await run('nvim_control_keys', { keys: `i${'a'.repeat(pad)}<lt>😀b<Esc>` });
     assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), `${'a'.repeat(pad)}<😀b`);
   }
 });
 
-test("editor_keys reports the last message, such as an error the keys caused", async t => {
+test("nvim_control_keys reports the last message, such as an error the keys caused", async t => {
   const { run } = load(await attached(t));
   await scratch();
-  assert.match(await run('editor_keys', { keys: ':NoSuchCommand<CR>' }), /last message: .*E492: Not an editor command: NoSuchCommand/);
+  assert.match(await run('nvim_control_keys', { keys: ':NoSuchCommand<CR>' }), /last message: .*E492: Not an editor command: NoSuchCommand/);
 });
 
-test("editor_keys will not type into Pi's own terminal, but can look at it", async t => {
+test("nvim_control_keys will not type into Pi's own terminal, but can look at it", async t => {
   // A process in an editor terminal, standing in for Pi: attached as it, so it is remote.terminal.
   const [buf, shell] = await lua(`vim.cmd('silent! only | enew!')
     local job = vim.fn.jobstart({ 'sh', '-c', 'sleep 30 & wait' }, { term = true })
@@ -195,18 +195,18 @@ test("editor_keys will not type into Pi's own terminal, but can look at it", asy
   t.after(() => lua('pcall(vim.api.nvim_buf_delete, ..., { force = true })', buf));
   const [child] = await lua('return vim.api.nvim_get_proc_children(...)', shell);
   const { run } = load(await attached(t, { pid: child }));
-  await assert.rejects(run('editor_keys', { keys: 'echo hi<CR>' }), /Pi's own terminal.*Focus another window with editor_lua first/);
-  assert.match(await run('editor_keys', { keys: '' }), /\(your own terminal\)/);
+  await assert.rejects(run('nvim_control_keys', { keys: 'echo hi<CR>' }), /Pi's own terminal.*Focus another window with nvim_control_lua first/);
+  assert.match(await run('nvim_control_keys', { keys: '' }), /\(your own terminal\)/);
 });
 
-test('at a prompt, editor_keys says so and can answer it; editor_lua says to', async t => {
+test('at a prompt, nvim_control_keys says so and can answer it; nvim_control_lua says to', async t => {
   const { run } = load(await attached(t));
   await scratch();
   await editor.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]); // Prompts need a screen.
   try {
-    assert.match(await run('editor_keys', { keys: ':echo "first\\nsecond"<CR>' }), /^mode r \(waiting at a prompt: answer it with editor_keys/);
-    await assert.rejects(run('editor_lua', { code: 'return 1' }), /waiting at a prompt.*Answer it with editor_keys/);
-    assert.match(await run('editor_keys', { keys: '<CR>' }), /^mode n \| /);
+    assert.match(await run('nvim_control_keys', { keys: ':echo "first\\nsecond"<CR>' }), /^mode r \(waiting at a prompt: answer it with nvim_control_keys/);
+    await assert.rejects(run('nvim_control_lua', { code: 'return 1' }), /waiting at a prompt.*Answer it with nvim_control_keys/);
+    assert.match(await run('nvim_control_keys', { keys: '<CR>' }), /^mode n \| /);
   } finally {
     await editor.request('nvim_input', ['<Esc>']);
     await delay(50);
@@ -216,11 +216,11 @@ test('at a prompt, editor_keys says so and can answer it; editor_lua says to', a
 
 // /nvim-control
 
-const ours = (active: string[]) => active.filter(name => name.startsWith('editor_'));
+const ours = (active: string[]) => active.filter(name => name.startsWith('nvim_control_'));
 
 test("control starts on: the model has the editor's tools", () => {
   const { active } = load();
-  assert.deepEqual(ours(active()).sort(), ['editor_keys', 'editor_lua']);
+  assert.deepEqual(ours(active()).sort(), ['nvim_control_keys', 'nvim_control_lua']);
 });
 
 test('/nvim-control off takes the tools away from the model, and on gives them back; others stay', async () => {
@@ -231,7 +231,7 @@ test('/nvim-control off takes the tools away from the model, and on gives them b
   await command('off'); // Already off: still off.
   assert.deepEqual(active(), ['read', 'bash']);
   await command('on');
-  assert.deepEqual(active(), ['read', 'bash', 'editor_lua', 'editor_keys']);
+  assert.deepEqual(active(), ['read', 'bash', 'nvim_control_lua', 'nvim_control_keys']);
   assert.deepEqual(notes.at(-1), ['The model can control your editor', 'info']);
   await command('on'); // Not added twice.
   assert.equal(ours(active()).length, 2);
@@ -310,7 +310,7 @@ test('a key name with punctuation reaches Neovim whole, wherever it falls', asyn
   t.after(() => lua(`pcall(vim.keymap.del, 'i', '<C-]>')`));
   for (const pad of [4092, 4093, 4094]) {
     const buf = await scratch();
-    await run('editor_keys', { keys: `i${'x'.repeat(pad)}<C-]><Esc>` });
+    await run('nvim_control_keys', { keys: `i${'x'.repeat(pad)}<C-]><Esc>` });
     assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), `${'x'.repeat(pad)}MARK`);
   }
 });
@@ -336,7 +336,7 @@ test("keys stop the moment Pi's own terminal takes focus, even partway through",
     },
   }) as Remote;
   const { run } = load(watched);
-  await assert.rejects(run('editor_keys', { keys: `i${'x'.repeat(5000)}UNSAFE_SUFFIX<CR>` }),
+  await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(5000)}UNSAFE_SUFFIX<CR>` }),
     /Stopped after typing 4096 of \d+ bytes of keys: focus moved to Pi's own terminal/);
   assert.equal(parts, 2); // The second part was refused, not typed.
   await delay(100);
@@ -358,7 +358,7 @@ test('a part Neovim takes only some of is reported, and nothing after it is type
   const { remote, parts } = typing(await attached(t), async (n, type) => n === 2 ? 512 : type()); // Says it took 512 bytes.
   const { run } = load(remote);
   const buf = await scratch();
-  await assert.rejects(run('editor_keys', { keys: `i${'x'.repeat(10000)}<Esc>` }), /took only 512 of 4096 bytes of keys; the rest were not typed/);
+  await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(10000)}<Esc>` }), /took only 512 of 4096 bytes of keys; the rest were not typed/);
   assert.equal(parts(), 2);
   await editor.request('nvim_input', ['<Esc>']);
   assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095); // The first part only.
@@ -373,7 +373,7 @@ test('stopping the call between parts types nothing more', async t => {
   });
   const { tools } = load(remote);
   const buf = await scratch();
-  await assert.rejects(tools.editor_keys.execute('id', { keys: `i${'x'.repeat(10000)}<Esc>` }, controller.signal), /stopped by the user/);
+  await assert.rejects(tools.nvim_control_keys.execute('id', { keys: `i${'x'.repeat(10000)}<Esc>` }, controller.signal), /stopped by the user/);
   assert.equal(parts(), 1);
   await editor.request('nvim_input', ['<Esc>']);
   assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095);

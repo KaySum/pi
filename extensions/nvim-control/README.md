@@ -7,8 +7,8 @@ two tools' descriptions are in the system prompt.
 
 | Tool | Use |
 | --- | --- |
-| `editor_lua` | Run Lua in your editor and get the return value (text, or JSON). `...` receives `args`. `remote` is in scope, so what the model sets up can go when Pi does: in `remote.group` or `remote.ns`, or removed in `remote.on_detach(fn)`. |
-| `editor_keys` | Type keys into the focused window, in Neovim notation, and get one line back: mode, buffer, cursor and the last message. Empty keys just looks. |
+| `nvim_control_lua` | Run Lua in your editor and get the return value (text, or JSON). `...` receives `args`. `remote` is in scope, so what the model sets up can go when Pi does: in `remote.group` or `remote.ns`, or removed in `remote.on_detach(fn)`. |
+| `nvim_control_keys` | Type keys into the focused window, in Neovim notation, and get one line back: mode, buffer, cursor and the last message. Empty keys just looks. |
 
 Both take `timeoutMs` (default 10000). Output is cut at 16 KB.
 
@@ -19,7 +19,7 @@ switches until Pi exits. Toggling changes the system prompt, so Pi's prompt cach
 once on the next turn. While control is on and Pi is attached, the status bar shows `control`
 (status key `nvim-control`).
 
-`editor_lua` is arbitrary code running in your editor, with your unsaved buffers: the same
+`nvim_control_lua` is arbitrary code running in your editor, with your unsaved buffers: the same
 trust as the bash tool, but where you are working. The model is told these are your editor,
 not its private instance, and never to quit Neovim, close Pi's terminal, discard unsaved
 changes, or write buffers you are editing without being asked.
@@ -27,20 +27,20 @@ changes, or write buffers you are editing without being asked.
 ## Typing keys
 
 Keys go to the window that has focus, which while you talk to Pi is Pi's own terminal: they
-would be typed into Pi. `editor_keys` refuses then; the model can focus another window with
-`editor_lua` first (taking your focus there too), or do the work with `editor_lua`, which
+would be typed into Pi. `nvim_control_keys` refuses then; the model can focus another window with
+`nvim_control_lua` first (taking your focus there too), or do the work with `nvim_control_lua`, which
 needs no focus. It looks again before each part of long keys, in the same step as typing it,
 so if you put focus on Pi's terminal partway it stops there and says how much was typed.
 (Keys are queued, then taken a moment later: a change of focus in that moment cannot be
 seen.)
 
 A busy editor (in Lua, a plugin's say) still answers calls but takes in typed keys only when
-it is done, so `editor_keys` waits until they are taken before saying what they did. Neovim
+it is done, so `nvim_control_keys` waits until they are taken before saying what they did. Neovim
 takes only as much typed input as fits in its 16 KB input buffer, so long keys are sent in
 parts of at most 4 KB, each once the last is taken, cut between whole keys (names with
-punctuation, such as `<C-]>`, included) and characters; none are dropped. (For pasting text, `editor_lua` and the buffer API are still
+punctuation, such as `<C-]>`, included) and characters; none are dropped. (For pasting text, `nvim_control_lua` and the buffer API are still
 the better tool.) At a
-hit-enter prompt it says so, and further keys answer it; `editor_lua` fails at once there.
+hit-enter prompt it says so, and further keys answer it; `nvim_control_lua` fails at once there.
 
 ## Not here
 

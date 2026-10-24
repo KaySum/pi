@@ -54,7 +54,7 @@ function describe(mode: string, s: State) {
     + (s.message ? ` | last message: ${s.message}` : '');
 }
 
-const TOOLS = ['editor_lua', 'editor_keys'];
+const TOOLS = ['nvim_control_lua', 'nvim_control_keys'];
 // Pi loads extensions afresh on /reload and for every session, in the same process; the
 // setting outlives this module there, and ends with Pi.
 const SETTING = Symbol.for('pi.nvim-control');
@@ -111,17 +111,17 @@ export default function (pi: ExtensionAPI) {
     try { return await work(remote, { timeout: ms ?? 10000, signal }); }
     catch (error) {
       const blocking = (error as { blocking?: boolean }).blocking;
-      throw blocking ? new Error(`${errorText(error)}. Answer it with editor_keys (often <CR> or <Esc>).`) : error;
+      throw blocking ? new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`) : error;
     }
   }
 
   pi.registerTool({
-    name: 'editor_lua',
-    label: 'Editor Lua',
+    name: 'nvim_control_lua',
+    label: 'Neovim control Lua',
     promptSnippet: "Run Lua in the user's own Neovim, the editor Pi runs inside (their buffers, windows, plugins)",
     description: "Run Lua in the user's Neovim, the one Pi's terminal is in, and get its return value (strings as text, anything else as JSON). `...` receives args. `remote` is in scope: put what you set up (autocommands, highlights) in remote.group or remote.ns, or remove it in remote.on_detach(fn), so it goes when Pi does; remote.terminal is Pi's own terminal buffer.",
     promptGuidelines: [
-      "editor_lua and editor_keys act on the user's real editor: their open buffers, unsaved changes included, their windows and their plugins. nvim_lua and nvim_keys are your private Neovim instead. Use the editor tools to show the user things or when asked to act in their editor; never quit Neovim, close or delete Pi's terminal (remote.terminal), discard unsaved changes, or write buffers the user is editing without being asked.",
+      "nvim_control_lua and nvim_control_keys act on the user's real editor: their open buffers, unsaved changes included, their windows and their plugins. nvim_lua and nvim_keys are your private Neovim instead. Use the editor tools to show the user things or when asked to act in their editor; never quit Neovim, close or delete Pi's terminal (remote.terminal), discard unsaved changes, or write buffers the user is editing without being asked.",
     ],
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -136,10 +136,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: 'editor_keys',
-    label: 'Editor keys',
+    name: 'nvim_control_keys',
+    label: 'Neovim control keys',
     promptSnippet: "Type keys into the user's Neovim and see the resulting state",
-    description: "Type keys into the focused window of the user's Neovim, as they would, in Neovim notation (<Esc>, <CR>, <C-w>, <lt> for a literal <). Returns mode, buffer, cursor and the last message. Empty keys just looks. Refused while the focused window is Pi's own terminal, where keys would be typed into Pi: focus another window with editor_lua first, or use editor_lua instead.",
+    description: "Type keys into the focused window of the user's Neovim, as they would, in Neovim notation (<Esc>, <CR>, <C-w>, <lt> for a literal <). Returns mode, buffer, cursor and the last message. Empty keys just looks. Refused while the focused window is Pi's own terminal, where keys would be typed into Pi: focus another window with nvim_control_lua first, or use nvim_control_lua instead.",
     executionMode: 'sequential',
     parameters: Type.Object({
       keys: Type.String({ description: 'Keys to type; may be empty.' }),
@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI) {
         if (written < 0) {
           throw new Error(typed
             ? `Stopped after typing ${typed} of ${total} bytes of keys: focus moved to Pi's own terminal, where the rest would be typed into Pi`
-            : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with editor_lua first, or use editor_lua.");
+            : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with nvim_control_lua first, or use nvim_control_lua.");
         }
         typed += written;
         if (written < Buffer.byteLength(part)) {
@@ -180,7 +180,7 @@ export default function (pi: ExtensionAPI) {
         await taken();
       }
       const mode = await remote.request('nvim_get_mode', [], options) as { mode: string; blocking: boolean };
-      if (mode.blocking) return result(`mode ${mode.mode} (waiting at a prompt: answer it with editor_keys, often <CR> or <Esc>)`);
+      if (mode.blocking) return result(`mode ${mode.mode} (waiting at a prompt: answer it with nvim_control_keys, often <CR> or <Esc>)`);
       return result(describe(mode.mode, await remote.lua(STATE, [], options) as State));
     }),
   });

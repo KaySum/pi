@@ -16,9 +16,17 @@ export default function (pi: ExtensionAPI) {
   process.env.PI_NVIM_REMOTE = self;
 
   let handle: Remote | undefined;
-  let attaching: Promise<void> | undefined;
   let context: ExtensionContext | undefined;
   let lastError: string | undefined;
+  let ended = false;
+  // Connecting and disconnecting run one at a time, in the order asked: overlapping, two
+  // reconnects would leave an attachment nobody tracks, and a reconnect could outlive shutdown.
+  let lifecycle: Promise<void> = Promise.resolve();
+  function queue(work: () => Promise<void>) {
+    const run = lifecycle.then(work);
+    lifecycle = run.catch(() => {});
+    return run;
+  }
 
   const showStatus = () => context?.ui.setStatus('nvim-remote', handle ? 'nvim' : undefined);
 
@@ -32,6 +40,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function connect(cwd: string) {
+    if (ended) return; // Asked for before shutdown, reached after it.
     try {
       const remote: Remote = Object.assign(await attach(socket!, { cwd }), { apiVersion: 1 as const });
       handle = remote;
@@ -58,15 +67,17 @@ export default function (pi: ExtensionAPI) {
     (request as { reply?: (handle?: Remote) => void })?.reply?.(handle);
   });
 
+  // Pi loads extensions afresh for every session (/new, /resume and /fork as well as
+  // /reload), so this instance sees one start and one shutdown.
   pi.on('session_start', (_event, ctx) => {
     context = ctx;
-    attaching ??= connect(ctx.cwd);
-    showStatus(); // A /new or session switch keeps the connection.
+    // Not awaited: Pi's startup should not wait for the editor.
+    void queue(() => connect(ctx.cwd));
   });
 
   pi.on('session_shutdown', async () => {
-    await attaching;
-    await disconnect();
+    ended = true;
+    await queue(disconnect);
     context = undefined;
   });
 
@@ -74,12 +85,8 @@ export default function (pi: ExtensionAPI) {
     description: 'Show the Neovim this Pi controls; "reconnect" attaches again',
     handler: async (args, ctx) => {
       context = ctx;
-      if (args.trim() === 'reconnect') {
-        await attaching;
-        await disconnect();
-        attaching = connect(ctx.cwd);
-      }
-      await attaching;
+      if (args.trim() === 'reconnect') await queue(async () => { await disconnect(); await connect(ctx.cwd); });
+      else await lifecycle;
       ctx.ui.notify(handle
         ? `Neovim PID ${handle.info.pid}\nSocket: ${handle.info.socket}\nChannel: ${handle.channel}\nTerminal buffer: ${handle.info.terminal ?? 'not found'}`
         : `Not attached to Neovim${lastError ? `: ${lastError}` : ''}. Run /nvim-remote reconnect.`,

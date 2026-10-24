@@ -110,27 +110,24 @@ test('a session attaches, announces the handle, and shows the chip; shutdown und
   assert.equal(await lua('return require("nvim_remote").contexts[...] == nil', remote.channel), true);
 });
 
-test('/new keeps the connection; /reload replaces it, and extensions set up again', async () => {
+test('every new session (/new, /resume, /fork, /reload) replaces the connection, and extensions set up again', async () => {
   process.env.NVIM = socket;
-  const first = fakePi();
-  const attachedFirst: Remote[] = [];
-  useRemote(first.pi, handle => attachedFirst.push(handle));
-  const { remote, fire } = await start(first);
-  await fire('session_start', { reason: 'new' });
-  assert.deepEqual(attachedFirst, [remote]); // Not attached again.
-  assert.equal(remote.closed, false);
-
-  // /reload: the old instance shuts down, then everything loads afresh.
-  await fire('session_shutdown', { reason: 'reload' });
-  const second = fakePi();
-  const attachedSecond: Remote[] = [];
-  useRemote(second.pi, handle => attachedSecond.push(handle));
-  const { remote: fresh, fire: fireSecond, status } = await start(second);
-  assert.notEqual(fresh, remote);
-  assert.equal(remote.closed, true);
-  assert.deepEqual(attachedSecond, [fresh]);
-  assert.equal(status['nvim-remote'], 'nvim');
-  await fireSecond('session_shutdown', { reason: 'quit' });
+  for (const reason of ['new', 'resume', 'fork', 'reload']) {
+    const first = fakePi();
+    const { remote, fire } = await start(first);
+    // Pi shuts the old session down, then loads every extension afresh for the next.
+    await fire('session_shutdown', { reason });
+    assert.equal(remote.closed, true);
+    const second = fakePi();
+    const attachedSecond: Remote[] = [];
+    useRemote(second.pi, handle => attachedSecond.push(handle));
+    const { remote: fresh, fire: fireSecond, status } = await start(second);
+    assert.notEqual(fresh, remote);
+    assert.deepEqual(attachedSecond, [fresh]);
+    assert.equal(status['nvim-remote'], 'nvim');
+    await fireSecond('session_shutdown', { reason: 'quit' });
+  }
+  assert.equal(await lua('return vim.tbl_count(require("nvim_remote").contexts)'), 0);
 });
 
 test('when the editor drops the connection, Pi lets go, says why, and can reconnect', async () => {
@@ -192,4 +189,43 @@ test('cleanups that fail in the editor are reported at shutdown', async () => {
   await remote.lua('remote.on_detach(function() error("could not undo") end)');
   await fire('session_shutdown', { reason: 'quit' });
   assert.match(notes.at(-1)![0], /^nvim-remote: cleanup failed in Neovim:\n.*could not undo/);
+});
+
+// Found by a stress suite: connecting and disconnecting must never overlap.
+const contexts = () => lua('return vim.tbl_count(require("nvim_remote").contexts)');
+
+test('reconnects asked for at once leave exactly one attachment', async () => {
+  process.env.NVIM = socket;
+  const fake = fakePi();
+  const nvim = useRemote(fake.pi);
+  const { commands, ctx, fire } = await start(fake);
+  await Promise.all([1, 2, 3].map(() => commands['nvim-remote'].handler('reconnect', ctx)));
+  assert.equal(await contexts(), 1);
+  assert.equal(await nvim()!.lua('return remote.channel'), nvim()!.channel); // The one left is the one published.
+  await fire('session_shutdown', { reason: 'quit' });
+  assert.equal(await contexts(), 0);
+});
+
+test('a reconnect racing shutdown, in either order, leaves nothing attached', async () => {
+  process.env.NVIM = socket;
+  for (const shutdownFirst of [false, true]) {
+    const fake = fakePi();
+    const nvim = useRemote(fake.pi);
+    const { commands, ctx, fire } = await start(fake);
+    const reconnect = () => commands['nvim-remote'].handler('reconnect', ctx);
+    const shutdown = () => fire('session_shutdown', { reason: 'quit' });
+    await Promise.all(shutdownFirst ? [shutdown(), reconnect()] : [reconnect(), shutdown()]);
+    assert.equal(nvim(), undefined);
+    assert.equal(await contexts(), 0);
+  }
+});
+
+test('shutdown during the first attach still detaches it', async () => {
+  process.env.NVIM = socket;
+  const fake = fakePi();
+  register(fake.pi);
+  const nvim = useRemote(fake.pi);
+  await Promise.all([fake.fire('session_start', { reason: 'startup' }), fake.fire('session_shutdown', { reason: 'quit' })]);
+  assert.equal(nvim(), undefined);
+  assert.equal(await contexts(), 0);
 });

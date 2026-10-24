@@ -495,3 +495,27 @@ test('time running out inside a request while typing still says how much was typ
     await editor.request('nvim_input', ['<Esc>']);
   }
 });
+
+test("a cancellation mid-call is passed on as it is, even one that looks like the editor's own error", async t => {
+  const { tools } = load(await attached(t));
+  const lookalikes = [
+    Object.assign(new Error('external cancellation'), { blocking: true }), // Like a prompt.
+    new Error('upstream did not answer within its own limit'), // Like a timeout.
+    null, 0, false, '', // Falsy, which the RPC client once took for success.
+  ];
+  for (const reason of lookalikes) {
+    for (const [name, params] of [['nvim_control_lua', { code: 'vim.wait(300) return 1', timeoutMs: 3000 }],
+      ['nvim_control_keys', { keys: `i${'x'.repeat(10000)}<Esc>`, timeoutMs: 3000 }]] as const) {
+      const controller = new AbortController();
+      const call = tools[name].execute('id', params, controller.signal);
+      await delay(30); // Under way.
+      controller.abort(reason);
+      await assert.rejects(call, (error: unknown) => Object.is(error, reason), `${name}, cancelled with ${String((reason as Error)?.message ?? reason)}`);
+      // Let what had started in the editor finish, keys already queued included.
+      const drained = async () => { while (await lua('return vim.fn.getchar(1) ~= 0')) await delay(10); };
+      await drained();
+      await editor.request('nvim_input', ['<Esc>']);
+      await drained();
+    }
+  }
+});

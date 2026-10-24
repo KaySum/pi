@@ -7,6 +7,8 @@ const OUTPUT_LIMIT = 16384;
 const timeoutMs = Type.Optional(Type.Integer({ minimum: 100, maximum: 60000, description: 'Default 10000.' }));
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // What a caught value says about a prompt: anything can be thrown or aborted with, null included.
+// An editor that did not answer in time: the deadline has passed, and nvim-remote said so.
+const timedOut = (error: unknown, end: number) => Date.now() >= end && /did not answer within/.test(errorText(error));
 const atPrompt = (error: unknown) => (error as { blocking?: boolean } | null)?.blocking === true;
 
 function result(text: string) {
@@ -128,8 +130,11 @@ export default function (pi: ExtensionAPI) {
     const limit = ms ?? 10000, end = Date.now() + limit;
     try { return await work(remote, { get timeout() { return Math.max(1, end - Date.now()); }, signal, end }); }
     catch (error) {
+      // The caller's cancellation is theirs, passed on as it is, whatever it looks like.
+      if (signal?.aborted) throw error;
       if (atPrompt(error)) throw new Error(`${errorText(error)}. Answer it with nvim_control_keys (often <CR> or <Esc>).`);
-      if (/did not answer within/.test(errorText(error))) throw new Error(`Neovim did not finish within ${limit} ms; what was asked may still finish there`);
+      // Out of time only when this call's own deadline has passed, not because a message says so.
+      if (timedOut(error, end)) throw new Error(`Neovim did not finish within ${limit} ms; what was asked may still finish there`);
       throw error;
     }
   }
@@ -210,7 +215,9 @@ export default function (pi: ExtensionAPI) {
         }
       } catch (error) {
         // However far a request had got when the time ran out, say how much was typed.
-        if (/did not answer within/.test(errorText(error))) throw new Error(`timeoutMs ran out after typing ${typed} of ${total} bytes of keys; the rest were not typed`);
+        if (!options.signal?.aborted && timedOut(error, options.end)) {
+          throw new Error(`timeoutMs ran out after typing ${typed} of ${total} bytes of keys; the rest were not typed`);
+        }
         throw error;
       }
       const mode = await remote.request('nvim_get_mode', [], options) as { mode: string; blocking: boolean };

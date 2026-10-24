@@ -261,28 +261,41 @@ local function needles_of(match)
 	return #needles > 0 and needles or error("match is only space", 0)
 end
 
+-- The lines of `buf`, read once, each trimmed when first looked at: a search seldom looks
+-- far, and a reload searches for every mark.
+local function trimmed(buf)
+	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
+	return setmetatable({ n = #lines }, {
+		__index = function(cache, i)
+			local text = lines[i] and vim.trim(lines[i])
+			rawset(cache, i, text)
+			return text
+		end,
+	})
+end
+
 local function holds(lines, needles, line)
 	for i, needle in ipairs(needles) do
 		local text = lines[line + i - 1]
-		if not (text and vim.trim(text):find(needle, 1, true)) then
+		if not (text and text:find(needle, 1, true)) then
 			return false
 		end
 	end
 	return true
 end
 
--- The line nearest `near` where `needles` start, earlier on a tie.
-local function locate(buf, needles, near)
-	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
-	near = math.max(1, math.min(near, #lines))
+-- The line nearest `near` where `needles` start, earlier on a tie; `lines` as `trimmed` gives.
+local function locate(lines, needles, near)
+	near = math.max(1, math.min(near, lines.n))
 	if holds(lines, needles, near) then
 		return near
 	end
-	for distance = 1, #lines do
-		for _, line in ipairs({ near - distance, near + distance }) do
-			if line >= 1 and holds(lines, needles, line) then
-				return line
-			end
+	for distance = 1, lines.n do
+		if near - distance >= 1 and holds(lines, needles, near - distance) then
+			return near - distance
+		end
+		if holds(lines, needles, near + distance) then
+			return near + distance
 		end
 	end
 end
@@ -297,7 +310,7 @@ end
 local function render(buf, ns, spec, resolve, extmarks, reuse)
 	local needles = spec.match and needles_of(spec.match)
 	if needles and resolve then
-		spec.line = locate(buf, needles, spec.line or 1)
+		spec.line = locate(trimmed(buf), needles, spec.line or 1)
 			or error(("not found in %s: %s"):format(vim.api.nvim_buf_get_name(buf), spec.match), 0)
 		spec.endLine = spec.line + #needles - 1
 	end
@@ -584,11 +597,12 @@ end
 --- showing one hidden by a deletion again, and drawing again one whose extmarks went with
 --- the buffer (`:bdelete`); one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
+	local lines = trimmed(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			local found = locate(buf, mark.anchor, spec.line)
+			local found = locate(lines, mark.anchor, spec.line)
 			if not found then
 				if spec.invalidate then
 					remove(id)

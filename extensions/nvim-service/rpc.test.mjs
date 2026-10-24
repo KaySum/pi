@@ -65,3 +65,17 @@ test('connecting fails clearly when nothing listens, or when aborted', async () 
   await assert.rejects(connectRpc('/tmp/pi-nvim-none/nvim.sock'), /ENOENT/);
   await assert.rejects(connectRpc(socket, AbortSignal.abort(new Error('never mind'))), /never mind/);
 });
+
+test('close is reported once, whichever end closes', async t => {
+  const { rpc, lua, channel } = await open(t);
+  const seen = [];
+  rpc.onClose(error => seen.push(error.message));
+  const off = rpc.onClose(() => seen.push('unsubscribed'));
+  off();
+  await lua('local chan = ...; vim.defer_fn(function() vim.fn.chanclose(chan) end, 0)', channel);
+  for (let i = 0; i < 100 && !seen.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  rpc.close();
+  assert.deepEqual(seen, ['Neovim RPC connection closed']);
+  rpc.onClose(error => seen.push(`late: ${error.message}`));
+  assert.deepEqual(seen, ['Neovim RPC connection closed', 'late: Neovim RPC connection closed']);
+});

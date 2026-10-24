@@ -12,6 +12,7 @@ export async function connectRpc(path, signal) {
   const socket = createConnection({ path });
   const pending = new Map();
   const handlers = new Map();
+  const closers = new Set();
   const opened = Promise.withResolvers();
   let nextId = 0;
   let closed;
@@ -22,6 +23,7 @@ export async function connectRpc(path, signal) {
     opened.reject(error);
     for (const finish of [...pending.values()]) finish(error);
     socket.destroy();
+    for (const handler of closers) try { handler(error); } catch { /* subscriber's problem */ }
   }
   const send = message => { if (!closed) socket.write(encode(message)); };
 
@@ -63,6 +65,12 @@ export async function connectRpc(path, signal) {
     get closed() { return Boolean(closed); },
     close: () => close(),
     notify: (method, args = []) => send([2, method, args]),
+    /** Called once the connection closes, from either end (at once if it has); returns an unsubscribe. */
+    onClose(handler) {
+      if (closed) { handler(closed); return () => {}; }
+      closers.add(handler);
+      return () => closers.delete(handler);
+    },
     /** Subscribe to a notification or serve a request from Neovim; returns an unsubscribe. */
     on(method, handler) {
       if (!handlers.has(method)) handlers.set(method, new Set());

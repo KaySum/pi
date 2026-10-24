@@ -20,10 +20,11 @@ export type Highlight = string | Style;
 export type Chunk = [text: string, hl?: Highlight];
 /**
  * `eol` after the line's text, `right` at the window's right edge, `overlay` over the text at
- * `col`, `inline` between characters at `col`, a number at that screen column; `above` and
- * `below` as lines of their own.
+ * `col`, `inline` between characters at `col`, `after` between characters at `endCol` (else the
+ * end of the last line), a number at that screen column; `above` and `below` as lines of
+ * their own.
  */
-export type Position = 'eol' | 'right' | 'overlay' | 'inline' | 'above' | 'below' | number;
+export type Position = 'eol' | 'right' | 'overlay' | 'inline' | 'after' | 'above' | 'below' | number;
 
 export type Mark = {
   /** The file, absolute: loaded in the editor (not listed) if the user has not opened it. */
@@ -37,6 +38,11 @@ export type Mark = {
    * buffer's, in order, the space around them aside. The occurrence nearest `line` wins.
    */
   match?: string;
+  /**
+   * With `match`: mark just the text it finds, not its lines, its columns where it is in them;
+   * `inline` goes before it, `after` after it, and `highlight` covers it alone.
+   */
+  columns?: boolean;
   /** 0-based byte columns. Without them `highlight` covers whole lines, to the window's edge. */
   col?: number; endCol?: number;
   /** A string, or chunks in different highlights; a newline starts another line for `above` and `below`, and is a space elsewhere. */
@@ -116,6 +122,7 @@ function check(mark: Patch) {
 function checkMark(mark: Mark) {
   if ((mark.path === undefined) === (mark.buf === undefined)) throw new Error('A mark needs a path or a buf, not both');
   if (mark.line === undefined && !mark.match) throw new Error('A mark needs a line or a match');
+  if (mark.columns && !mark.match) throw new Error('columns needs a match: the text whose columns to mark');
   return check(mark);
 }
 

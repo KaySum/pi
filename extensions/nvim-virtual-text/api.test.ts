@@ -270,6 +270,53 @@ test('match finds code by its text, the occurrence nearest line', async () => {
   await assert.rejects(text.place({ path }), /line or a match/);
 });
 
+test('columns marks just the matched text, with text before, after or over it', async () => {
+  const path = await file('\tlet café = retryCount + 1;\nother\n');
+  await open(path);
+  // A tab and a two-byte letter before it: columns are bytes in the real line, as Neovim counts.
+  const [span] = await text.place({ path, match: 'retryCount', columns: true, highlight: 'Search' });
+  const [mark] = await text.list();
+  assert.deepEqual([mark.id, mark.line, mark.col, mark.endCol], [span, 1, 13, 23]);
+  const [, , , details] = (await extmarks(path)).find(m => m[3].hl_group)!;
+  assert.deepEqual([details.end_row, details.end_col, details.hl_eol], [0, 23, false]);
+  await text.clear();
+
+  await text.place([
+    { path, match: 'retryCount', columns: true, text: '«', position: 'inline' },
+    { path, match: 'retryCount', columns: true, text: '»', position: 'after' },
+    { path, match: 'other', columns: true, text: 'OVER', position: 'overlay' },
+  ]);
+  const rows = await screen(rows => rows());
+  assert.match(rows[0], /let café = «retryCount» \+ 1;/);
+  assert.match(rows[1], /^OVER/);
+});
+
+test('columns spans a match over several lines, from its start to its end', async () => {
+  const path = await file('x = call(\n    a,\n    b) + 1\n');
+  await text.place({ path, match: 'call(\na,\nb)', columns: true, highlight: 'Visual' });
+  const [mark] = await text.list();
+  assert.deepEqual([mark.line, mark.endLine, mark.col, mark.endCol], [1, 3, 4, 6]);
+});
+
+test('a columns mark follows its text through edits and reloads, along its line too', async () => {
+  const path = await file('let retryCount = 0;\nnext\n');
+  await open(path);
+  const [id] = await text.place({ path, match: 'retryCount', columns: true, text: '!', position: 'after' });
+  const at = async () => { const [m] = await text.list(); return [m.line, m.col, m.endCol]; };
+  await lua('vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { "const " })'); // Edited before it, in the buffer.
+  assert.deepEqual(await at(), [1, 10, 20]);
+  await writeFile(path, 'let x = 1, retryCount = 0;\nnext\n'); // Reloaded: same line, further along.
+  await lua('vim.cmd("edit!")');
+  assert.deepEqual(await at(), [1, 11, 21]);
+  assert.deepEqual((await shown(path)).map(([row, col]) => [row, col]), [[0, 21]]);
+  await writeFile(path, 'top\n  retryCount++;\n'); // Reloaded: another line.
+  await lua('vim.cmd("edit!")');
+  assert.deepEqual(await at(), [2, 2, 12]);
+  await text.update(id, { columns: null }); // No longer by columns: the line, as given.
+  assert.equal((await text.list())[0].columns, undefined);
+  await assert.rejects(text.place({ path, line: 1, columns: true }), /columns needs a match/);
+});
+
 test('reloaded from disk, marks move back onto their text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

@@ -3,10 +3,10 @@ import type { Mark, Style } from './api.ts';
 // What /nvim-virtual-text-add takes: `key=value` options, then the text. A value with spaces
 // is "quoted", as JSON; `\n` in the text starts another line.
 const NUMBERS = ['line', 'endLine', 'col', 'endCol', 'ttl', 'priority'] as const;
-const FLAGS = ['fill', 'invalidate', 'bold', 'italic', 'underline'] as const;
+const FLAGS = ['fill', 'invalidate', 'columns', 'bold', 'italic', 'underline'] as const;
 const FLAGS_OR_NUMBERS = ['indent', 'wrap'] as const;
 const STRINGS = ['path', 'match', 'hl', 'highlight', 'sign', 'fg', 'bg'] as const;
-const POSITIONS = ['eol', 'right', 'overlay', 'inline', 'above', 'below'];
+const POSITIONS = ['eol', 'right', 'overlay', 'inline', 'after', 'above', 'below'];
 const STYLE = ['fg', 'bg', 'bold', 'italic', 'underline'] as const;
 const KEYS: readonly string[] = [...NUMBERS, ...FLAGS, ...FLAGS_OR_NUMBERS, ...STRINGS, 'position'];
 const OPTION = /\s*(\w+)=("(?:[^"\\]|\\.)*"|\S*)/y;
@@ -14,7 +14,7 @@ const OPTION = /\s*(\w+)=("(?:[^"\\]|\\.)*"|\S*)/y;
 const DESCRIPTIONS: Record<string, string> = {
   path: 'File, from the working directory (default: your window\'s)', line: 'Line (default: your cursor\'s)',
   endLine: 'Last line marked', col: 'Byte column', endCol: 'Last byte column', match: 'Code to find instead of a line',
-  position: 'eol, right, overlay, inline, above, below or a column', hl: 'Highlight group of the text',
+  columns: 'Mark just the matched text', position: 'eol, right, overlay, inline, after, above, below or a column', hl: 'Highlight group of the text',
   highlight: 'Highlight group for the lines marked', sign: 'Sign column text', indent: 'true or columns',
   wrap: 'true or columns', fill: 'Background across the window', ttl: 'Milliseconds before it goes',
   invalidate: 'Hide while its lines are deleted', priority: 'Extmark priority', fg: 'Text color, #rrggbb',

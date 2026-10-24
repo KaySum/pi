@@ -3,7 +3,7 @@
 -- extension using it, say) has its own namespace; every mark placed has an id of its own, and
 -- all of them go when Pi detaches.
 
-local POSITIONS = { eol = "eol", right = "right_align", overlay = "overlay", inline = "inline" }
+local POSITIONS = { eol = "eol", right = "right_align", overlay = "overlay", inline = "inline", after = "inline" }
 local DEFAULTS = {
 	PiVirtualText = "Comment",
 	PiVirtualTextInfo = "DiagnosticVirtualTextInfo",
@@ -261,6 +261,15 @@ local function needles_of(match)
 	return #needles > 0 and needles or error("match is only space", 0)
 end
 
+-- Where `needles`, found from `line` on, start and end: byte columns in the real lines, tabs,
+-- indentation and all, at the first place on each.
+local function columns_of(buf, needles, line)
+	local lines = vim.api.nvim_buf_get_lines(buf, line - 1, line - 1 + #needles, true)
+	local start = lines[1]:find(needles[1], 1, true)
+	local _, finish = lines[#lines]:find(needles[#needles], #needles == 1 and start or 1, true)
+	return start - 1, finish
+end
+
 -- The text of each buffer, as `text_of` last read it, while anything still holds it.
 local texts = setmetatable({}, { __mode = "v" })
 
@@ -473,6 +482,9 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 		spec.line = locate(text_of(buf), needles, spec.line or 1)
 			or error(("not found in %s: %s"):format(vim.api.nvim_buf_get_name(buf), spec.match), 0)
 		spec.endLine = spec.line + #needles - 1
+		if spec.columns then
+			spec.col, spec.endCol = columns_of(buf, needles, spec.line)
+		end
 	end
 	local count = vim.api.nvim_buf_line_count(buf)
 	local function row(line)
@@ -508,7 +520,7 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 
 	if spec.text then
 		local position = spec.position or "eol"
-		local at, opts = position == "below" and last or first, nil
+		local at, opts = (position == "below" or position == "after") and last or first, nil
 		if position == "above" or position == "below" then
 			-- Measured as that buffer shows text: its 'tabstop', not the current buffer's.
 			local lines = vim.api.nvim_buf_call(buf, function()
@@ -530,7 +542,10 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 				opts.virt_text_pos = POSITIONS[position]
 			end
 		end
-		put("text", at, (position == "overlay" or position == "inline") and spec.col or 0, opts)
+		local col = (position == "overlay" or position == "inline") and spec.col
+			or position == "after" and (spec.endCol or #vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1])
+			or 0
+		put("text", at, col, opts)
 	end
 	return needles or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
 end
@@ -684,7 +699,7 @@ function state.place(group, marks)
 	return ids
 end
 
-local WHERE = { "path", "buf", "line", "endLine", "col", "endCol", "match" }
+local WHERE = { "path", "buf", "line", "endLine", "col", "endCol", "match", "columns" }
 
 --- Change the mark `id` of `group` by `patch`: what it does not give stays, and `vim.NIL`
 --- takes away. Lines and columns not given stay where edits have moved them. Returns
@@ -724,7 +739,8 @@ end
 local function astray(mark, spec)
 	for part, extmark in pairs(mark.extmarks) do
 		local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, extmark, { details = true })
-		local line = part == "text" and spec.position == "below" and (spec.endLine or spec.line) or spec.line
+		local last = spec.position == "below" or spec.position == "after"
+		local line = part == "text" and last and (spec.endLine or spec.line) or spec.line
 		if not found[1] or found[3].invalid or found[1] ~= line - 1 then
 			return true
 		end
@@ -773,10 +789,17 @@ function state.reanchor(buf)
 				elseif gone then
 					install(id, mark.group, spec, false, true)
 				end
-			elseif found ~= spec.line or invalid or gone then
-				spec.endLine = spec.endLine and spec.endLine + found - spec.line
-				spec.line = found
-				install(id, mark.group, spec, false, true)
+			else
+				-- On its lines, its text may still have moved along them.
+				local col, endCol = spec.col, spec.endCol
+				if spec.columns and spec.match then
+					col, endCol = columns_of(buf, mark.anchor, found)
+				end
+				if found ~= spec.line or invalid or gone or col ~= spec.col or endCol ~= spec.endCol then
+					spec.endLine = spec.endLine and spec.endLine + found - spec.line
+					spec.line, spec.col, spec.endCol = found, col, endCol
+					install(id, mark.group, spec, false, true)
+				end
 			end
 		end
 	end

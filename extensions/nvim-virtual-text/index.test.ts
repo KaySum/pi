@@ -105,7 +105,7 @@ test('/nvim-virtual-text-add places at your cursor, or where it says; /nvim-virt
       vim.cmd('vsplit | terminal')`, [path]]);
     assert.deepEqual(await run('nvim-virtual-text-add', 'position=below fg=#ff9e64 a note\\nover two lines'), ['Placed #1 at placed.ts:3', 'info']);
     assert.deepEqual(await run('nvim-virtual-text-add', `path=placed.ts match="four" sign=! here`), ['Placed #2 at placed.ts:4', 'info']);
-    assert.deepEqual(await run('nvim-virtual-text-add', 'position=sideways x'), ['position=sideways is not a value position takes: eol, right, overlay, inline, above, below or a column', 'warning']);
+    assert.deepEqual(await run('nvim-virtual-text-add', 'position=sideways x'), ['position=sideways is not a value position takes: eol, right, overlay, inline, after, above, below or a column', 'warning']);
     assert.deepEqual(await run('nvim-virtual-text-add', 'path=placed.ts match=nowhere x'), [`not found in ${path}: nowhere`, 'warning']);
 
     const [mine] = await virtualText(nvim!, 'user').list();

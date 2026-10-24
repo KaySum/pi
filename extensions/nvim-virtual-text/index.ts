@@ -38,7 +38,7 @@ function describe(mark: Inspected, cwd: string) {
   const path = shortPath(mark.path, cwd);
   const lines = mark.endLine && mark.endLine !== mark.line ? `${mark.line}-${mark.endLine}` : `${mark.line}`;
   const flags = [
-    mark.match !== undefined && 'match',
+    mark.match !== undefined && (mark.columns ? 'match, columns' : 'match'),
     mark.ttl !== undefined && `ttl ${mark.ttl}`,
     mark.invalidate && 'invalidate',
     mark.invalid && 'hidden',

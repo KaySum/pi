@@ -16,7 +16,8 @@ Both take `timeoutMs` (default 10000). Output is cut at 16 KB.
 descriptions leave the system prompt; `/nvim-control on` gives them back, and `/nvim-control`
 alone toggles. Control starts on, and keeps its setting across `/reload` and session
 switches until Pi exits. Toggling changes the system prompt, so Pi's prompt cache is rebuilt
-once on the next turn.
+once on the next turn. While control is on and Pi is attached, the status bar shows `control`
+(status key `nvim-control`).
 
 `editor_lua` is arbitrary code running in your editor, with your unsaved buffers: the same
 trust as the bash tool, but where you are working. The model is told these are your editor,

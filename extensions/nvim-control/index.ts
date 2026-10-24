@@ -1,6 +1,6 @@
 import { Type } from '@earendil-works/pi-ai';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { useRemote, type Remote } from '../nvim-remote/api.ts';
 
 const OUTPUT_LIMIT = 16384;
@@ -40,7 +40,11 @@ export default function (pi: ExtensionAPI) {
   // Outside Neovim there is no editor to control, and no tools to cost the model anything.
   if (!process.env.NVIM) return;
   const setting = ((globalThis as { [SETTING]?: Setting })[SETTING] ??= { on: true });
-  const nvim = useRemote(pi);
+  let context: ExtensionContext | undefined;
+  // Shown only while attached: without an editor there is nothing to control.
+  const show = () => context?.ui.setStatus('nvim-control', setting.on && nvim() ? 'control' : undefined);
+  const nvim = useRemote(pi, show);
+  pi.events.on('nvim-remote:stopped', show);
 
   // Off, the tools are not declared to the model: it cannot call them, and their descriptions
   // leave the system prompt. Every other tool stays as it was.
@@ -49,8 +53,10 @@ export default function (pi: ExtensionAPI) {
     pi.setActiveTools(setting.on ? [...others, ...TOOLS] : others);
   }
 
-  pi.on('session_start', () => {
+  pi.on('session_start', (_event, ctx) => {
+    context = ctx;
     if (!setting.on) apply(); // Registered tools start active.
+    show();
   });
 
   pi.registerCommand('nvim-control', {
@@ -66,8 +72,10 @@ export default function (pi: ExtensionAPI) {
       const arg = args.trim();
       const on = arg === 'on' ? true : arg === 'off' ? false : arg ? undefined : !setting.on;
       if (on === undefined) return ctx.ui.notify(USAGE, 'warning');
+      context = ctx;
       setting.on = on;
       apply();
+      show();
       ctx.ui.notify(on ? 'The model can control your editor' : 'The model can no longer control your editor', 'info');
     },
   });

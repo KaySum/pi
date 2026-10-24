@@ -40,7 +40,7 @@ type Command = { handler(args: string, ctx: object): Promise<void>; getArgumentC
 /** The extension loaded into a Pi whose nvim-remote hands out `remote` (or nothing), its session started. */
 function load(remote?: Remote) {
   const bus = new EventEmitter(), hooks = new EventEmitter(), tools: Record<string, Tool> = {};
-  const commands: Record<string, Command> = {}, notes: [string, string | undefined][] = [];
+  const commands: Record<string, Command> = {}, notes: [string, string | undefined][] = [], status: Record<string, string | undefined> = {};
   let active = ['read', 'bash']; // Pi's own, which control must leave alone.
   register({
     events: { on: (channel: string, handler: (data: unknown) => void) => bus.on(channel, handler), emit: (channel: string, data: unknown) => bus.emit(channel, data) },
@@ -50,12 +50,16 @@ function load(remote?: Remote) {
     getActiveTools: () => [...active],
     setActiveTools: (names: string[]) => { active = [...names]; },
   } as unknown as ExtensionAPI);
-  bus.on('nvim-remote:get', (request: { reply(handle?: Remote): void }) => request.reply(remote));
-  const ctx = { hasUI: true, ui: { notify: (text: string, type?: string) => notes.push([text, type]) } };
+  let current = remote;
+  bus.on('nvim-remote:get', (request: { reply(handle?: Remote): void }) => request.reply(current));
+  const ctx = { hasUI: true, ui: { notify: (text: string, type?: string) => notes.push([text, type]), setStatus: (key: string, text?: string) => { status[key] = text; } } };
   hooks.listeners('session_start').forEach(handler => handler({ reason: 'startup' }, ctx));
   const run = async (name: string, params: Record<string, unknown>) => (await tools[name].execute('id', params)).content[0].text;
   const command = (args = '') => commands['nvim-control'].handler(args, ctx);
-  return { tools, run, commands, command, notes, active: () => active };
+  // As nvim-remote announces them: the editor going away, and being attached again.
+  const stop = () => { current = undefined; bus.emit('nvim-remote:stopped', remote?.info); };
+  const ready = () => { current = remote; bus.emit('nvim-remote:ready', remote); };
+  return { tools, run, commands, command, notes, status, stop, ready, active: () => active };
 }
 
 async function attached(t: TestContext, options?: Parameters<typeof attach>[1]): Promise<Remote> {
@@ -238,4 +242,21 @@ test('/nvim-control offers its two options, and explains itself for anything els
     assert.deepEqual(notes.at(-1), ['Usage: /nvim-control [on|off]', 'warning']);
   }
   assert.equal(ours(active()).length, 2); // Nothing changed.
+});
+
+test('the footer shows control while it is on and Pi is attached', async t => {
+  const { status, command, stop, ready } = load(await attached(t));
+  assert.equal(status['nvim-control'], 'control');
+  await command('off');
+  assert.equal(status['nvim-control'], undefined);
+  await command('on');
+  assert.equal(status['nvim-control'], 'control');
+  stop(); // No editor: nothing to control.
+  assert.equal(status['nvim-control'], undefined);
+  ready();
+  assert.equal(status['nvim-control'], 'control');
+});
+
+test('without an attachment the footer shows nothing, even with control on', () => {
+  assert.equal(load(undefined).status['nvim-control'], undefined);
 });

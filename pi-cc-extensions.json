@@ -1,5 +1,5 @@
 {
   "footerLine1Keys": [],
   "footerLine2Keys": ["usage"],
-  "footerLine3Keys": ["nvim-remote"]
+  "footerLine3Keys": ["nvim-remote", "nvim-follow"]
 }

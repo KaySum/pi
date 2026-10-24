@@ -214,15 +214,19 @@ local function send()
 	end
 end
 
--- Where the floats are: moving one by the API fires no autocommand, so after each command,
--- while idle, this is compared; a cheap look, unlike a snapshot, which here would loop.
+-- The floats as a view shows them: changing one by the API fires no autocommand, so after
+-- each command, while idle, this is compared; a cheap look, unlike a snapshot, which here
+-- would loop. Everything `window` gives of a float is in it.
 local function floats()
 	local where = {}
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then
 			local row, col = unpack(vim.api.nvim_win_get_position(win))
-			table.insert(where, table.concat({ win, row, col, config.width, config.height, config.zindex or 0 }, ","))
+			table.insert(where, table.concat({
+				win, row, col, config.width, config.height, config.relative, tostring(config.zindex),
+				tostring(config.focusable), vim.inspect(config.border),
+			}, ","))
 		end
 	end
 	return table.concat(where, ";")

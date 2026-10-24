@@ -173,6 +173,11 @@ test('a float moved by the API is seen, yet an idle editor makes no views', asyn
     await editor.request('nvim_win_set_config', [win, { relative: 'editor', row: 10, col: 12 }]);
     const moved = await eventually(() => changes.at(-1)?.windows.find(w => w.id === win && w.row === 11));
     assert.equal(moved.col, 13);
+    // Nor only where: whatever the view gives of a float, changed by the API alone.
+    await editor.request('nvim_win_set_config', [win, { border: 'double' }]);
+    await eventually(() => changes.at(-1)?.windows.find(w => w.id === win)?.float?.border);
+    await editor.request('nvim_win_set_config', [win, { focusable: false }]);
+    await eventually(() => changes.at(-1)?.windows.find(w => w.id === win)?.float?.focusable === false);
   } finally { await shutdown(); }
 });
 
@@ -188,6 +193,19 @@ test('a refresh brings every extension the view it made, and one from a Pi gone 
     assert.ok(fresh!.windows.some(w => w.id === win));
     assert.deepEqual([view(), other()], [fresh, fresh]);
   } finally { await shutdown(); }
+  // Answered, then the editor goes before the answer is taken: it is no view either.
+  {
+    const bus = new EventEmitter();
+    const api = { events: { on: (c: string, h: (d: unknown) => void) => bus.on(c, h), emit: (c: string, d: unknown) => bus.emit(c, d) }, on() {} } as unknown as ExtensionAPI;
+    const handle = useView(api);
+    let answer!: (view: View) => void;
+    bus.on('nvim-view:refresh', (request: { reply(view: Promise<View>): void }) => request.reply(new Promise(resolve => { answer = resolve; })));
+    const asked = handle.refresh();
+    answer({ windows: [], buffers: [] } as unknown as View); // nvim-view has its answer,
+    bus.emit('nvim-view:stopped', {}); // and the editor goes before this extension takes it.
+    assert.equal(await asked, undefined);
+    assert.equal(handle(), undefined);
+  }
   // Asked, then Pi goes before the answer: it is no view.
   const late = await pi();
   await eventually(() => late.view());

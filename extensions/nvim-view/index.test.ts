@@ -53,7 +53,7 @@ async function pi({ view = true } = {}) {
   const handle = useView(api, change => changes.push(change));
   await fire('session_start');
   const run = async (name: string) => { await commands[name].handler('', ctx); return notes.at(-1)!; };
-  return { view: handle, changes, run, commands, bus, shutdown: () => fire('session_shutdown') };
+  return { api, view: handle, changes, run, commands, bus, shutdown: () => fire('session_shutdown') };
 }
 
 /** A file of `n` numbered lines. */
@@ -132,6 +132,69 @@ test('changes are sent as they happen, one view for a burst, none when nothing c
     await lua('vim.cmd("doautocmd FocusLost")');
     await eventually(() => changes.at(-1)!.editor.focused === false);
   } finally { await shutdown(); }
+});
+
+test('a window\'s directory is its own, else its tab\'s, else the editor\'s', async () => {
+  const { view, shutdown } = await pi();
+  try {
+    const home = await realpath('/Users'), temp = await realpath('/tmp');
+    await lua(`vim.cmd('tabnew | tcd ' .. ...)
+      vim.cmd('vsplit | lcd ' .. select(2, ...))`, home, temp);
+    const v = await eventually(async () => { const v = await view.refresh(); return v?.tabs.length === 2 && v; });
+    const tab = v.tabs.find(t => t.focused)!;
+    const dirs = v.windows.filter(w => w.tab === tab.id).map(w => w.cwd).sort();
+    assert.deepEqual(dirs, [home, temp].sort()); // One of its own; one its tab's.
+    assert.equal(v.windows.find(w => w.tab !== tab.id)!.cwd, v.editor.cwd);
+  } finally {
+    await lua(`vim.cmd('cd ' .. ...)`, '/tmp');
+    await shutdown();
+  }
+});
+
+test('a float moved by the API is seen, yet an idle editor makes no views', async () => {
+  const { view, changes, shutdown } = await pi();
+  try {
+    const win = await lua(`return vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, { relative = 'editor', row = 2, col = 3, width = 10, height = 3 })`);
+    await eventually(() => view()?.windows.some(w => w.id === win));
+    // Counted in the editor: how many snapshots it makes while nothing happens.
+    const builds = () => lua(`for _, c in pairs(require('nvim_remote.v1').contexts) do
+        local s = c.nvim_view
+        if s and not s.counting then
+          local snapshot = s.snapshot
+          s.counting, s.builds = true, 0
+          s.snapshot = function() s.builds = s.builds + 1 return snapshot() end
+        end
+        if s then return s.builds end
+      end`);
+    await builds();
+    await delay(400);
+    assert.ok(await builds() <= 1, `${await builds()} views made while idle`);
+
+    await editor.request('nvim_win_set_config', [win, { relative: 'editor', row: 10, col: 12 }]);
+    const moved = await eventually(() => changes.at(-1)?.windows.find(w => w.id === win && w.row === 11));
+    assert.equal(moved.col, 13);
+  } finally { await shutdown(); }
+});
+
+test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
+  const { api, view, shutdown } = await pi();
+  try {
+    await eventually(() => view());
+    const other = useView(api); // Another extension's.
+    other();
+    // Moved, a float sends no view until the editor is idle: a refresh comes first.
+    const win = await lua(`return vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, { relative = 'editor', row = 1, col = 1, width = 5, height = 2 })`);
+    const fresh = await view.refresh();
+    assert.ok(fresh!.windows.some(w => w.id === win));
+    assert.deepEqual([view(), other()], [fresh, fresh]);
+  } finally { await shutdown(); }
+  // Asked, then Pi goes before the answer: it is no view.
+  const late = await pi();
+  await eventually(() => late.view());
+  const asked = late.view.refresh();
+  await late.shutdown();
+  assert.equal(await asked.catch(() => undefined), undefined);
+  assert.equal(late.view(), undefined);
 });
 
 test('buffers no one sees and no one listed are counted, not listed', async () => {

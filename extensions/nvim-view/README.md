@@ -34,14 +34,15 @@ export default function (pi) {
   const view = useView(pi, v => { /* every change: a new view */ });
   pi.on('tool_result', async () => {
     const v = view();              // The latest, at once; undefined while not attached.
-    const yours = windowOf(v, v?.you);
+    const yours = windowOf(v, v?.you); // Undefined too, then.
     const fresh = await view.refresh(); // One made now, cursor and all.
   });
 }
 ```
 
 A view is plain data. `windowOf(view, id)`, `bufferOf(view, id)` and `bufferFor(view, path)`
-find a window or buffer in it. The same view is on `pi.events`: `nvim-view:changed` (the
+find a window or buffer in it, or give undefined for no view. `refresh()` makes a view now:
+one that's new goes to every extension, as if sent by itself. The same view is on `pi.events`: `nvim-view:changed` (the
 view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 
 | View | |
@@ -59,7 +60,8 @@ view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 Whenever what you see changes: windows opened, closed, entered, resized or scrolled; buffers
 entered, added, deleted, written, modified or retyped; tabs; the editor resized; the mode;
 the directory; terminals; text changed; the cursor moved; options set; language servers
-attaching; the terminal's focus. Changes are gathered for 30 ms, so a burst (a split opening
+attaching; the terminal's focus; floats moved (seen once the editor is idle, since moving
+one fires no event). Changes are gathered for 30 ms, so a burst (a split opening
 fires half a dozen) makes one view, and a view the same as the last isn't sent at all.
 
 A view takes about 0.1 ms to make with a few windows, and under 0.5 ms with 17 windows in 6

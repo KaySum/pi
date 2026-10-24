@@ -69,6 +69,9 @@ function launch() {
   if (config.init !== undefined) args.push('-u', config.init);
   // Ready means the user's configuration has loaded, not merely that the socket exists.
   args.push('--cmd', 'lua vim.api.nvim_create_autocmd("VimEnter", {once=true, callback=function() vim.schedule(function() local uv=vim.uv or vim.loop; uv.fs_write(3, "ready\\n", -1); uv.fs_close(3) end) end})');
+  // Registered before the configuration, so it runs first on exit: persistence.nvim would
+  // otherwise overwrite the user's session for this directory with this instance's buffers.
+  args.push('--cmd', 'lua vim.api.nvim_create_autocmd("VimLeavePre", {callback=function() local p=package.loaded.persistence; if p then p.stop() end end})');
   child = spawn(config.executable, args, { cwd: config.cwd, env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => {}); // Neovim may close its end first.
   child.stdout.resume();

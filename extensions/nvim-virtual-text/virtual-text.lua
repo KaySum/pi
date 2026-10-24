@@ -581,17 +581,21 @@ function state.refill()
 end
 
 --- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is,
---- showing one hidden by a deletion again; one that `invalidate`s goes if its text is nowhere.
+--- showing one hidden by a deletion again, and drawing again one whose extmarks went with
+--- the buffer (`:bdelete`); one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
+			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
 			local found = locate(buf, mark.anchor, spec.line)
 			if not found then
 				if spec.invalidate then
 					remove(id)
+				elseif gone then
+					install(id, mark.group, spec, false, true)
 				end
-			elseif found ~= spec.line or invalid then
+			elseif found ~= spec.line or invalid or gone then
 				spec.endLine = spec.endLine and spec.endLine + found - spec.line
 				spec.line = found
 				install(id, mark.group, spec, false, true)

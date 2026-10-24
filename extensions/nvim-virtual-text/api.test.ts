@@ -473,6 +473,26 @@ test('lines past the end are clamped, and bad marks are refused', async () => {
   assert.throws(() => virtualText(remote, 'bad name'), /group/);
 });
 
+test('a deleted buffer, opened again, shows its marks again', async () => {
+  for (const content of ['head\ntarget\ntail\n', 'head\nother\ntail\n']) {
+    const path = await file('head\ntarget\ntail\n');
+    await open(path);
+    const [id] = await text.place({ path, line: 2, text: 'NOTE', sign: '!', highlight: 'Visual' });
+    await lua('local b = vim.fn.bufnr(...); vim.cmd.enew(); vim.cmd.bdelete({ b, bang = true })', path);
+    await writeFile(path, content); // Its text where it was, or nowhere.
+    await open(path);
+    assert.equal((await shown(path)).length, 1, content);
+    await text.update(id, { text: 'EDITED' }); // Watched again: an edit to it is synced.
+    await lua('vim.api.nvim_buf_set_lines(0, 0, 0, true, { "new" })');
+    await delay(20);
+    assert.deepEqual((await text.list()).map(m => [m.id, m.line]), [[id, 3]]);
+    const found = await extmarks(path);
+    assert.deepEqual(['span', 'sign', 'text'].map((_, i) => found.filter(m => i === 0 ? m[3].hl_group : i === 1 ? m[3].sign_text : m[3].virt_text).length), [1, 1, 1]);
+    assert.ok(found.every(m => m[1] === 2));
+    await text.clear();
+  }
+});
+
 test('a wiped buffer takes its marks with it', async () => {
   const path = await file();
   await text.place({ path, line: 1, text: 'x' });

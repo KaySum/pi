@@ -76,7 +76,11 @@ test("several edits in one call are each placed, shifted by those above them", a
       [9, 9],
     ],
     cursor: [2, 0],
-    deletions: [{ line: 7, lines: ["line 5", "line 6"] }],
+    deletions: [
+      { line: 2, lines: ["line 2"] },
+      { line: 7, lines: ["line 5", "line 6"] },
+      { line: 9, lines: ["line 8"] },
+    ],
   });
 });
 
@@ -93,11 +97,45 @@ test("shrinking replacements show the removed block alongside the replacement", 
   );
 });
 
+test("equal-size and expanding replacements show the complete old line for edits and writes", async () => {
+  for (const replacement of ["new", "new\nextra"]) {
+    const before = "keep\nold\nend\n",
+      after = `keep\n${replacement}\nend\n`;
+    const expected = {
+      ranges: [[2, replacement.includes("\n") ? 3 : 2]],
+      cursor: [2, 0],
+      deletions: [{ line: 2, lines: ["old"] }],
+    };
+    assert.deepEqual(
+      await edited(before, [{ oldText: "old", newText: replacement }]),
+      expected,
+    );
+    assert.deepEqual(writeChanges(before, after), expected);
+  }
+});
+
+test("removing characters within a line shows the whole old line and highlights the new one", async () => {
+  const expected = {
+    ranges: [[1, 1]],
+    cursor: [1, 1],
+    deletions: [{ line: 1, lines: ["abc"] }],
+  };
+  assert.deepEqual(
+    await edited("abc\n", [{ oldText: "b", newText: "" }]),
+    expected,
+  );
+  assert.deepEqual(writeChanges("abc\n", "ac\n"), expected);
+});
+
 test("a new text that also occurs elsewhere does not mislead", async () => {
   // Only the digits differ: the cursor goes to "3" where "40" was.
   assert.deepEqual(
     await edited(lines(50), [{ oldText: "line 40\n", newText: "line 3\n" }]),
-    { ranges: [[40, 40]], cursor: [40, 5] },
+    {
+      ranges: [[40, 40]],
+      cursor: [40, 5],
+      deletions: [{ line: 40, lines: ["line 40"] }],
+    },
   );
 });
 
@@ -113,6 +151,7 @@ test("context an edit carries to be unique is left out", async () => {
   assert.deepEqual(await edited(before, edits), {
     ranges: [[6, 6]],
     cursor: [6, 9],
+    deletions: [{ line: 6, lines: ["  return 1;"] }],
   });
 });
 
@@ -136,7 +175,11 @@ test("lines added, removed, and changed within a line", async () => {
   const before = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
   assert.deepEqual(
     await edited(before, [{ oldText: "b = 2", newText: "b = 20" }]),
-    { ranges: [[2, 2]], cursor: [2, 11] },
+    {
+      ranges: [[2, 2]],
+      cursor: [2, 11],
+      deletions: [{ line: 2, lines: ["const b = 2;"] }],
+    },
   );
   assert.deepEqual(
     await edited(before, [{ oldText: "const b = 2;\n", newText: "" }]),
@@ -175,6 +218,11 @@ test("edits far apart come out as separate changes, in file order", async () => 
       [150, 150],
     ],
     cursor: [10, 0],
+    deletions: [
+      { line: 10, lines: ["line 10"] },
+      { line: 90, lines: ["line 90"] },
+      { line: 150, lines: ["line 150"] },
+    ],
   });
 });
 
@@ -184,19 +232,31 @@ test("what the tool did with line endings, a byte order mark, or a loose match i
     await edited("one\r\ntwo\r\nthree\r\n", [
       { oldText: "two\n", newText: "TWO\n" },
     ]),
-    { ranges: [[2, 2]], cursor: [2, 0] },
+    {
+      ranges: [[2, 2]],
+      cursor: [2, 0],
+      deletions: [{ line: 2, lines: ["two"] }],
+    },
   );
   // A byte order mark, which Neovim does not show either, does not shift the column.
   assert.deepEqual(
     await edited("\uFEFFkeep = old\n", [{ oldText: "old", newText: "new" }]),
-    { ranges: [[1, 1]], cursor: [1, 7] },
+    {
+      ranges: [[1, 1]],
+      cursor: [1, 7],
+      deletions: [{ line: 1, lines: ["keep = old"] }],
+    },
   );
   // Curly quotes in the file, straight ones in the edit: Pi matches loosely; "say " is kept.
   assert.deepEqual(
     await edited("say \u201chello\u201d\nend\n", [
       { oldText: 'say "hello"', newText: 'say "bye"' },
     ]),
-    { ranges: [[1, 1]], cursor: [1, 4] },
+    {
+      ranges: [[1, 1]],
+      cursor: [1, 4],
+      deletions: [{ line: 1, lines: ["say “hello”"] }],
+    },
   );
 });
 
@@ -204,10 +264,12 @@ test("a file without a final newline", async () => {
   assert.deepEqual(await edited("a\nb", [{ oldText: "b", newText: "B" }]), {
     ranges: [[2, 2]],
     cursor: [2, 0],
+    deletions: [{ line: 2, lines: ["b"] }],
   });
   assert.deepEqual(await edited("a\nb", [{ oldText: "b", newText: "b\nc" }]), {
     ranges: [[2, 3]],
     cursor: [2, 1],
+    deletions: [{ line: 2, lines: ["b"] }],
   });
 });
 
@@ -238,7 +300,11 @@ test("a write marks what changed between what it kept, with the cursor where tha
   const before = lines(10);
   assert.deepEqual(
     writeChanges(before, before.replace("line 4\n", "four\nmore\n")),
-    { ranges: [[4, 5]], cursor: [4, 0] },
+    {
+      ranges: [[4, 5]],
+      cursor: [4, 0],
+      deletions: [{ line: 4, lines: ["line 4"] }],
+    },
   );
   assert.deepEqual(writeChanges(before, before + "line 11\n"), {
     ranges: [[11, 11]],
@@ -253,11 +319,18 @@ test("a write marks what changed between what it kept, with the cursor where tha
       before,
       before.replace("line 2\n", "two\n").replace("line 9\n", "nine\n"),
     ),
-    { ranges: [[2, 9]], cursor: [2, 0] },
+    {
+      ranges: [[2, 9]],
+      cursor: [2, 0],
+      deletions: [
+        { line: 2, lines: lines(10).trimEnd().split("\n").slice(1, 9) },
+      ],
+    },
   );
   assert.deepEqual(writeChanges(before, before.replace("line 7", "line 77")), {
     ranges: [[7, 7]],
     cursor: [7, 6],
+    deletions: [{ line: 7, lines: ["line 7"] }],
   }); // Within a line.
 });
 
@@ -300,6 +373,7 @@ test("repeated lines and a missing final newline do not confuse it", () => {
   assert.deepEqual(writeChanges("a\nb\n", "a\nB"), {
     ranges: [[2, 2]],
     cursor: [2, 0],
+    deletions: [{ line: 2, lines: ["b"] }],
   });
 });
 
@@ -319,6 +393,7 @@ test("an insertion or deletion that could go in several places goes at a line st
   assert.deepEqual(writeChanges("abcabc\n", "abcXabc\n"), {
     ranges: [[1, 1]],
     cursor: [1, 3],
+    deletions: [{ line: 1, lines: ["abcabc"] }],
   });
 });
 
@@ -327,6 +402,7 @@ test("a surrogate pair is never split", () => {
   assert.deepEqual(writeChanges("x 😀\n", "x 😁\n"), {
     ranges: [[1, 1]],
     cursor: [1, 2],
+    deletions: [{ line: 1, lines: ["x 😀"] }],
   });
 });
 

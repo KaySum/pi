@@ -177,10 +177,7 @@ export function patchChanges(patch: string): Changes {
     if (!removed.length && !added.length) return;
     const at = line - added.length; // Where this run starts in the file after.
     if (added.length) ranges.push([at, at + added.length - 1]);
-    // A shrinking replacement shows its old block above the new one. Ordinary one-for-one
-    // edits keep their existing, quieter display.
-    if (removed.length > added.length)
-      deletions.push({ line: at, lines: removed });
+    if (removed.length) deletions.push({ line: at, lines: removed });
     cursor ??= [
       at,
       removed.length && added.length
@@ -215,8 +212,8 @@ export function patchChanges(patch: string): Changes {
 
 /**
  * What a write changed: everything between what the file kept at its start and at its end.
- * A new file is all change; a pure deletion shows the removed text virtually. Nothing when
- * the lines are the same, a final newline aside.
+ * A new file is all change; replaced and deleted old lines are shown virtually. Nothing
+ * when the lines are the same, a final newline aside.
  */
 export function writeChanges(
   before: string | undefined,
@@ -234,19 +231,30 @@ export function writeChanges(
     prefix,
     after.length - suffix,
   );
-  if (window.start === window.end) {
-    const cursor = span(after, window.start, window.end).cursor;
-    const removed = old.slice(
-      window.start,
-      old.length - suffix - (prefix - window.start),
-    );
-    return {
-      ranges: [],
-      cursor,
-      deletions: [{ line: cursor[0], lines: linesOf(removed) }],
-    };
+  const result = changes([window], after);
+  // Show whole old lines, including unchanged indentation and context within a changed line.
+  // As with the write's highlight, this is one window between the common start and end.
+  const oldLines = linesOf(old),
+    newLines = linesOf(after);
+  let first = 0,
+    last = oldLines.length,
+    newLast = newLines.length;
+  while (first < last && first < newLast && oldLines[first] === newLines[first])
+    first++;
+  while (
+    last > first &&
+    newLast > first &&
+    oldLines[last - 1] === newLines[newLast - 1]
+  ) {
+    last--;
+    newLast--;
   }
-  return changes([window], after);
+  if (newLast === first) result.ranges = []; // Whole lines removed; don't color the survivor.
+  if (last > first)
+    result.deletions = [
+      { line: first + 1, lines: oldLines.slice(first, last) },
+    ];
+  return result;
 }
 
 /**

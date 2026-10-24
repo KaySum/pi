@@ -206,6 +206,46 @@ test("edit and write deletions show removed text virtually without highlighting 
   }
 });
 
+test("edit and write replacements display both old and new lines regardless of block size", async () => {
+  const { follow, tool, shutdown } = await pi();
+  try {
+    const code = await layout();
+    await follow("on");
+    for (const toolName of ["edit", "write"]) {
+      for (const replacement of ["new", "new\nextra"]) {
+        const name = `replace-${toolName}-${replacement.length}.txt`,
+          path = join(dir, name);
+        await writeFile(path, "keep\nold\nend\n");
+        await tool(
+          toolName,
+          toolName === "edit"
+            ? { path: name, edits: [{ oldText: "old", newText: replacement }] }
+            : { path: name, content: `keep\n${replacement}\nend\n` },
+        );
+        await showing(code, path, 2);
+        const marks = await eventually(() =>
+          lua(
+            `local w = ...
+          for _, c in pairs(require('nvim_remote.v1').contexts) do
+            if c.nvim_follow then
+              local marks = vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(w), c.nvim_follow.ns, 0, -1, { details = true })
+              if #marks == 2 then return marks end
+            end
+          end
+          return false`,
+            code,
+          ),
+        );
+        assert.equal(marks[0][3].hl_group, "PiFollow");
+        assert.equal(marks[0][3].end_row, replacement.includes("\n") ? 3 : 2);
+        assert.deepEqual(marks[1][3].virt_lines, [[["old", "PiFollowDelete"]]]);
+      }
+    }
+  } finally {
+    await shutdown();
+  }
+});
+
 test("following is off until asked for, and the status says when it is on", async () => {
   const { follow, status, tool, notes, shutdown } = await pi();
   const code = await layout();

@@ -37,9 +37,10 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
 - **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `DiffAdd`, and
   the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. Pure deletions
   show the removed text as temporary virtual lines with its original indentation, in `PiFollowDelete`
-  (linked to `DiffDelete`), above their former boundary or below the last line at EOF. Edit
-  replacements that shrink a block also show the old block above the highlighted replacement;
-  ordinary one-for-one edits keep their quieter display. For pure deletions, the
+  (linked to `DiffDelete`), above their former boundary or below the last line at EOF.
+  Every replacement shows its old lines above the highlighted new lines, whether the block
+  shrinks, grows, or stays the same size, including single-line edits. Writes show the old
+  block between the common start and end, just like their added-code highlight. For pure deletions, the
   surviving line is not highlighted; the cursor stays at the deletion boundary. Highlights
   and virtual lines still showing when Pi detaches go with it.
 

@@ -229,3 +229,17 @@ test('shutdown during the first attach still detaches it', async () => {
   assert.equal(nvim(), undefined);
   assert.equal(await contexts(), 0);
 });
+
+test("an extension's failing handler is reported in Pi and on the bus", async () => {
+  process.env.NVIM = socket;
+  const fake = fakePi();
+  const errors: unknown[] = [];
+  fake.pi.events.on('nvim-remote:error', data => errors.push(data));
+  const { remote, notes, fire } = await start(fake);
+  remote.on('boom', async () => { throw new Error('consumer bug'); });
+  await remote.lua('remote.notify("boom")');
+  await eventually(() => errors.length);
+  assert.equal((errors[0] as { source: string }).source, 'on("boom")');
+  assert.deepEqual(notes.at(-1), ['nvim-remote: a handler for on("boom") failed: consumer bug', 'warning']);
+  await fire('session_shutdown', { reason: 'quit' });
+});

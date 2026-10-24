@@ -39,10 +39,16 @@ export default function (pi: ExtensionAPI) {
     return previous;
   }
 
+  // An extension's handler failing is its bug: say so, where it can be seen, and carry on.
+  function reportHandlerError(error: unknown, source: string) {
+    pi.events.emit('nvim-remote:error', { error, source });
+    if (context?.hasUI) context.ui.notify(`nvim-remote: a handler for ${source} failed: ${errorText(error)}`, 'warning');
+  }
+
   async function connect(cwd: string) {
     if (ended) return; // Asked for before shutdown, reached after it.
     try {
-      const remote: Remote = Object.assign(await attach(socket!, { cwd }), { apiVersion: 1 as const });
+      const remote: Remote = Object.assign(await attach(socket!, { cwd, onError: reportHandlerError }), { apiVersion: 1 as const });
       handle = remote;
       lastError = undefined;
       remote.onClose(() => {

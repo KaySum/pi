@@ -210,6 +210,24 @@ test('autocommands run handlers in Pi, until unsubscribed', async t => {
   assert.deepEqual(await lua('return vim.api.nvim_get_autocmds({ event = "User", pattern = "PiTest" })'), []);
 });
 
+test('a handler that throws or rejects is reported, and nothing else is disturbed', async t => {
+  const reported: [string, string][] = [];
+  const remote = await attached(t, { onError: (error, source) => reported.push([source, (error as Error).message]) });
+  const heard: string[] = [];
+  remote.on('ping', () => { throw new Error('sync failure'); });
+  remote.on('ping', async () => { throw new Error('async failure'); });
+  remote.on('ping', () => heard.push('ping'));
+  await remote.autocmd('User', async () => { await delay(5); throw new Error('autocmd failure'); }, { pattern: 'PiBroken' });
+  await remote.lua('remote.notify("ping")');
+  await lua('vim.api.nvim_exec_autocmds("User", { pattern = "PiBroken" })');
+  await eventually(() => reported.length === 3);
+  assert.deepEqual(reported.sort(), [
+    ['autocmd("User")', 'autocmd failure'], ['on("ping")', 'async failure'], ['on("ping")', 'sync failure'],
+  ]);
+  assert.deepEqual(heard, ['ping']); // The others still ran.
+  assert.equal(await remote.lua('return 1'), 1);
+});
+
 test('autocommand options pass through: buffer, once', async t => {
   const remote = await attached(t);
   const buf = await lua('return vim.api.nvim_create_buf(true, true)');

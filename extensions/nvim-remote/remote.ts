@@ -54,13 +54,23 @@ export async function connect(socket: string, { signal }: { signal?: AbortSignal
  * shrink the user's screen to its size. What Lua run through `lua` sets up with `remote`
  * is undone when this detaches, quits or crashes.
  */
-export async function attach(socket: string, { pid = process.pid, cwd = process.cwd(), ...options }: { pid?: number; cwd?: string } & CallOptions = {}) {
+export async function attach(socket: string, { pid = process.pid, cwd = process.cwd(), onError = console.error, ...options }: {
+  pid?: number; cwd?: string;
+  /** Hears what a handler given to `on` or `autocmd` threw or rejected with; `source` says which. */
+  onError?: (error: unknown, source: string) => void;
+} & CallOptions = {}) {
   const rpc = await within(options, signal => connect(socket, { signal }));
   try {
     const { channel } = rpc;
     const nvimPid = await within(options, signal => rpc.request('nvim_call_function', ['getpid', []], signal)) as number;
     const { terminal } = await within(options, signal => rpc.request('nvim_exec_lua', [ATTACH, [MODULE, channel, { pid, cwd }]], signal)) as { terminal?: number };
 
+    // A handler's failure is reported, not swallowed by the RPC client, and an async one's
+    // rejection does not go unhandled, which would end Pi.
+    const guard = (source: string, handler: Handler): Handler => (...args) => {
+      try { void Promise.resolve(handler(...args)).catch(error => onError(error, source)); }
+      catch (error) { onError(error, source); }
+    };
     const autocmds = new Map<number, Handler>();
     let nextAutocmd = 0;
     rpc.on('nvim-remote:autocmd', (id: number, event: AutocmdEvent) => { autocmds.get(id)?.(event); });
@@ -94,11 +104,11 @@ export async function attach(socket: string, { pid = process.pid, cwd = process.
       /** Any Neovim API method, without waiting or checking for a prompt. */
       notify: (method: string, args: unknown[] = []) => rpc.notify(method, args),
       /** Receive `remote.notify(name, ...)`. Returns an unsubscribe. */
-      on: (name: string, handler: Handler): (() => void) => rpc.on(name, handler),
+      on: (name: string, handler: Handler): (() => void) => rpc.on(name, guard(`on(${JSON.stringify(name)})`, handler)),
       /** Run `handler` on an autocommand, in Pi; `options` as for nvim_create_autocmd. Resolves to an unsubscribe. */
       async autocmd(events: string | string[], handler: (event: AutocmdEvent) => void, autocmdOptions: Record<string, unknown> = {}, options: CallOptions = {}) {
         const id = ++nextAutocmd;
-        autocmds.set(id, handler);
+        autocmds.set(id, guard(`autocmd(${JSON.stringify(events)})`, handler));
         try {
           const autocmd = await call('nvim_exec_lua', ['return require("nvim_remote").autocmd(...)', [channel, id, events, autocmdOptions]], options) as number;
           return async (options: CallOptions = {}) => {

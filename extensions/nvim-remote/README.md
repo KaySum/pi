@@ -50,6 +50,10 @@ export default function (pi) {
 on `pi.events`: `nvim-remote:ready` (handle), `nvim-remote:stopped` (`info`), and
 `nvim-remote:get` with `{ reply }`.
 
+A handler given to `on` or `autocmd` that throws, or rejects, is reported as a warning in Pi
+and as `nvim-remote:error` (`{ error, source }`) on `pi.events`; the other handlers and the
+connection carry on.
+
 | Member | Behavior |
 | --- | --- |
 | `lua(code, args?, options?)` | Run Lua: `code` is a function body, `...` its `args`, with `remote` in scope (below). Resolves to the first value returned. Errors carry Lua's message and the line in `code`. |

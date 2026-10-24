@@ -70,7 +70,7 @@ on every new attachment.
 | `priority` | As for extmarks. |
 
 Marks are extmarks, so they move with the text as it's edited in the buffer. Every mark also
-keeps the text of its lines (or its `match`). When the file is reloaded from disk (`:edit`,
+keeps the text its lines had when it was placed or moved by an update (or its `match`). When the file is reloaded from disk (`:edit`,
 or autoread after Pi edits it), a mark whose lines no longer hold that text moves to the
 nearest place that does. A mark whose text is gone stays where it was, unless it
 `invalidate`s.

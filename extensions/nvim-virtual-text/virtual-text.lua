@@ -20,10 +20,12 @@ if not state then
 	-- covering its lines and moving with them; and
 	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
 	-- changed while hidden by a deletion, drawn as it was.
-	-- `styles` are the groups made from style tables.
-	state = { namespaces = {}, marks = {}, styles = {}, next = 0 }
+	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
+	-- are followed, and `queued` those with a sync to come.
+	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
+		state.closed = true
 		for _, ns in pairs(state.namespaces) do
 			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 				vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
@@ -60,12 +62,6 @@ if not state then
 		group = remote.group,
 		callback = function()
 			state.refill()
-		end,
-	})
-	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-		group = remote.group,
-		callback = function(ev)
-			state.refresh(ev.buf)
 		end,
 	})
 end
@@ -169,9 +165,10 @@ local function lines_of(text, default)
 	return lines
 end
 
--- Break a line of chunks at spaces so that none is wider than `width`, where it can be. A
--- word is whole across chunks: a change of highlight is no place to break.
-local function wrap(chunks, width)
+-- Break a line of chunks at spaces so that none ends past column `limit`, where it can be,
+-- the line starting at column `start`. A word is whole across chunks: a change of highlight
+-- is no place to break. Widths are measured where the text falls, for tabs.
+local function wrap(chunks, limit, start)
 	local words = {}
 	for _, chunk in ipairs(chunks) do
 		local text, at = chunk[1], 1
@@ -183,23 +180,28 @@ local function wrap(chunks, width)
 			end
 			local word = words[#words]
 			if not word or (word.spaced and not space) then
-				word = { pieces = {}, width = 0, spaced = false }
+				word = { pieces = {}, spaced = false }
 				table.insert(words, word)
 			end
-			local piece = text:sub(first, last)
-			table.insert(word.pieces, { piece, chunk[2] })
+			table.insert(word.pieces, { text:sub(first, last), chunk[2], space = space })
 			word.spaced = word.spaced or space
-			if not space then
-				word.width = word.width + vim.fn.strdisplaywidth(piece)
-			end
 			at = last + 1
 		end
 	end
-	local lines, used = { {} }, 0
+	local function after(pieces, col, spaces)
+		for _, piece in ipairs(pieces) do
+			if spaces or not piece.space then
+				col = col + vim.fn.strdisplaywidth(piece[1], col)
+			end
+		end
+		return col
+	end
+	local lines, col = { {} }, start
 	for _, word in ipairs(words) do
-		if used > 0 and word.width > 0 and used + word.width > width then
+		local ends = after(word.pieces, col, false)
+		if col > start and ends > col and ends > limit then
 			table.insert(lines, {})
-			used = 0
+			col = start
 		end
 		local line = lines[#lines]
 		for _, piece in ipairs(word.pieces) do
@@ -209,8 +211,8 @@ local function wrap(chunks, width)
 			else
 				table.insert(line, { piece[1], piece[2] })
 			end
-			used = used + vim.fn.strdisplaywidth(piece[1])
 		end
+		col = after(word.pieces, col, true)
 	end
 	return lines
 end
@@ -226,9 +228,9 @@ local function virtual_lines(buf, spec, row)
 	end
 	if spec.wrap then
 		local wrapped = {}
-		local most = (spec.wrap == true and text_width(buf) or spec.wrap) - indent
+		local limit = math.max(indent + 1, spec.wrap == true and text_width(buf) or spec.wrap)
 		for _, line in ipairs(lines) do
-			vim.list_extend(wrapped, wrap(line, math.max(1, most)))
+			vim.list_extend(wrapped, wrap(line, limit, indent))
 		end
 		lines = wrapped
 	end
@@ -420,6 +422,11 @@ local function current(mark)
 	if spec.col or spec.endCol then
 		spec.endLine, spec.endCol = details.end_row + 1, details.end_col
 		spec.col = col
+		-- Its last line deleted, it ends where the next begins, and takes in none of that.
+		if details.end_col == 0 and details.end_row > row then
+			spec.endLine = details.end_row
+			spec.endCol = #vim.api.nvim_buf_get_lines(spec.buf, row, details.end_row, true)[details.end_row - row]
+		end
 	else
 		spec.endLine = math.max(spec.line, details.end_row)
 	end
@@ -439,6 +446,33 @@ local function arm(id, mark)
 	end
 end
 
+-- Follow every change to `buf`, undo too, to sync its marks once it is done.
+local function watch(buf)
+	if state.watched[buf] then
+		return
+	end
+	state.watched[buf] = true
+	vim.api.nvim_buf_attach(buf, false, {
+		on_lines = function()
+			if state.closed then
+				return true
+			end
+			if not state.queued[buf] then
+				state.queued[buf] = true
+				vim.schedule(function()
+					state.queued[buf] = nil
+					if not state.closed and vim.api.nvim_buf_is_valid(buf) then
+						state.sync(buf)
+					end
+				end)
+			end
+		end,
+		on_detach = function()
+			state.watched[buf] = nil
+		end,
+	})
+end
+
 -- Draw `spec` as mark `id`, over what it was. `moved`: only moved, so a `ttl` runs on as it was.
 local function install(id, group, spec, resolve, moved)
 	local old = state.marks[id]
@@ -450,7 +484,12 @@ local function install(id, group, spec, resolve, moved)
 	end
 	local mark = { group = group, spec = spec, generation = old and old.generation }
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
+	-- What reloads look for is what it was placed on, not what edits have made of that since.
+	if old and not resolve then
+		mark.anchor = old.anchor
+	end
 	state.marks[id] = mark
+	watch(spec.buf)
 	if not moved then
 		arm(id, mark)
 	end
@@ -503,13 +542,27 @@ function state.update(group, id, patch)
 	return true
 end
 
---- Draw the marks in `buf` changed while hidden, once undo has brought them back.
-function state.refresh(buf)
+-- Whether a part of the mark is hidden by a deletion, or off the line it belongs on: each
+-- `invalidate`s apart, and a point moves to another line when its own is deleted.
+local function astray(mark, spec)
+	for part, extmark in pairs(mark.extmarks) do
+		local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, extmark, { details = true })
+		local line = part == "text" and spec.position == "below" and (spec.endLine or spec.line) or spec.line
+		if not found[1] or found[3].invalid or found[1] ~= line - 1 then
+			return true
+		end
+	end
+	return false
+end
+
+--- Redraw each mark in `buf` whose lines are not all deleted, but whose parts are astray or
+--- which was changed while hidden.
+function state.sync(buf)
 	for id, mark in pairs(state.marks) do
-		if mark.stale and mark.spec.buf == buf then
+		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
-			if not invalid then
-				install(id, mark.group, spec, false, true)
+			if not invalid and (mark.stale or astray(mark, spec)) then
+				pcall(install, id, mark.group, spec, false, true)
 			end
 		end
 	end

@@ -127,6 +127,22 @@ test('wrap keeps a word whole across highlights', async () => {
   assert.deepEqual(details.virt_lines, [[['hel', 'Title'], ['lo ', 'ErrorMsg']], [['world', 'ErrorMsg']]]);
 });
 
+test('wrap measures tabs where they fall, so text that fits stays on one line', async () => {
+  for (const tabstop of [2, 4, 8]) {
+    const path = await file();
+    await lua('local path, tabstop = ...; local b = vim.fn.bufadd(path); vim.fn.bufload(b); vim.bo[b].tabstop = tabstop', path, tabstop);
+    const width = await lua('return vim.api.nvim_buf_call(vim.fn.bufnr(...), function() return vim.fn.strdisplaywidth("a\\tb") end)', path);
+    await text.place([
+      { path, line: 1, text: 'a\tb', position: 'below', wrap: width },
+      { path, line: 2, text: 'a\tb', position: 'below', wrap: width - 1 },
+    ]);
+    const [[, , fits], [, , over]] = await shown(path);
+    assert.equal(fits.virt_lines.length, 1, `tabstop ${tabstop}`);
+    assert.equal(over.virt_lines.length, 2, `tabstop ${tabstop}`);
+    await text.clear();
+  }
+});
+
 test('wrap fits the window showing the buffer', async () => {
   const path = await file();
   await open(path);
@@ -299,6 +315,29 @@ test('invalidate hides a mark while its lines are deleted, and removes it when a
   assert.deepEqual((await text.list()).map(m => [m.id, m.line]), [[kept, 2]]);
 });
 
+test('a mark whose lines are partly deleted shows on what is left of them, and back on undo', async () => {
+  for (const [position, deleted, survivor] of [
+    ['eol', 2, 'second'], ['inline', 2, 'second'], ['overlay', 2, 'second'], ['above', 2, 'second'], ['below', 3, 'first'],
+  ] as const) {
+    const path = await file('head\nfirst\nsecond\ntail\n');
+    await open(path);
+    await text.place({ path, line: 2, endLine: 3, col: 0, text: 'NOTE', position, invalidate: true });
+    await screen(async rows => {
+      await lua(`vim.cmd("normal! ${deleted}Gdd")`);
+      const after = (await rows()).join('\n');
+      assert.match(after, /NOTE/, `${position}: ${after}`);
+      assert.equal((await text.list())[0].invalid, undefined);
+      assert.ok((await extmarks(path)).every(m => !m[3].invalid), position);
+      const [[row]] = await shown(path);
+      assert.equal(row, 1, `${position} on ${survivor}`);
+      await lua('vim.cmd.undo()');
+      assert.match((await rows()).join('\n'), /NOTE/, position);
+      assert.equal((await shown(path))[0][0], position === 'below' ? 2 : 1, `${position} after undo`);
+    });
+    await text.clear();
+  }
+});
+
 test('a mark changed while hidden stays hidden until undo, then shows the change', async () => {
   const path = await file('a\ntarget\nb\n');
   await open(path);
@@ -373,6 +412,21 @@ test('a matched mark keeps to its lines once their text is edited, through redra
   assert.equal((await text.list())[0].line, 2);
   await text.update(id, { line: 4 }); // Moved, it looks for its text again.
   assert.equal((await text.list())[0].line, 4);
+});
+
+test('redraws keep what a reload looks for: the text the mark was placed on', async () => {
+  for (const invalidate of [false, true]) {
+    const path = await file('head\ntarget\ntail\n');
+    await open(path);
+    const [id] = await text.place({ path, line: 2, text: 'NOTE', position: 'below', fill: true, invalidate });
+    await lua('vim.api.nvim_buf_set_text(0, 1, 0, 1, 6, { "changed" })');
+    await screen(async (_rows, resize) => { await resize(100, 8); await delay(50); });
+    await text.update(id, { text: 'UPDATED' });
+    await writeFile(path, 'prefix\nhead\ntarget\ntail\n');
+    await lua('vim.cmd("edit!")');
+    assert.deepEqual((await text.list()).map(m => m.line), [3], `invalidate: ${invalidate}`);
+    await text.clear();
+  }
 });
 
 test('an update whose match is not found leaves the mark as it was', async () => {

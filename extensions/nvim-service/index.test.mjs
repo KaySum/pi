@@ -9,7 +9,7 @@ import { gone } from './test/helpers.mjs';
 process.env.PI_NVIM_INIT = 'NONE';
 // Load the real extension entry point, wired to the real service modules.
 const source = stripTypeScriptTypes(await readFile(new URL('./index.ts', import.meta.url), 'utf8'))
-  .replace(/'(\.\/[a-z]+\.mjs|@earendil-works\/pi-ai)'/g, (_, specifier) => JSON.stringify(import.meta.resolve(specifier)));
+  .replace(/'(\.\/[a-z]+\.mjs|@earendil-works\/pi-ai|@earendil-works\/pi-coding-agent)'/g, (_, specifier) => JSON.stringify(import.meta.resolve(specifier)));
 const { default: register } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 function fakePi(t) {

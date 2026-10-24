@@ -7,12 +7,12 @@ import { fileURLToPath } from 'node:url';
  * Start one private Neovim behind a supervisor that stops it when this process goes away,
  * however that happens.
  *
- * @param {{ cwd: string, executable?: string, init?: string, startupTimeoutMs?: number, graceMs?: number, killMs?: number }} options
+ * @param {{ cwd: string, executable?: string, init?: string, settings?: string, startupTimeoutMs?: number, graceMs?: number, killMs?: number }} options
  */
-export function launch({ cwd, executable = process.env.PI_NVIM_BIN || 'nvim', init = process.env.PI_NVIM_INIT || undefined,
+export function launch({ cwd, executable = process.env.PI_NVIM_BIN || 'nvim', init = process.env.PI_NVIM_INIT || undefined, settings,
   startupTimeoutMs = 15000, graceMs = 500, killMs = 1500 }) {
   if (typeof cwd !== 'string' || !cwd) throw new Error('cwd is required');
-  const config = { cwd, executable, init, startupTimeoutMs, graceMs, killMs };
+  const config = { cwd, executable, init, settings, startupTimeoutMs, graceMs, killMs };
   const supervisor = spawn(process.execPath, [fileURLToPath(new URL('./supervisor.mjs', import.meta.url)), JSON.stringify(config)], {
     // Its own session: closing Pi's terminal must not kill it before it has stopped Neovim.
     detached: true,

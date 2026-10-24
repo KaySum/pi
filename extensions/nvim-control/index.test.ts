@@ -293,3 +293,88 @@ test('keys are cut into parts of at most 4 KB, between whole key names and chara
   assert.equal(cut.join(''), 'a'.repeat(4094) + '<Esc>' + '🦀'.repeat(2000));
   assert.ok(cut.every(part => !/^[\uDC00-\uDFFF]/.test(part)), 'no part starts inside a character');
 });
+
+test('key names with punctuation are kept whole too', () => {
+  for (const key of ['<C-\\>', '<C-]>', '<C-^>', '<C-@>', '<C-S-x>', '<M-<>', '<C->>', '<C-->', '<k0>', '<ScrollWheelUp>']) {
+    for (let pad = 4088; pad <= 4097; pad++) {
+      const cut = parts('a'.repeat(pad) + key + 'b');
+      assert.ok(cut.some(part => part.includes(key)), `${key} after ${pad} bytes was split: ${JSON.stringify(cut.map(p => p.slice(-8)))}`);
+      assert.equal(cut.join(''), 'a'.repeat(pad) + key + 'b');
+    }
+  }
+});
+
+test('a key name with punctuation reaches Neovim whole, wherever it falls', async t => {
+  const { run } = load(await attached(t));
+  await lua(`vim.keymap.set('i', '<C-]>', 'MARK')`);
+  t.after(() => lua(`pcall(vim.keymap.del, 'i', '<C-]>')`));
+  for (const pad of [4092, 4093, 4094]) {
+    const buf = await scratch();
+    await run('editor_keys', { keys: `i${'x'.repeat(pad)}<C-]><Esc>` });
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), `${'x'.repeat(pad)}MARK`);
+  }
+});
+
+test("keys stop the moment Pi's own terminal takes focus, even partway through", async t => {
+  // A terminal standing in for Pi's, attached as it, so it is remote.terminal.
+  const [term, job] = await lua(`vim.cmd('silent! only | enew!')
+    local job = vim.fn.jobstart({ 'cat' }, { term = true })
+    return { vim.api.nvim_get_current_buf(), vim.fn.jobpid(job) }`);
+  t.after(() => lua('pcall(vim.api.nvim_buf_delete, ..., { force = true })', term));
+  const remote = await attached(t, { pid: job }); // The terminal's job itself.
+  assert.equal(remote.info.terminal, term);
+  const buf = await lua(`vim.cmd('vsplit | enew!'); vim.bo.buftype = ''; return vim.api.nvim_get_current_buf()`);
+  // Once the first part has gone in, the user puts focus on Pi's terminal.
+  let parts = 0;
+  const watched = Object.assign(Object.create(remote), {
+    async lua(code: string, args: unknown[], options?: object) {
+      const value = await remote.lua(code, args, options);
+      if (code.includes('nvim_input') && ++parts === 1) {
+        await lua(`vim.cmd.stopinsert(); vim.api.nvim_set_current_buf(...)`, term);
+      }
+      return value;
+    },
+  }) as Remote;
+  const { run } = load(watched);
+  await assert.rejects(run('editor_keys', { keys: `i${'x'.repeat(5000)}UNSAFE_SUFFIX<CR>` }),
+    /Stopped after typing 4096 of \d+ bytes of keys: focus moved to Pi's own terminal/);
+  assert.equal(parts, 2); // The second part was refused, not typed.
+  await delay(100);
+  assert.ok(!(await lua('return table.concat(vim.api.nvim_buf_get_lines(..., 0, -1, false), "\\n")', term)).includes('UNSAFE_SUFFIX'));
+  assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095); // Only the first part.
+});
+
+/** `remote`, with what it does as each part of keys is typed in its hands. */
+function typing(remote: Remote, part: (n: number, type: () => Promise<unknown>) => Promise<unknown>) {
+  let parts = 0;
+  const watched = Object.assign(Object.create(remote), {
+    lua: (code: string, args: unknown[], options?: object) =>
+      code.includes('nvim_input') ? part(++parts, () => remote.lua(code, args, options)) : remote.lua(code, args, options),
+  }) as Remote;
+  return { remote: watched, parts: () => parts };
+}
+
+test('a part Neovim takes only some of is reported, and nothing after it is typed', async t => {
+  const { remote, parts } = typing(await attached(t), async (n, type) => n === 2 ? 512 : type()); // Says it took 512 bytes.
+  const { run } = load(remote);
+  const buf = await scratch();
+  await assert.rejects(run('editor_keys', { keys: `i${'x'.repeat(10000)}<Esc>` }), /took only 512 of 4096 bytes of keys; the rest were not typed/);
+  assert.equal(parts(), 2);
+  await editor.request('nvim_input', ['<Esc>']);
+  assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095); // The first part only.
+});
+
+test('stopping the call between parts types nothing more', async t => {
+  const controller = new AbortController();
+  const { remote, parts } = typing(await attached(t), async (n, type) => {
+    const value = await type();
+    if (n === 1) controller.abort(new Error('stopped by the user'));
+    return value;
+  });
+  const { tools } = load(remote);
+  const buf = await scratch();
+  await assert.rejects(tools.editor_keys.execute('id', { keys: `i${'x'.repeat(10000)}<Esc>` }, controller.signal), /stopped by the user/);
+  assert.equal(parts(), 1);
+  await editor.request('nvim_input', ['<Esc>']);
+  assert.equal((await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf)).length, 4095);
+});

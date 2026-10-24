@@ -29,13 +29,16 @@ changes, or write buffers you are editing without being asked.
 Keys go to the window that has focus, which while you talk to Pi is Pi's own terminal: they
 would be typed into Pi. `editor_keys` refuses then; the model can focus another window with
 `editor_lua` first (taking your focus there too), or do the work with `editor_lua`, which
-needs no focus.
+needs no focus. It looks again before each part of long keys, in the same step as typing it,
+so if you put focus on Pi's terminal partway it stops there and says how much was typed.
+(Keys are queued, then taken a moment later: a change of focus in that moment cannot be
+seen.)
 
 A busy editor (in Lua, a plugin's say) still answers calls but takes in typed keys only when
 it is done, so `editor_keys` waits until they are taken before saying what they did. Neovim
 takes only as much typed input as fits in its 16 KB input buffer, so long keys are sent in
-parts of at most 4 KB, each once the last is taken, cut between whole key names and
-characters; none are dropped. (For pasting text, `editor_lua` and the buffer API are still
+parts of at most 4 KB, each once the last is taken, cut between whole keys (names with
+punctuation, such as `<C-]>`, included) and characters; none are dropped. (For pasting text, `editor_lua` and the buffer API are still
 the better tool.) At a
 hit-enter prompt it says so, and further keys answer it; `editor_lua` fails at once there.
 

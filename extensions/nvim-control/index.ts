@@ -24,8 +24,15 @@ return { buffer = buf, file = vim.api.nvim_buf_get_name(buf), line = cursor[1], 
 type State = { buffer: number; file: string; line: number; column: number; modified: boolean; terminal: boolean; message: string };
 
 const PART_BYTES = 4096;
-// A key's name in Neovim notation (<Esc>, <lt>, <C-w>), else one character.
-const KEY = /<[A-Za-z0-9-]+>|[\s\S]/gu;
+// A key in Neovim notation, kept whole: modifiers (C-, S-, M-, A-, D-, T-), then a key's name
+// (Esc, F12, lt, ScrollWheelUp) or any one character, punctuation included (<C-]>, <C-\>,
+// <C->>). Anything else is one character.
+const KEY = /<(?:[CSMADTcsmadt]-)*(?:[A-Za-z0-9_]+|[^\s])>|[\s\S]/gu;
+// Refuses, with -1, while Pi's own terminal has focus; otherwise queues the keys. In one go in
+// the editor, so focus cannot move between the look and the typing.
+const TYPE = `local part = ...
+if vim.api.nvim_get_current_buf() == remote.terminal then return -1 end
+return vim.api.nvim_input(part)`;
 
 /** `keys` cut into parts of at most PART_BYTES, never inside a key's name or a character. */
 export function parts(keys: string): string[] {
@@ -139,11 +146,6 @@ export default function (pi: ExtensionAPI) {
       timeoutMs,
     }),
     execute: (_id, params, signal) => run(params.timeoutMs, signal, async (remote, options) => {
-      const before = await remote.request('nvim_get_mode', [], options) as { mode: string; blocking: boolean };
-      if (params.keys && !before.blocking) {
-        const state = await remote.lua(STATE, [], options) as State;
-        if (state.terminal) throw new Error("The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with editor_lua first, or use editor_lua.");
-      }
       const end = Date.now() + options.timeout;
       // A busy editor (in Lua, a plugin's or a call's that timed out) still answers calls, but
       // takes in typed keys only when it is done: wait for them to be taken, or for a prompt.
@@ -160,8 +162,18 @@ export default function (pi: ExtensionAPI) {
       }
       // Neovim's input buffer holds about 16 KB and takes only what fits, so the keys go in
       // parts well below that, each once the one before is taken.
+      const total = Buffer.byteLength(params.keys);
+      let typed = 0;
       for (const part of parts(params.keys)) {
-        const written = await remote.request('nvim_input', [part], options) as number;
+        // At a prompt the editor runs no Lua, and the keys go to the prompt, not a terminal.
+        const { blocking } = await remote.request('nvim_get_mode', [], options) as { blocking: boolean };
+        const written = blocking ? await remote.request('nvim_input', [part], options) as number : await remote.lua(TYPE, [part], options) as number;
+        if (written < 0) {
+          throw new Error(typed
+            ? `Stopped after typing ${typed} of ${total} bytes of keys: focus moved to Pi's own terminal, where the rest would be typed into Pi`
+            : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with editor_lua first, or use editor_lua.");
+        }
+        typed += written;
         if (written < Buffer.byteLength(part)) {
           throw new Error(`Neovim took only ${written} of ${Buffer.byteLength(part)} bytes of keys; the rest were not typed`);
         }

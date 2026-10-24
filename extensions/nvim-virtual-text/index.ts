@@ -94,8 +94,9 @@ export default function (pi: ExtensionAPI) {
       try {
         const mark = markOf(args, await remote.lua(YOURS) ?? undefined, path => resolve(ctx.cwd, path));
         const [id] = await virtualText(remote, GROUP).place(mark);
-        const placed = (await virtualText(remote, GROUP).list()).find(m => m.id === id)!;
-        ctx.ui.notify(`Placed #${id} at ${shortPath(placed.path, ctx.cwd)}:${placed.line}`, 'info');
+        // A short ttl may have taken it already.
+        const placed = (await virtualText(remote, GROUP).list()).find(m => m.id === id);
+        ctx.ui.notify(placed ? `Placed #${id} at ${shortPath(placed.path, ctx.cwd)}:${placed.line}` : `Placed #${id}, and its ttl has removed it already`, 'info');
       } catch (error) { ctx.ui.notify(errorText(error), 'warning'); }
     },
   });
@@ -103,8 +104,13 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand('nvim-virtual-text-remove', {
     description: 'Remove virtual text by the ids /nvim-virtual-text shows: <id …>',
     handler: async (args, ctx) => {
-      const ids = [...args.matchAll(/\d+/g)].map(Number);
-      if (!ids.length) return ctx.ui.notify('Usage: /nvim-virtual-text-remove <id …>', 'warning');
+      // Whole ids only (`3` or `#3`), or nothing is removed: digits within another word are no id.
+      const words = args.split(/[\s,]+/).filter(Boolean);
+      const bad = words.filter(word => !/^#?[1-9]\d*$/.test(word) || !Number.isSafeInteger(Number(word.replace('#', ''))));
+      if (!words.length || bad.length) {
+        return ctx.ui.notify(`${bad.length ? `Not an id: ${bad.join(', ')}. ` : ''}Usage: /nvim-virtual-text-remove <id …>`, 'warning');
+      }
+      const ids = [...new Set(words.map(word => Number(word.replace('#', ''))))];
       const remote = attached(ctx);
       if (!remote) return;
       const result = await remote.lua('return remote.nvim_virtual_text ~= nil') && await call(remote, 'remove', [null, ids]);

@@ -114,9 +114,19 @@ test('/nvim-virtual-text-add places at your cursor, or where it says; /nvim-virt
     assert.match(report, /^user \(2\)$/m);
     assert.match(report, /#1 placed.ts:3 below "a note⏎over two lines"/);
 
-    assert.deepEqual(await run('nvim-virtual-text-remove', '#1 7'), ['Removed #1; no mark #7', 'warning']);
+    // Only whole ids: digits within another word remove nothing, not even a mark they spell.
+    for (const args of ['-1', '1.5', '1e2', 'placed1.ts', '#1 x1']) {
+      assert.match((await run('nvim-virtual-text-remove', args))[0], /^Not an id: /, args);
+    }
+    assert.equal((await virtualText(nvim!, 'user').list()).length, 2);
+    assert.deepEqual(await run('nvim-virtual-text-remove', '#1, 7 1'), ['Removed #1; no mark #7', 'warning']);
     assert.deepEqual(await run('nvim-virtual-text-remove', '2'), ['Removed #2', 'info']);
-    assert.deepEqual(await run('nvim-virtual-text-remove', 'nothing'), ['Usage: /nvim-virtual-text-remove <id …>', 'warning']);
+    assert.deepEqual(await run('nvim-virtual-text-remove', ''), ['Usage: /nvim-virtual-text-remove <id …>', 'warning']);
+
+    // Gone before it could be looked up, it is still said to be placed.
+    const [said, kind] = await run('nvim-virtual-text-add', 'ttl=0 brief');
+    assert.match(said, /^Placed #\d+, and its ttl has removed it already$/);
+    assert.equal(kind, 'info');
   } finally {
     await editor.request('nvim_exec_lua', ['vim.cmd("silent! only | enew! | silent! %bwipeout!")', []]);
     await shutdown();

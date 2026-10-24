@@ -65,6 +65,7 @@ on every new attachment.
 | --- | --- |
 | `place(marks, options?)` | Place one mark or several. Resolves to their ids, in order. A mark that can't be placed rejects the call, and the marks before it stay. |
 | `update(id, patch, options?)` | Change a mark and keep its id. What `patch` leaves out stays; `null` takes an option away. Lines and columns it doesn't give stay where edits have moved them, and a `ttl` starts again. Resolves to whether this group had such a mark. One that can't be changed so (its new `match` isn't found, say) rejects, and the mark stays as it was. |
+| `set(marks, options?)` | Make `marks` this group's marks, resolving to their ids in order: the way to say "this is what should show now". A mark with the `key` of one already there is that mark. Given just as it last was, it's left alone, wherever edits have moved it, its `ttl` running on; given differently, it's drawn as now given, keeping its id. The rest are placed, and the group's other marks go. All or nothing: if one can't be drawn, the call rejects and nothing changes. |
 | `remove(ids, options?)` | Remove marks by id. Ids already gone, or another group's, are ignored. |
 | `list(where?, options?)` | This group's marks, or only those in `{ path }` or `{ buf }`, in the order placed. Each is the mark as placed and updated, with its `id`, `group`, `buf` and `path`, and its lines and columns where edits have moved them. |
 | `clear(where?, options?)` | Remove this group's marks, or only those in `{ path }` or `{ buf }`. Resolves to how many went. |
@@ -88,6 +89,7 @@ on every new attachment.
 | `fill` | For `above` and `below`: give each line `hl`'s background across the window's whole width, whatever its size, indentation and blank lines included. |
 | `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Updated while hidden without being moved, it stays hidden and shows the change once undone. Reloaded from disk, it shows again if its text is back, and is removed if its text is nowhere. |
 | `ttl` | Remove the mark after this many milliseconds. |
+| `key` | What `set` knows the mark by. Keys are the caller's own; a list given to `set` can't repeat one. |
 | `priority` | As for extmarks. |
 
 Marks are extmarks, so they move with the text as it's edited in the buffer. Every mark also

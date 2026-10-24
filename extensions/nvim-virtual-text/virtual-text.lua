@@ -15,7 +15,8 @@ local DEFAULTS = {
 
 local state = remote.nvim_virtual_text
 if not state then
-	-- `marks[id]` is { group, spec, ns, extmarks, anchor, generation, stale }: `spec` is the mark as
+	-- `marks[id]` is { group, spec, given, ns, extmarks, anchor, generation, stale }: `given` is
+	-- the mark as last given (placed, updated or set), for `set` to tell a change by; `spec` is the mark as
 	-- given, its file resolved to `buf`; `extmarks` by part (`span`, `sign`, `text`), the span
 	-- covering its lines and moving with them; and
 	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
@@ -674,7 +675,7 @@ local function install(id, group, spec, resolve, moved)
 		local ns, extmarks = draw(group, trial, resolve)
 		delete(trial.buf, ns, extmarks)
 	end
-	local mark = { group = group, spec = spec, generation = old and old.generation }
+	local mark = { group = group, spec = spec, given = old and old.given, generation = old and old.generation }
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
 	-- What reloads look for is what it was placed on, not what edits have made of that since.
 	if old and not resolve then
@@ -692,8 +693,10 @@ end
 function state.place(group, marks)
 	local ids = {}
 	for _, spec in ipairs(marks) do
+		local given = vim.deepcopy(spec)
 		state.next = state.next + 1
 		install(state.next, group, spec, true)
+		state.marks[state.next].given = given
 		table.insert(ids, state.next)
 	end
 	return ids
@@ -710,11 +713,15 @@ function state.update(group, id, patch)
 		return false
 	end
 	local spec, invalid = current(mark)
+	local given = vim.deepcopy(mark.given or {})
 	if patch.path then
-		spec.buf = nil
+		spec.buf, given.buf = nil, nil
+	elseif patch.buf then
+		given.path = nil
 	end
 	for key, value in pairs(patch) do
 		spec[key] = value ~= vim.NIL and value or nil
+		given[key] = spec[key]
 	end
 	local moves = vim.iter(WHERE):any(function(key)
 		return patch[key] ~= nil
@@ -725,13 +732,63 @@ function state.update(group, id, patch)
 		local trial = vim.deepcopy(spec)
 		local ns, extmarks = draw(group, trial, false)
 		delete(trial.buf, ns, extmarks)
-		mark.spec, mark.stale = spec, true
+		mark.spec, mark.given, mark.stale = spec, given, true
 		arm(id, mark)
 		return true
 	end
 	-- Placed anew, a mark with a `match` looks for it; otherwise it keeps to its lines.
 	install(id, group, spec, moves)
+	state.marks[id].given = given
 	return true
+end
+
+--- Make `marks` the marks of `group`, returning their ids in order. One with the `key` of a
+--- mark there is that mark: left as it is, wherever edits have moved it, if given just as it
+--- last was, else drawn as now given. The rest are placed, and the group's other marks go.
+--- All or nothing: one that cannot be drawn fails the call before anything changes.
+function state.set(group, marks)
+	local keyed, seen, plan = {}, {}, {}
+	for id, mark in pairs(state.marks) do
+		if mark.group == group and mark.given and mark.given.key then
+			keyed[mark.given.key] = id
+		end
+	end
+	for i, spec in ipairs(marks) do
+		if spec.key then
+			if seen[spec.key] then
+				error(("key given twice: %s"):format(spec.key), 0)
+			end
+			seen[spec.key] = true
+		end
+		local id = spec.key and keyed[spec.key]
+		local same = id and vim.deep_equal(state.marks[id].given, spec)
+		if not same then
+			local trial = vim.deepcopy(spec)
+			local ns, extmarks = draw(group, trial, true)
+			delete(trial.buf, ns, extmarks)
+		end
+		plan[i] = { id = id, same = same }
+	end
+	local ids, kept = {}, {}
+	for i, spec in ipairs(marks) do
+		local id = plan[i].id
+		if not id then
+			state.next = state.next + 1
+			id = state.next
+		end
+		if not plan[i].same then
+			local given = vim.deepcopy(spec)
+			install(id, group, spec, true)
+			state.marks[id].given = given
+		end
+		ids[i], kept[id] = id, true
+	end
+	for id, mark in pairs(state.marks) do
+		if mark.group == group and not kept[id] then
+			remove(id)
+		end
+	end
+	return ids
 end
 
 -- Whether a part of the mark is hidden by a deletion, or off the line it belongs on: each

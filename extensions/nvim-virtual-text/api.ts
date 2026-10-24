@@ -68,6 +68,8 @@ export type Mark = {
   invalidate?: boolean;
   /** Remove it after this many milliseconds. */
   ttl?: number;
+  /** What `set` knows it by: a mark given with the key of one already there is that one. */
+  key?: string;
   priority?: number;
 };
 
@@ -88,6 +90,14 @@ export type VirtualText = {
    * them, and a `ttl` starts again. Resolves to whether there was such a mark.
    */
   update(id: number, patch: Patch, options?: CallOptions): Promise<boolean>;
+  /**
+   * Make `marks` this group's marks, resolving to their ids in order. One with the `key` of a
+   * mark there is that mark: left as it is (wherever edits have moved it, its `ttl` running
+   * on) if given just as it last was, else drawn as now given. The rest are placed, and the
+   * group's other marks go. All or nothing: one that cannot be drawn rejects the call, and
+   * nothing changes.
+   */
+  set(marks: Mark[], options?: CallOptions): Promise<number[]>;
   remove(ids: number | number[], options?: CallOptions): Promise<void>;
   /** This group's marks, only in one file or buffer if given, in the order placed. */
   list(where?: Where, options?: CallOptions): Promise<Placed[]>;
@@ -132,6 +142,7 @@ export function virtualText(remote: Lua, group: string): VirtualText {
   return {
     place: async (marks, options) => list(await call(remote, 'place', [group, [marks].flat().map(checkMark)], options)),
     update: (id, patch, options) => call(remote, 'update', [group, id, check(patch)], options),
+    set: async (marks, options) => list(await call(remote, 'set', [group, marks.map(checkMark)], options)),
     async remove(ids, options) {
       await call(remote, 'remove', [group, [ids].flat()], options);
     },

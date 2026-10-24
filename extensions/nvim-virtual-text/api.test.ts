@@ -503,6 +503,51 @@ test('an update whose match is not found leaves the mark as it was', async () =>
   assert.equal((await shown(path)).length, 1);
 });
 
+test('set makes a list the group\'s marks: the same left be, the changed redrawn, the rest placed or gone', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  await open(path);
+  const other = virtualText(remote, 'other');
+  await other.place({ path, line: 4, text: 'theirs' });
+  const first = await text.set([
+    { key: 'one', path, line: 1, text: 'one' },
+    { key: 'two', path, line: 2, text: 'two', ttl: 300 },
+    { path, line: 3, text: 'keyless' },
+  ]);
+  // A redraw by `set` starts the mark's ttl again, so counts another generation of it.
+  const partsOf = (id: number) => lua(`local mark = require('nvim_remote.v1').contexts[${remote.channel}].nvim_virtual_text.marks[...]
+    return { mark.extmarks, mark.generation }`, id);
+  const before = await partsOf(first[0]);
+  await lua('vim.api.nvim_buf_set_lines(0, 0, 0, true, { "new" })'); // Your edit moves them all.
+  await delay(150);
+
+  const second = await text.set([
+    { key: 'one', path, line: 1, text: 'one' },          // Just as before: left be, where it moved.
+    { key: 'two', path, line: 2, text: 'TWO', ttl: 300 }, // Changed: drawn as given, same id.
+    { key: 'three', path, line: 4, text: 'three' },      // New.
+  ]);
+  assert.deepEqual([second[0], second[1]], [first[0], first[1]]);
+  assert.ok(!first.includes(second[2]));
+  const marks = Object.fromEntries((await text.list()).map(m => [m.key, [m.id, m.line, m.text]]));
+  assert.deepEqual(marks, { one: [first[0], 2, 'one'], two: [first[1], 2, 'TWO'], three: [second[2], 4, 'three'] });
+  assert.deepEqual(await partsOf(first[0]), before); // Left be: not even redrawn.
+  assert.equal((await other.list()).length, 1); // Another group's are not this one's.
+
+  // Unchanged, 'one' kept its extmarks; changed, 'two' restarted its ttl and outlives the first.
+  await delay(200);
+  assert.ok((await text.list()).some(m => m.key === 'two'));
+  await delay(200);
+  assert.ok(!(await text.list()).some(m => m.key === 'two'));
+
+  // All or nothing.
+  const kept = await text.list();
+  await assert.rejects(text.set([{ key: 'one', path, line: 1, text: [['x', { fg: 'not-a-color' }]] }]));
+  await assert.rejects(text.set([{ key: 'a', path, line: 1 }, { key: 'a', path, line: 2 }]), /key given twice: a/);
+  assert.deepEqual(await text.list(), kept);
+  assert.deepEqual(await text.set([]), []);
+  assert.deepEqual(await text.list(), []);
+  await other.clear();
+});
+
 test('marks go by id, by file, after their ttl, and with each group apart', async () => {
   const a = await file(), b = await file();
   const other = virtualText(remote, 'other');

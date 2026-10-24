@@ -80,7 +80,16 @@ test('/nvim-virtual-text shows every mark by group, and what is special about ea
       'Watching 1 buffer; 1 style made',
     ]);
 
-    assert.deepEqual(await run('nvim-virtual-text-clear'), ['Removed 3 marks', 'info']);
+    // Cut where a character ends: an emoji, or a letter and its accent, stays whole.
+    await notes.place([
+      { path, line: 1, text: 'x'.repeat(38) + '🙂' + 'tail' },
+      { path, line: 1, text: 'x'.repeat(38) + 'e\u0301' + 'tail' },
+    ]);
+    const previews = (await run('nvim-virtual-text'))[0].split('\n').filter(line => /#[45] /.test(line));
+    assert.deepEqual(previews.map(line => line.match(/"(.*)"/)![1]), ['x'.repeat(38) + '🙂…', 'x'.repeat(38) + 'e\u0301…']);
+    assert.ok(previews.every(line => line.isWellFormed()));
+
+    assert.deepEqual(await run('nvim-virtual-text-clear'), ['Removed 5 marks', 'info']);
     assert.match((await run('nvim-virtual-text'))[0], /^0 marks in 0 groups, 0 files\n/);
   } finally { await shutdown(); }
 });

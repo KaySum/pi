@@ -7,10 +7,12 @@ const SHOWN = 50;
 type Inspected = Placed & { stale?: true };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const graphemes = new Intl.Segmenter();
+/** At most 40 characters as seen, never splitting one (an emoji, an accented letter). */
 const preview = (text: Placed['text']) => {
   const flat = typeof text === 'string' ? text : (text ?? []).map((chunk: Chunk) => chunk[0]).join('');
-  const line = flat.replaceAll('\n', '⏎');
-  return line.length > 40 ? `${line.slice(0, 39)}…` : line;
+  const shown = Array.from(graphemes.segment(flat.replaceAll('\n', '⏎')), part => part.segment);
+  return shown.length > 40 ? `${shown.slice(0, 39).join('')}…` : shown.join('');
 };
 
 /** One line for a mark: where, how, what and what is special about it. */

@@ -223,6 +223,32 @@ test('a path through a symlink finds the buffer already open for the real file',
   void code;
 });
 
+test('the buffer is found by its name, with the file system asked only once per name', async t => {
+  const { code } = await layout(t);
+  const many = await Promise.all(Array.from({ length: 50 }, (_, i) => file(`many${i}.txt`, 'x\n')));
+  await lua('for _, p in ipairs(...) do vim.cmd.badd(vim.fn.fnameescape(p)) end', many);
+  await lua(`local real = vim.uv.fs_realpath
+    _G.realpaths = 0
+    _G.restore_realpath = function() vim.uv.fs_realpath = real end
+    vim.uv.fs_realpath = function(...) _G.realpaths = _G.realpaths + 1; return real(...) end`);
+  t.after(() => lua('_G.restore_realpath()'));
+  const asked = async (work: () => Promise<unknown>) => {
+    await lua('_G.realpaths = 0');
+    await work();
+    return lua('return _G.realpaths') as Promise<number>;
+  };
+  // Open under its own name: found at once.
+  assert.equal(await asked(() => follow(many[20], [[1, 1]])), 0);
+  // Not open: every buffer's real path is looked up, once; the next time, none is.
+  const fresh = await file('fresh.txt', 'x\n');
+  const first = await asked(() => follow(fresh, [[1, 1]]));
+  const fresher = await file('fresher.txt', 'x\n');
+  const second = await asked(() => follow(fresher, [[1, 1]]));
+  assert.ok(first > 50, `${first} lookups the first time`);
+  assert.ok(second <= 3, `${second} lookups the second time`);
+  void code;
+});
+
 // The cursor and the highlight
 
 test('ranges past the end are clamped, and no ranges leaves the cursor where it was', async t => {

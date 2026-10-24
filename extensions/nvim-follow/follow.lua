@@ -17,12 +17,25 @@ if not state then
 end
 
 if not vim.uv.fs_stat(path) then return 'missing' end
-local real = vim.uv.fs_realpath(path) or path
 
-local buf = vim.iter(vim.api.nvim_list_bufs()):find(function(b)
-  local name = vim.api.nvim_buf_get_name(b)
-  return name ~= '' and (vim.uv.fs_realpath(name) or name) == real
-end)
+-- The buffer holding the file: by its name, which it nearly always has, else by where its
+-- name really leads (a symlink, say). Where a name leads is asked once for each.
+local function find(matches)
+  return vim.iter(vim.api.nvim_list_bufs()):find(function(b)
+    local name = vim.api.nvim_buf_get_name(b)
+    return name ~= '' and matches(name)
+  end)
+end
+local buf = find(function(name) return name == path end)
+if not buf then
+  state.real = state.real or {}
+  local function real(name)
+    if state.real[name] == nil then state.real[name] = vim.uv.fs_realpath(name) or name end
+    return state.real[name]
+  end
+  local target = vim.uv.fs_realpath(path) or path
+  buf = find(function(name) return real(name) == target end)
+end
 -- Reloading would throw away the user's unsaved work.
 if buf and vim.bo[buf].modified then return 'modified' end
 

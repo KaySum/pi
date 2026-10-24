@@ -23,8 +23,11 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
   endings or a byte order mark are all placed as Pi placed them, and no file is read. (From an
   edit tool that returns no patch, its first changed line, else just the file.) A write is
   compared with the file as it was before it, read then; a new file is shown at its top.
-- **View:** when the changes fit in the window, all of them are brought into view, the cursor
-  on the first; otherwise the first is centered. `scrolloff` is kept.
+- **View:** center the complete diff when it fits, counting removed virtual lines and wrapped
+  text as screen rows. Otherwise, prefer the view showing the most changed rows, centering
+  that region rather than the unchanged gap between distant edits. The cursor stays on the
+  first change when possible, or moves to a change in the chosen view. `scrolloff` is kept;
+  large virtual blocks and partial wrapped rows are handled best-effort.
 - **Window:** one already showing the file; else the one you came from; else another normal
   window in the tab. The window you are in is used only in normal mode, and only when there
   is no other, so it is never taken while you type. Terminals, help and floating windows

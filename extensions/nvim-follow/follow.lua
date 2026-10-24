@@ -7,6 +7,159 @@
 -- changed: a buffer already loaded is read again. Returns what happened, so a file left
 -- alone can be told from one shown.
 
+-- Place the viewport in screen rows, so deleted virtual lines and wrapped/folded text
+-- contribute to its height. Changed intervals are scored by how much fits, not by the
+-- distance between hunks. Ties favor centering, then the earlier change.
+local function frame(win, count, ranges, deletions, cursor)
+	local height = vim.api.nvim_win_get_height(win)
+	local total = vim.api.nvim_win_text_height(win, {}).all
+	local cache = {}
+	local function edge(line, text)
+		local key = line * 2 + (text and 1 or 0)
+		if cache[key] == nil then
+			local opts = { end_row = line - 1 }
+			if text then
+				opts.end_vcol = 0
+			end
+			cache[key] = vim.api.nvim_win_text_height(win, opts).all
+		end
+		return cache[key]
+	end
+	local function clamp(line)
+		return math.max(1, math.min(line, count))
+	end
+	local function locate(row)
+		local lo, hi = 1, count
+		while lo < hi do
+			local mid = math.floor((lo + hi) / 2)
+			if edge(mid, false) > row then
+				hi = mid
+			else
+				lo = mid + 1
+			end
+		end
+		return lo
+	end
+	local spans, anchors = {}, {}
+	for _, range in ipairs(ranges) do
+		local first, last = clamp(range[1]), clamp(range[2])
+		table.insert(spans, { edge(first, true), edge(last, false) })
+		table.insert(anchors, first)
+		table.insert(anchors, last)
+	end
+	-- Several removed blocks can share a boundary. Their virtual lines form one interval.
+	local removed = {}
+	for _, deletion in ipairs(deletions or {}) do
+		removed[deletion.line] = (removed[deletion.line] or 0) + #deletion.lines
+	end
+	for line, size in pairs(removed) do
+		local after = line > count and total or edge(clamp(line), true)
+		table.insert(spans, { after - size, after })
+		table.insert(anchors, clamp(line))
+	end
+	if #spans == 0 then
+		return
+	end
+	table.sort(spans, function(a, b)
+		return a[1] < b[1]
+	end)
+	local merged = {}
+	for _, span in ipairs(spans) do
+		local last = merged[#merged]
+		if last and span[1] <= last[2] then
+			last[2] = math.max(last[2], span[2])
+		else
+			table.insert(merged, { span[1], span[2] })
+		end
+	end
+	local scrolloff = vim.wo[win].scrolloff
+	if scrolloff < 0 then
+		scrolloff = vim.o.scrolloff
+	end
+	scrolloff = math.min(scrolloff, math.floor((height - 1) / 2))
+	local candidates = {}
+	local function candidate(top)
+		top = math.max(0, math.floor(top))
+		local line = locate(top)
+		-- Start at a buffer row or within its virtual filler. Partial wrapped rows are a
+		-- best-effort case: don't change smoothscroll or the user's horizontal position.
+		top = math.min(top, edge(line, true))
+		candidates[top] = true
+	end
+	local first, last = merged[1][1], merged[#merged][2]
+	candidate((first + last - height) / 2)
+	for _, span in ipairs(merged) do
+		candidate(span[1])
+		candidate(span[2] - height)
+		candidate((span[1] + span[2] - height) / 2)
+	end
+	table.insert(anchors, clamp(cursor[1]))
+	for _, line in ipairs(anchors) do
+		local row = edge(line, true)
+		candidate(row - scrolloff)
+		candidate(row - height + 1 + scrolloff)
+		candidate(row - math.floor(height / 2))
+	end
+	local function visible(line, top)
+		local row = edge(line, true)
+		return row >= top + math.min(scrolloff, row)
+			and row < top + height - math.min(scrolloff, math.max(0, total - row - 1))
+	end
+	local function at(top)
+		if visible(clamp(cursor[1]), top) then
+			return clamp(cursor[1]), cursor[2]
+		end
+		-- If the best view is around a later hunk, move the cursor there too. A cursor
+		-- left on the first hunk would cause Neovim to scroll our chosen view away.
+		for _, range in ipairs(ranges) do
+			local line = clamp(math.max(range[1], math.min(range[2], locate(top + height / 2))))
+			if visible(line, top) then
+				return line, 0
+			end
+		end
+		for _, line in ipairs(anchors) do
+			if visible(line, top) then
+				return line, 0
+			end
+		end
+	end
+	local changed = 0
+	for _, span in ipairs(merged) do
+		changed = changed + span[2] - span[1]
+	end
+	local best
+	for top in pairs(candidates) do
+		local line, column = at(top)
+		if line then
+			local score, distance = 0, math.huge
+			for _, span in ipairs(merged) do
+				score = score + math.max(0, math.min(top + height, span[2]) - math.max(top, span[1]))
+				distance = math.min(distance, math.abs(top + height / 2 - (span[1] + span[2]) / 2))
+			end
+			if score == changed then
+				distance = math.abs(top + height / 2 - (first + last) / 2)
+			end
+			if
+				not best
+				or score > best.score
+				or (
+					score == best.score
+					and (distance < best.distance or (distance == best.distance and top < best.top))
+				)
+			then
+				best = { top = top, score = score, distance = distance, line = line, column = column }
+			end
+		end
+	end
+	if not best then
+		return
+	end
+	local top = locate(best.top)
+	local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), best.line - 1, best.line, true)[1]
+	vim.api.nvim_win_set_cursor(win, { best.line, math.max(0, math.min(best.column, #text - 1)) })
+	vim.fn.winrestview({ topline = top, topfill = math.max(0, edge(top, true) - best.top), skipcol = 0 })
+end
+
 -- This attachment's own highlights, apart from what other features put in remote.ns, and
 -- gone with it.
 local state = remote.nvim_follow
@@ -151,26 +304,8 @@ function state.show(path, ranges, ms, group, cursor, reread, deletions)
 		local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
 		-- In normal mode the cursor sits on a character, so the last one is as far as it goes.
 		vim.api.nvim_win_set_cursor(win, { line, math.max(0, math.min(cursor[2], #text - 1)) })
-		-- Every change in view when they fit, the span from the first to the last centered, the
-		-- cursor on the first kept 'scrolloff' lines from the top; otherwise the first, centered.
-		local top, bottom = line, line
-		for _, range in ipairs(ranges) do
-			top, bottom = math.min(top, math.min(range[1], count)), math.max(bottom, math.min(range[2], count))
-		end
-		local height = vim.api.nvim_win_get_height(win)
-		local scrolloff = vim.wo[win].scrolloff
-		if scrolloff < 0 then
-			scrolloff = vim.o.scrolloff
-		end
-		scrolloff = math.min(scrolloff, math.floor((height - 1) / 2))
-		local lowest, highest = math.max(1, bottom - height + 1), math.max(1, line - scrolloff)
 		vim.api.nvim_win_call(win, function()
-			if bottom > top and lowest <= highest then
-				local centered = math.floor((top + bottom + 1 - height) / 2)
-				vim.fn.winrestview({ topline = math.max(lowest, math.min(highest, centered)) })
-			else
-				vim.cmd("normal! zz")
-			end
+			frame(win, count, ranges, deletions, cursor)
 		end)
 	end
 	return "shown"

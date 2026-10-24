@@ -642,6 +642,180 @@ test("'scrolloff' is kept, and changes too far apart to fit center on the first"
   );
 });
 
+/** Screen-row coordinates include virtual lines even when they are outside the viewport. */
+const screenView = (
+  win: number,
+  ranges: Range[],
+  deletions: { line: number; lines: string[] }[] = [],
+) =>
+  lua(
+    `local w, ranges, deletions = ...
+    return vim.api.nvim_win_call(w, function()
+      vim.cmd('redraw')
+      local view = vim.fn.winsaveview()
+      local function edge(line, before)
+        local opts = { end_row = line - 1 }
+        if before then opts.end_vcol = 0 end
+        return vim.api.nvim_win_text_height(w, opts).all
+      end
+      local top = edge(view.topline, true) - view.topfill
+      local height = vim.api.nvim_win_get_height(w)
+      local first, last, visible = math.huge, 0, 0
+      local function add(a, b)
+        first, last = math.min(first, a), math.max(last, b)
+        visible = visible + math.max(0, math.min(top + height, b) - math.max(top, a))
+      end
+      for _, r in ipairs(ranges) do add(edge(r[1], true), edge(r[2], false)) end
+      for _, d in ipairs(deletions) do
+        local after = d.line > vim.api.nvim_buf_line_count(0) and vim.api.nvim_win_text_height(w, {}).all or edge(d.line, true)
+        add(after - #d.lines, after)
+      end
+      return { top = top, height = height, first = first, last = last, visible = visible,
+        cursor = vim.api.nvim_win_get_cursor(w)[1], view = view }
+    end)`,
+    win,
+    ranges,
+    deletions,
+  );
+
+test("the entire replacement is centered including removed virtual lines", async (t) => {
+  const { code } = await layout(t);
+  const path = await file("center-diff.txt", lines(200));
+  const ranges: Range[] = [[80, 82]];
+  const deletions = [{ line: 80, lines: ["a", "b", "c", "d", "e", "f"] }];
+  await show(remote, [
+    path,
+    ranges,
+    1000,
+    "PiFollow",
+    [80, 0],
+    true,
+    deletions,
+  ]);
+  const v = await screenView(code, ranges, deletions);
+  assert.equal(v.visible, 9);
+  assert.equal(v.cursor, 80);
+  assert.ok(
+    Math.abs(v.first - v.top - (v.top + v.height - v.last)) <= 1,
+    JSON.stringify(v),
+  );
+});
+
+test("a later dense replacement wins over a small first change when both cannot fit", async (t) => {
+  const { code, term } = await layout(t);
+  const path = await file("dense-diff.txt", lines(200));
+  const ranges: Range[] = [
+    [20, 20],
+    [120, 130],
+  ];
+  const deletions = [{ line: 120, lines: Array(8).fill("old") }];
+  await show(remote, [
+    path,
+    ranges,
+    1000,
+    "PiFollow",
+    [20, 0],
+    true,
+    deletions,
+  ]);
+  const v = await screenView(code, ranges, deletions);
+  assert.equal(v.visible, 19, JSON.stringify(v));
+  assert.ok(v.cursor >= 120 && v.cursor <= 130, JSON.stringify(v));
+  assert.equal(await lua("return vim.api.nvim_get_current_win()"), term);
+});
+
+test("an oversized replacement fills the view with as many changed rows as possible", async (t) => {
+  const { code } = await layout(t);
+  await lua("vim.wo[...].scrolloff = 0", code);
+  const path = await file("oversized-diff.txt", lines(200));
+  const ranges: Range[] = [[80, 119]];
+  const deletions = [{ line: 80, lines: Array(25).fill("old") }];
+  await show(remote, [
+    path,
+    ranges,
+    1000,
+    "PiFollow",
+    [80, 0],
+    true,
+    deletions,
+  ]);
+  const v = await screenView(code, ranges, deletions);
+  assert.equal(v.visible, v.height, JSON.stringify(v));
+  assert.ok(v.cursor >= 80 && v.cursor <= 119, JSON.stringify(v));
+});
+
+test("large deletion-only hunks keep their boundary visible and favor the largest hunk", async (t) => {
+  const { code } = await layout(t);
+  await lua("vim.wo[...].scrolloff = 0", code);
+  const path = await file("large-deletion.txt", lines(200));
+  const deletions = [
+    { line: 20, lines: ["small"] },
+    { line: 120, lines: Array(60).fill("large") },
+  ];
+  await show(remote, [path, [], 1000, "PiFollow", [20, 0], true, deletions]);
+  const v = await screenView(code, [], deletions);
+  assert.equal(v.cursor, 120);
+  assert.equal(v.visible, v.height - 1, JSON.stringify(v));
+  assert.ok(v.view.topfill > 0, JSON.stringify(v));
+});
+
+test("EOF deletions remain visible below their boundary", async (t) => {
+  const { code } = await layout(t);
+  await lua("vim.wo[...].scrolloff = 0", code);
+  const path = await file("eof-frame.txt", lines(100));
+  const deletions = [{ line: 101, lines: Array(50).fill("removed at EOF") }];
+  await show(remote, [path, [], 1000, "PiFollow", [101, 0], true, deletions]);
+  const v = await screenView(code, [], deletions);
+  assert.equal(v.cursor, 100);
+  assert.equal(v.visible, v.height - 1, JSON.stringify(v));
+});
+
+test("oversized diffs keep scrolloff without changing the user's option", async (t) => {
+  const { code } = await layout(t);
+  await lua("vim.wo[...].scrolloff = 4", code);
+  const path = await file("scrolloff-diff.txt", lines(200));
+  const ranges: Range[] = [[100, 100]];
+  const deletions = [{ line: 100, lines: Array(50).fill("old") }];
+  await show(remote, [
+    path,
+    ranges,
+    1000,
+    "PiFollow",
+    [100, 0],
+    true,
+    deletions,
+  ]);
+  const v = await screenView(code, ranges, deletions);
+  assert.equal(v.visible, v.height - 4, JSON.stringify(v));
+  assert.equal(await lua("return vim.wo[...].scrolloff", code), 4);
+});
+
+test("wrapped added lines count toward centering the diff", async (t) => {
+  const { code } = await layout(t);
+  await lua("vim.wo[...].scrolloff = 0", code);
+  const width = await lua("return vim.api.nvim_win_get_width(...)", code);
+  const text = lines(79) + "x".repeat(width * 3) + "\n" + lines(120);
+  const path = await file("wrapped-diff.txt", text);
+  const ranges: Range[] = [[80, 80]];
+  const deletions = [{ line: 80, lines: ["old", "also old"] }];
+  await show(remote, [
+    path,
+    ranges,
+    1000,
+    "PiFollow",
+    [80, 0],
+    true,
+    deletions,
+  ]);
+  const v = await screenView(code, ranges, deletions);
+  assert.ok(v.last - v.first >= 5, JSON.stringify(v));
+  assert.equal(v.visible, v.last - v.first, JSON.stringify(v));
+  assert.ok(
+    Math.abs(v.first - v.top - (v.top + v.height - v.last)) <= 1,
+    JSON.stringify(v),
+  );
+});
+
 test("a single change is centered, as before", async (t) => {
   const { code } = await layout(t);
   const path = await file("s3.txt", lines(200));

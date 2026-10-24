@@ -71,10 +71,11 @@ connection carry on.
 as it takes. A call that times out or is aborted stops waiting, but what it asked for may
 still finish in the editor.
 
-While the editor waits at a hit-enter or confirm prompt, `lua`, `request` and `autocmd`
-fail at once with an error carrying `blocking: true` and `mode`, rather than waiting until
-the user answers. `nvim_get_mode`, `nvim_input` and `nvim_input_mouse` still go through, so
-a prompt can be seen and answered.
+While the editor waits at a hit-enter prompt ("Press ENTER", mode `r`), it handles no calls
+until the user answers, so `lua`, `request` and `autocmd` fail at once with an error carrying
+`blocking: true` and `mode` instead of waiting. `nvim_get_mode`, `nvim_input` and
+`nvim_input_mouse` still go through, so the prompt can be seen and answered. Other prompts,
+such as `confirm()` dialogs and `getchar()`, do not hold calls back, and calls go through.
 
 ### In Lua: `remote`
 

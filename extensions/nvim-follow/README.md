@@ -18,12 +18,11 @@ the status bar shows `following edits` or `following all` (status key `nvim-foll
 ## What it does
 
 - **Where:** the cursor goes to the character where a change starts, and only the lines that
-  changed flash: the context Pi's edits carry to be unique is left out. An edit is found from
-  where its old text was before the change, so a new text that also occurs elsewhere does not
-  mislead; one the tool matched loosely (other whitespace or line endings) is placed by its new
-  text, if that occurs once. A write is shown at what it changed, a new file at its top. An
-  added or removed line that could be placed several ways is placed at a line start, as diff
-  tools do.
+  changed flash. An edit is shown from the patch Pi's edit tool returns with it: Pi's own diff
+  of the file it wrote, so a new text that also occurs elsewhere, a loose match, other line
+  endings or a byte order mark are all placed as Pi placed them, and no file is read. (From an
+  edit tool that returns no patch, its first changed line, else just the file.) A write is
+  compared with the file as it was before it, read then; a new file is shown at its top.
 - **View:** when the changes fit in the window, all of them are brought into view, the cursor
   on the first; otherwise the first is centered. `scrolloff` is kept.
 - **Window:** one already showing the file; else the one you came from; else another normal

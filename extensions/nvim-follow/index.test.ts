@@ -17,6 +17,10 @@ after(() => service.stop());
 const editor = await connect(socket);
 after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
+// Pi's own tools, from the package nvim-service installs.
+type Tool = { execute(id: string, input: Record<string, unknown>): Promise<{ content: unknown[]; details?: unknown }> };
+const piTools = await import(new URL('../nvim-service/node_modules/@earendil-works/pi-coding-agent/dist/index.js', import.meta.url).href);
+const TOOLS: Record<string, (cwd: string) => Tool> = { edit: piTools.createEditTool, write: piTools.createWriteTool, read: piTools.createReadTool };
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-follow-')));
 after(() => rm(dir, { recursive: true, force: true }));
 
@@ -61,22 +65,28 @@ async function pi() {
   await ready;
   const follow = (args = '') => commands.follow.handler(args, ctx);
   let calls = 0;
-  /** A tool call as Pi makes one: announced, carried out on disk, then its result. */
-  async function tool(toolName: string, input: Record<string, unknown>, change: (text: string | undefined) => string | undefined = () => undefined,
-    isError = false, content: { type: string }[] = []) {
+  /**
+   * A tool call as Pi makes one: announced, run by Pi's own tool (so an edit's result carries
+   * its real patch), then its result. `result` stands in for what a tool would return instead.
+   */
+  async function tool(toolName: string, input: Record<string, unknown>, result?: { isError?: boolean; content?: { type: string }[]; details?: unknown }) {
     const toolCallId = `call-${++calls}`;
     await fire('tool_call', { toolName, toolCallId, input });
-    const path = join(dir, String(input.path).replace(/^@/, ''));
-    const next = change(await readFile(path, 'utf8').catch(() => undefined));
-    if (next !== undefined) await writeFile(path, next);
-    await fire('tool_result', { toolName, toolCallId, input, isError, content });
+    let outcome: { isError: boolean; content: unknown[]; details?: unknown } = { isError: result?.isError ?? false, content: result?.content ?? [], details: result?.details };
+    const make = TOOLS[toolName];
+    if (!result && make) {
+      try {
+        const { content, details } = await make(dir).execute(toolCallId, input);
+        outcome = { isError: false, content, details };
+      } catch (error) { outcome = { isError: true, content: [{ type: 'text', text: String(error) }] }; }
+    }
+    await fire('tool_result', { toolName, toolCallId, input, ...outcome });
   }
   const shutdown = () => fire('session_shutdown', { reason: 'quit' });
   return { bus, commands, status, notes, ctx, fire, follow, tool, shutdown };
 }
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
-const edit = (oldText: string, newText: string) => (text: string | undefined) => text!.replace(oldText, newText);
 
 /** The user's window beside Pi's terminal, which has focus. */
 async function layout() {
@@ -94,7 +104,7 @@ test('following is off until asked for, and the status says when it is on', asyn
   const { follow, status, tool, notes, shutdown } = await pi();
   const code = await layout();
   await writeFile(join(dir, 'a.txt'), lines(10));
-  await tool('edit', { path: 'a.txt', edits: [{ oldText: 'line 5\n', newText: 'five\n' }] }, edit('line 5\n', 'five\n'));
+  await tool('edit', { path: 'a.txt', edits: [{ oldText: 'line 5\n', newText: 'five\n' }] });
   await delay(100);
   assert.deepEqual(await shown(code), ['', 1]);
   assert.equal(status['nvim-follow'], undefined);
@@ -116,7 +126,7 @@ test('an edit is shown where it landed, not where its new text first occurs', as
   const path = join(dir, 'b.txt');
   await writeFile(path, lines(60));
   await follow('on');
-  await tool('edit', { path: 'b.txt', edits: [{ oldText: 'line 45\n', newText: 'line 3\n' }] }, edit('line 45\n', 'line 3\n'));
+  await tool('edit', { path: 'b.txt', edits: [{ oldText: 'line 45\n', newText: 'line 3\n' }] });
   await showing(code, path, 45);
   await shutdown();
 });
@@ -129,7 +139,7 @@ test('the cursor lands on the character that changed, not on the context around 
   await follow('on');
   // As Pi writes edits: the lines around the change come along, so the old text is unique.
   const oldText = 'function b() {\n  return "→ 1";\n}', newText = 'function b() {\n  return "→ 2";\n}';
-  await tool('edit', { path: 'ctx.ts', edits: [{ oldText, newText }] }, edit(oldText, newText));
+  await tool('edit', { path: 'ctx.ts', edits: [{ oldText, newText }] });
   await showing(code, path, 6);
   // Byte 14 on line 6: the "2", past the 3-byte arrow.
   assert.deepEqual(await lua('return vim.api.nvim_win_get_cursor(...)', code), [6, 14]);
@@ -144,7 +154,7 @@ test('several edits in one call: the first is where the cursor goes', async () =
   await writeFile(path, lines(40));
   await follow('on');
   const edits = [{ oldText: 'line 30\n', newText: 'thirty\n' }, { oldText: 'line 12\n', newText: 'twelve\n' }];
-  await tool('edit', { path: 'c.txt', edits }, text => edits.reduce((t, e) => t.replace(e.oldText, e.newText), text!));
+  await tool('edit', { path: 'c.txt', edits });
   await showing(code, path, 12);
   await shutdown();
 });
@@ -156,7 +166,7 @@ test('several edits in one call are all brought into view when they fit', async 
   await writeFile(path, lines(300));
   await follow('on');
   const edits = [{ oldText: 'line 150\n', newText: 'one-fifty\n' }, { oldText: 'line 165\n', newText: 'one-sixty-five\n' }];
-  await tool('edit', { path: 'many.txt', edits }, text => edits.reduce((t, e) => t.replace(e.oldText, e.newText), text!));
+  await tool('edit', { path: 'many.txt', edits });
   await showing(code, path, 150);
   const [first, last] = await lua(`local w = ...
     return vim.api.nvim_win_call(w, function() return { vim.fn.line('w0'), vim.fn.line('w$') } end)`, code);
@@ -164,13 +174,13 @@ test('several edits in one call are all brought into view when they fit', async 
   await shutdown();
 });
 
-test('the legacy edit form and @ paths are followed too', async () => {
+test('@ paths are followed too', async () => {
   const { follow, tool, shutdown } = await pi();
   const code = await layout();
   const path = join(dir, 'd.txt');
   await writeFile(path, lines(20));
   await follow('on');
-  await tool('edit', { path: '@d.txt', oldText: 'line 17\n', newText: 'seventeen\n' }, edit('line 17\n', 'seventeen\n'));
+  await tool('edit', { path: '@d.txt', edits: [{ oldText: 'line 17\n', newText: 'seventeen\n' }] });
   await showing(code, path, 17);
   await shutdown();
 });
@@ -181,11 +191,11 @@ test('a write is shown at the first line it changed, a new file at its top', asy
   await follow('on');
   const created = join(dir, 'new.txt');
   await rm(created, { force: true });
-  await tool('write', { path: 'new.txt', content: 'a\nb\n' }, () => 'a\nb\n');
+  await tool('write', { path: 'new.txt', content: 'a\nb\n' });
   await showing(code, created, 1);
   const path = join(dir, 'e.txt');
   await writeFile(path, lines(30));
-  await tool('write', { path: 'e.txt' }, text => text!.replace('line 22\n', 'changed\n'));
+  await tool('write', { path: 'e.txt', content: lines(30).replace('line 22\n', 'changed\n') });
   await showing(code, path, 22);
   await shutdown();
 });
@@ -196,9 +206,9 @@ test('failed calls and other tools are not followed', async () => {
   const path = join(dir, 'f.txt');
   await writeFile(path, lines(10));
   await follow('on');
-  await tool('edit', { path: 'f.txt', edits: [{ oldText: 'x', newText: 'y' }] }, () => undefined, true);
-  await tool('read', { path: 'f.txt' }, () => undefined);
-  await tool('bash', { command: 'true' } as Record<string, unknown> & { path?: string }, () => undefined);
+  await tool('edit', { path: 'f.txt', edits: [{ oldText: 'not in the file', newText: 'y' }] }); // Pi's tool refuses it.
+  await tool('read', { path: 'f.txt' });
+  await tool('bash', { command: 'true' });
   await delay(100);
   assert.deepEqual(await shown(code), ['', 1]);
   await shutdown();
@@ -213,7 +223,7 @@ test('following survives /reload and session switches, and its status comes back
   const code = await layout();
   const path = join(dir, 'g.txt');
   await writeFile(path, lines(10));
-  await second.tool('edit', { path: 'g.txt', edits: [{ oldText: 'line 8\n', newText: 'eight\n' }] }, edit('line 8\n', 'eight\n'));
+  await second.tool('edit', { path: 'g.txt', edits: [{ oldText: 'line 8\n', newText: 'eight\n' }] });
   await showing(code, path, 8);
   await second.shutdown();
 });
@@ -240,7 +250,7 @@ test('Pi never waits on a busy editor', async () => {
   editor.notify('nvim_exec_lua', ['local s = vim.uv.hrtime(); while vim.uv.hrtime() - s < 1e9 do end', []]);
   await delay(50);
   const start = Date.now();
-  await tool('edit', { path: 'h.txt', edits: [{ oldText: 'line 6\n', newText: 'six\n' }] }, edit('line 6\n', 'six\n'));
+  await tool('edit', { path: 'h.txt', edits: [{ oldText: 'line 6\n', newText: 'six\n' }] });
   assert.ok(Date.now() - start < 500, `waited ${Date.now() - start} ms`);
   await showing(code, path, 6); // Shown once the editor is free.
   await shutdown();
@@ -252,7 +262,7 @@ test('changes to several files in a row are shown in turn, ending on the last', 
   await follow('on');
   for (const name of ['i.txt', 'j.txt', 'k.txt']) await writeFile(join(dir, name), lines(10));
   for (const [n, name] of ['i.txt', 'j.txt', 'k.txt'].entries()) {
-    await tool('edit', { path: name, edits: [{ oldText: `line ${n + 2}\n`, newText: 'x\n' }] }, edit(`line ${n + 2}\n`, 'x\n'));
+    await tool('edit', { path: name, edits: [{ oldText: `line ${n + 2}\n`, newText: 'x\n' }] });
   }
   await showing(code, join(dir, 'k.txt'), 4);
   // Each file visited stays loaded, reread, with what Pi wrote.
@@ -290,7 +300,7 @@ test('reads are followed only when asked for, at what was read, in their own hig
   await showing(code, path, 40);
   assert.deepEqual(await eventually(() => highlight(code)), [40, 49, 'PiFollowRead']);
   // Edits keep their own highlight.
-  await tool('edit', { path: 'r.txt', edits: [{ oldText: 'line 70\n', newText: 'seventy\n' }] }, edit('line 70\n', 'seventy\n'));
+  await tool('edit', { path: 'r.txt', edits: [{ oldText: 'line 70\n', newText: 'seventy\n' }] });
   await showing(code, path, 70);
   assert.deepEqual(await eventually(async () => { const h = await highlight(code); return h && h[0] === 70 && h; }), [70, 70, 'PiFollow']);
   await shutdown();
@@ -316,8 +326,8 @@ test('image reads and failed reads are not followed', async () => {
   await writeFile(join(dir, 'picture.png'), 'not really an image');
   await writeFile(join(dir, 't.txt'), lines(5));
   await follow('all');
-  await tool('read', { path: 'picture.png' }, undefined, false, [{ type: 'text' }, { type: 'image' }]);
-  await tool('read', { path: 't.txt', offset: 3 }, undefined, true);
+  await tool('read', { path: 'picture.png' }, { content: [{ type: 'text' }, { type: 'image' }] });
+  await tool('read', { path: 't.txt', offset: 3 }, { isError: true });
   await delay(100);
   assert.deepEqual(await shown(code), ['', 1]);
   await shutdown();
@@ -365,4 +375,19 @@ test('following all survives /reload too', async () => {
   const second = await pi();
   await eventually(() => second.status['nvim-follow'] === 'following all');
   await second.shutdown();
+});
+
+test('an edit result without a patch (from another edit tool) falls back to its first changed line, or just the file', async () => {
+  const { follow, tool, shutdown } = await pi();
+  const code = await layout();
+  const path = join(dir, 'other.txt');
+  await writeFile(path, lines(40));
+  await follow('on');
+  await tool('edit', { path: 'other.txt' }, { details: { firstChangedLine: 33 } });
+  await showing(code, path, 33);
+  await lua('vim.api.nvim_win_set_cursor(..., { 5, 0 })', code);
+  await tool('edit', { path: 'other.txt' }, { details: {} });
+  await delay(100);
+  assert.deepEqual(await shown(code), [path, 5]); // Opened, the cursor left alone.
+  await shutdown();
 });

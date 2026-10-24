@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 export const FOLLOW = readFileSync(new URL('./follow.lua', import.meta.url), 'utf8');
 
-export type Edit = { oldText: string; newText: string };
 /** 1-based, inclusive lines of the file after the change. */
 export type Range = [first: number, last: number];
 
@@ -24,14 +23,6 @@ export function pathOf(input: Record<string, unknown>, cwd: string): string | un
   else if (path.startsWith('file://')) path = fileURLToPath(path);
   return isAbsolute(path) ? resolve(path) : resolve(cwd, path);
 }
-
-/** The edit tool's replacements, in its current form or the legacy single one. */
-export function editsOf(input: Record<string, unknown>): Edit[] {
-  if (Array.isArray(input.edits)) return input.edits.filter(isEdit);
-  return isEdit(input) ? [{ oldText: input.oldText, newText: input.newText }] : [];
-}
-const isEdit = (value: unknown): value is Edit =>
-  typeof (value as Edit)?.oldText === 'string' && typeof (value as Edit)?.newText === 'string';
 
 const newlines = (text: string) => text.split('\n').length - 1;
 const linesOf = (text: string) => {
@@ -93,32 +84,39 @@ function changes(spans: { start: number; end: number }[], after: string): Change
 }
 
 /**
- * Where each edit landed, narrowed to what it changed: the context an old text carries to be
- * unique, which its new text repeats, is left out. An old text is unique in the file before,
- * while a new text may also occur elsewhere, so edits are placed by where their old text was,
- * shifted by the edits above them, and that is checked against the file after. An edit the
- * tool matched loosely (other whitespace or line endings) is placed by its new text instead,
- * if that occurs exactly once after.
+ * Where an edit landed, from the unified patch Pi's edit tool returns with it (its details'
+ * `patch`): Pi's own diff of the file it wrote, loose matches, line endings and all. Each run
+ * of removed and added lines between unchanged ones is one change: lines added, lines removed
+ * (marked where they were), or lines changed, the cursor on the first character that differs.
  */
-export function editChanges(before: string, after: string, edits: Edit[]): Changes {
-  const located = edits
-    .map(edit => ({ ...edit, at: edit.oldText ? before.indexOf(edit.oldText) : -1 }))
-    .sort((a, b) => a.at - b.at);
-  const spans: { start: number; end: number }[] = [];
-  let shift = 0;
-  for (const { oldText, newText, at } of located) {
-    const placed = at >= 0 ? at + shift : -1;
-    if (at >= 0) shift += newText.length - oldText.length;
-    if (placed >= 0 && after.startsWith(newText, placed)) {
-      const [prefix, suffix] = shared(oldText, newText);
-      spans.push(narrow(before, after, at + prefix, at + oldText.length - suffix, placed + prefix, placed + newText.length - suffix));
+export function patchChanges(patch: string): Changes {
+  const ranges: Range[] = [];
+  let cursor: Cursor | undefined;
+  let line = 0, removed: string[] = [], added: string[] = [];
+  const close = () => {
+    if (!removed.length && !added.length) return;
+    const at = line - added.length; // Where this run starts in the file after.
+    ranges.push([at, Math.max(at, at + added.length - 1)]);
+    cursor ??= [at, removed.length && added.length ? Buffer.byteLength(added[0].slice(0, shared(removed[0], added[0])[0])) : 0];
+    removed = [];
+    added = [];
+  };
+  for (const text of patch.split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);
+    if (hunk) {
+      close();
+      // An empty range names the line before it.
+      line = Number(hunk[1]) + (hunk[2] === '0' ? 1 : 0);
       continue;
     }
-    const found = newText ? after.indexOf(newText) : -1;
-    if (found < 0 || after.indexOf(newText, found + 1) >= 0) continue;
-    spans.push({ start: found, end: found + newText.length });
+    if (!line) continue; // The file headers, before the first hunk.
+    if (text.startsWith('+')) { added.push(text.slice(1)); line++; }
+    else if (text.startsWith('-')) removed.push(text.slice(1));
+    else if (text.startsWith(' ')) { close(); line++; }
+    // "\ No newline at end of file" says nothing about where.
   }
-  return changes(spans, after);
+  close();
+  return { ranges, cursor };
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { readFile } from 'node:fs/promises';
 import { useRemote } from '../nvim-remote/api.ts';
-import { FOLLOW, editChanges, editsOf, pathOf, readRanges, writeChanges, type Changes } from './core.ts';
+import { FOLLOW, patchChanges, pathOf, readRanges, writeChanges, type Changes } from './core.ts';
 
 const HIGHLIGHT_MS = 1500;
 // Pi loads extensions afresh on /reload and for every session, in the same process; the
@@ -22,7 +22,8 @@ const modeOf = (mode: Mode) => MODES.find(m => m.value === mode)!;
 export default function (pi: ExtensionAPI) {
   const state = ((globalThis as { [STATE]?: State })[STATE] ??= { mode: 'off', last: 'on' });
   let context: ExtensionContext | undefined;
-  // Each file just before a change, by tool call: where the change landed is found from it.
+  // Each file just before a write, by tool call: what the write changed is found from it. An
+  // edit needs no such thing: its result carries Pi's own patch of what it did.
   const before = new Map<string, string | undefined>();
 
   // Shown only while attached: without an editor nothing is being followed.
@@ -30,7 +31,6 @@ export default function (pi: ExtensionAPI) {
   const nvim = useRemote(pi, show);
   pi.events.on('nvim-remote:stopped', show);
 
-  const changes = (name: string) => name === 'edit' || name === 'write';
 
   pi.on('session_start', (_event, ctx) => {
     context = ctx;
@@ -41,11 +41,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on('tool_call', async (event, ctx) => {
     const path = pathOf(event.input, ctx.cwd);
-    if (state.mode === 'off' || !changes(event.toolName) || !path || !nvim()) return;
+    if (state.mode === 'off' || event.toolName !== 'write' || !path || !nvim()) return;
     before.set(event.toolCallId, await readFile(path, 'utf8').catch(() => undefined));
   });
 
-  pi.on('tool_result', async (event, ctx) => {
+  pi.on('tool_result', (event, ctx) => {
     const old = before.get(event.toolCallId), had = before.has(event.toolCallId);
     before.delete(event.toolCallId);
     const path = pathOf(event.input, ctx.cwd);
@@ -59,12 +59,15 @@ export default function (pi: ExtensionAPI) {
       if (state.mode === 'all' && !event.content.some(block => block.type === 'image')) follow({ ranges: readRanges(event.input) }, 'PiFollowRead');
       return;
     }
-    if (!changes(event.toolName)) return;
-    const after = await readFile(path, 'utf8').catch(() => undefined);
-    if (after === undefined) return;
-    const changed = event.toolName === 'write'
-      ? writeChanges(had ? old : undefined, after)
-      : old === undefined ? { ranges: [] } : editChanges(old, after, editsOf(event.input));
+    if (event.toolName === 'edit') {
+      const details = event.details as { patch?: unknown; firstChangedLine?: unknown } | undefined;
+      const line = typeof details?.firstChangedLine === 'number' ? details.firstChangedLine : undefined;
+      // Without a patch (another edit tool, say), the first changed line if given, else just the file.
+      return follow(typeof details?.patch === 'string' ? patchChanges(details.patch)
+        : line ? { ranges: [[line, line]], cursor: [line, 0] } : { ranges: [] }, 'PiFollow');
+    }
+    if (event.toolName !== 'write' || typeof event.input.content !== 'string') return;
+    const changed = writeChanges(had ? old : undefined, event.input.content);
     follow(changed, 'PiFollow');
   });
 

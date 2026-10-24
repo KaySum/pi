@@ -1,12 +1,19 @@
 # nvim-follow
 
-Watch Pi work: with following on, every file Pi edits or writes opens in the Neovim Pi runs
-inside, at the lines it changed, which flash briefly. Pi keeps focus. Built on
+Watch Pi work: with following on, every file Pi edits or writes (and, if you like, reads)
+opens in the Neovim Pi runs inside, at the lines it changed, which flash briefly. Pi keeps focus. Built on
 [nvim-remote](../nvim-remote/README.md), and needs no install.
 
-`/follow` toggles it, `/follow on` and `/follow off` set it. It starts off, and keeps its
-setting across `/reload` and session switches until Pi exits. While it is on and Pi is
-attached, the status bar shows `following` (status key `nvim-follow`).
+| `/follow` | |
+| --- | --- |
+| `on` | Follow what Pi edits and writes. |
+| `all` | Follow what it reads as well. |
+| `off` | Stop following. |
+| *(nothing)* | Switch off, or back to whichever of `on` and `all` was last used. |
+
+The options are offered as completions after `/follow `. It starts off, and keeps its
+setting across `/reload` and session switches until Pi exits. While following and attached,
+the status bar shows `following edits` or `following all` (status key `nvim-follow`).
 
 ## What it does
 
@@ -21,8 +28,11 @@ attached, the status bar shows `following` (status key `nvim-follow`).
 - **What it leaves alone:** a buffer with unsaved changes is not reloaded over your work;
   your jumplist and alternate file stay yours, so `<C-o>` and `<C-^>` still go where you
   went.
-- **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `IncSearch`
-  unless you define it. A highlight still showing when Pi detaches goes with it.
+- **Reads:** a read is shown at the lines it asked for (`offset` and `limit`); one of a whole
+  file just opens it. Image reads and failed ones are not shown.
+- **Highlight:** the changed lines flash for 1.5 s in `PiFollow`, linked to `IncSearch`, and
+  the lines read in `PiFollowRead`, linked to `Visual`, unless you define them. A highlight
+  still showing when Pi detaches goes with it.
 
 Pi never waits on the editor: a busy or prompting one just misses a step.
 

@@ -37,7 +37,7 @@ async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<T>
   }
 }
 
-type Command = { handler(args: string, ctx: object): Promise<void> };
+type Command = { handler(args: string, ctx: object): Promise<void>; getArgumentCompletions?(prefix: string): unknown };
 
 /** Pi with nvim-remote and nvim-follow loaded, as at startup or after /reload, its session started. */
 async function pi() {
@@ -62,13 +62,14 @@ async function pi() {
   const follow = (args = '') => commands.follow.handler(args, ctx);
   let calls = 0;
   /** A tool call as Pi makes one: announced, carried out on disk, then its result. */
-  async function tool(toolName: string, input: Record<string, unknown>, change: (text: string | undefined) => string | undefined, isError = false) {
+  async function tool(toolName: string, input: Record<string, unknown>, change: (text: string | undefined) => string | undefined = () => undefined,
+    isError = false, content: { type: string }[] = []) {
     const toolCallId = `call-${++calls}`;
     await fire('tool_call', { toolName, toolCallId, input });
     const path = join(dir, String(input.path).replace(/^@/, ''));
     const next = change(await readFile(path, 'utf8').catch(() => undefined));
     if (next !== undefined) await writeFile(path, next);
-    await fire('tool_result', { toolName, toolCallId, input, isError, content: [] });
+    await fire('tool_result', { toolName, toolCallId, input, isError, content });
   }
   const shutdown = () => fire('session_shutdown', { reason: 'quit' });
   return { bus, commands, status, notes, ctx, fire, follow, tool, shutdown };
@@ -99,10 +100,10 @@ test('following is off until asked for, and the status says when it is on', asyn
   assert.equal(status['nvim-follow'], undefined);
 
   await follow();
-  assert.equal(status['nvim-follow'], 'following');
-  assert.deepEqual(notes.at(-1), ['Following on', 'info']);
+  assert.equal(status['nvim-follow'], 'following edits');
+  assert.deepEqual(notes.at(-1), ['Following edits', 'info']);
   await follow('on');
-  assert.equal(status['nvim-follow'], 'following');
+  assert.equal(status['nvim-follow'], 'following edits');
   await follow('off');
   assert.equal(status['nvim-follow'], undefined);
   assert.deepEqual(notes.at(-1), ['Following off', 'info']);
@@ -177,7 +178,7 @@ test('following survives /reload and session switches, and its status comes back
   await first.follow('on');
   await first.fire('session_shutdown', { reason: 'reload' });
   const second = await pi(); // Everything loaded afresh.
-  await eventually(() => second.status['nvim-follow'] === 'following');
+  await eventually(() => second.status['nvim-follow'] === 'following edits');
   const code = await layout();
   const path = join(dir, 'g.txt');
   await writeFile(path, lines(10));
@@ -193,9 +194,9 @@ test('without the editor the status goes, and comes back when it does; the setti
   await lua('vim.fn.chanclose(...)', remote.channel);
   await eventually(() => status['nvim-follow'] === undefined);
   await follow('on');
-  assert.deepEqual(notes.at(-1), ['Following on; Pi is not attached to Neovim, so there is nothing to follow yet', 'warning']);
+  assert.deepEqual(notes.at(-1), ['Following edits; Pi is not attached to Neovim, so there is nothing to follow yet', 'warning']);
   await commands['nvim-remote'].handler('reconnect', ctx);
-  await eventually(() => status['nvim-follow'] === 'following');
+  await eventually(() => status['nvim-follow'] === 'following edits');
   await shutdown();
 });
 
@@ -228,4 +229,109 @@ test('changes to several files in a row are shown in turn, ending on the last', 
     assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), select(2, ...), select(2, ...) + 1, true)[1]', join(dir, name), n + 1), 'x');
   }
   await shutdown();
+});
+
+// Reads
+
+const highlight = (win: number) => lua(`local w = ...
+  for _, c in pairs(require('nvim_remote.v1').contexts) do
+    if c.nvim_follow then
+      local m = vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(w), c.nvim_follow.ns, 0, -1, { details = true })[1]
+      if m then return { m[2] + 1, m[4].end_row, m[4].hl_group } end -- First and last line, 1-based.
+    end
+  end
+  return false`, win);
+
+test('reads are followed only when asked for, at what was read, in their own highlight', async () => {
+  const { follow, tool, status, notes, shutdown } = await pi();
+  const code = await layout();
+  const path = join(dir, 'r.txt');
+  await writeFile(path, lines(100));
+  await follow('on');
+  await tool('read', { path: 'r.txt', offset: 40, limit: 10 });
+  await delay(100);
+  assert.deepEqual(await shown(code), ['', 1]); // Edits only, so far.
+
+  await follow('all');
+  assert.equal(status['nvim-follow'], 'following all');
+  assert.deepEqual(notes.at(-1), ['Following edits and reads', 'info']);
+  await tool('read', { path: 'r.txt', offset: 40, limit: 10 });
+  await showing(code, path, 40);
+  assert.deepEqual(await eventually(() => highlight(code)), [40, 49, 'PiFollowRead']);
+  // Edits keep their own highlight.
+  await tool('edit', { path: 'r.txt', edits: [{ oldText: 'line 70\n', newText: 'seventy\n' }] }, edit('line 70\n', 'seventy\n'));
+  await showing(code, path, 70);
+  assert.deepEqual(await eventually(async () => { const h = await highlight(code); return h && h[0] === 70 && h; }), [70, 70, 'PiFollow']);
+  await shutdown();
+});
+
+test('a whole-file read opens the file without moving the cursor', async () => {
+  const { follow, tool, shutdown } = await pi();
+  const code = await layout();
+  const path = join(dir, 's.txt');
+  await writeFile(path, lines(50));
+  await follow('all');
+  await tool('read', { path: 's.txt', offset: 30 });
+  await showing(code, path, 30);
+  await tool('read', { path: 's.txt' });
+  await delay(100);
+  assert.deepEqual(await shown(code), [path, 30]);
+  await shutdown();
+});
+
+test('image reads and failed reads are not followed', async () => {
+  const { follow, tool, shutdown } = await pi();
+  const code = await layout();
+  await writeFile(join(dir, 'picture.png'), 'not really an image');
+  await writeFile(join(dir, 't.txt'), lines(5));
+  await follow('all');
+  await tool('read', { path: 'picture.png' }, undefined, false, [{ type: 'text' }, { type: 'image' }]);
+  await tool('read', { path: 't.txt', offset: 3 }, undefined, true);
+  await delay(100);
+  assert.deepEqual(await shown(code), ['', 1]);
+  await shutdown();
+});
+
+test('/follow takes one of three options; alone it switches off, or back to the last one on', async () => {
+  const { follow, status, notes, shutdown } = await pi();
+  const states: (string | undefined)[] = [];
+  for (const args of ['all', 'on', 'off', '', 'all', 'off', '', '']) {
+    await follow(args);
+    states.push(status['nvim-follow']);
+  }
+  assert.deepEqual(states, ['following all', 'following edits', undefined, 'following edits', 'following all', undefined, 'following all', undefined]);
+  assert.deepEqual(notes.slice(0, 3), [['Following edits and reads', 'info'], ['Following edits', 'info'], ['Following off', 'info']]);
+  await shutdown();
+});
+
+test('anything else /follow does not understand says how to use it, and changes nothing', async () => {
+  const { follow, status, notes, shutdown } = await pi();
+  await follow('on');
+  for (const args of ['sideways', 'reads', 'all off', 'ALL', 'al']) {
+    await follow(args);
+    assert.deepEqual(notes.at(-1), ['Usage: /follow [on|all|off]', 'warning']);
+    assert.equal(status['nvim-follow'], 'following edits');
+  }
+  await follow('  off  '); // Spaces around are fine.
+  assert.equal(status['nvim-follow'], undefined);
+  await shutdown();
+});
+
+test('the three options are offered as completions, with what each does', async () => {
+  const { commands, shutdown } = await pi();
+  const complete = (prefix: string) => commands.follow.getArgumentCompletions!(prefix) as { value: string; description: string }[] | null;
+  assert.deepEqual(complete('')?.map(item => item.value), ['on', 'all', 'off']);
+  assert.deepEqual(complete('o')?.map(item => item.value), ['on', 'off']);
+  assert.deepEqual(complete('a'), [{ value: 'all', label: 'all', description: 'Follow what Pi edits, writes and reads' }]);
+  assert.equal(complete('x'), null);
+  await shutdown();
+});
+
+test('following all survives /reload too', async () => {
+  const first = await pi();
+  await first.follow('all');
+  await first.fire('session_shutdown', { reason: 'reload' });
+  const second = await pi();
+  await eventually(() => second.status['nvim-follow'] === 'following all');
+  await second.shutdown();
 });

@@ -1,7 +1,7 @@
--- Show `path` in the editor at its changed `ranges` ({ first, last } lines), highlighted for
+-- Show `path` in the editor at `ranges` ({ first, last } lines), highlighted in `group` for
 -- `ms`. Runs through nvim-remote, with `remote` in scope. Returns what happened, so a file
 -- left alone can be told from one shown.
-local path, ranges, ms = ...
+local path, ranges, ms, group = ...
 
 -- This attachment's own highlights, apart from what other features put in remote.ns, and
 -- gone with it.
@@ -52,11 +52,12 @@ if not ok then return err end
 
 buf = vim.api.nvim_win_get_buf(win)
 vim.api.nvim_set_hl(0, 'PiFollow', { link = 'IncSearch', default = true })
+vim.api.nvim_set_hl(0, 'PiFollowRead', { link = 'Visual', default = true })
 vim.api.nvim_buf_clear_namespace(buf, state.ns, 0, -1)
 local count = vim.api.nvim_buf_line_count(buf)
 for _, range in ipairs(ranges) do
   vim.api.nvim_buf_set_extmark(buf, state.ns, math.min(range[1], count) - 1, 0,
-    { end_row = math.min(range[2], count), hl_group = 'PiFollow', hl_eol = true, strict = false })
+    { end_row = math.min(range[2], count), hl_group = group or 'PiFollow', hl_eol = true, strict = false })
 end
 -- Only the latest change's timer clears, so a quick second change keeps its highlight.
 state.shown = state.shown + 1

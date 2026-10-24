@@ -82,3 +82,14 @@ export function writeRanges(before: string | undefined, after: string): Range[] 
   const first = Math.min(start + 1, next.length);
   return [[first, Math.max(first, next.length - end)]];
 }
+
+/**
+ * What a read looked at: `offset` is its first line (1-based) and `limit` how many. A read
+ * from the top without a limit takes in the whole file, so it marks nothing.
+ */
+export function readRanges(input: Record<string, unknown>): Range[] {
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : undefined;
+  const first = Math.max(1, number(input.offset) ?? 1), limit = number(input.limit);
+  if (limit !== undefined && limit > 0) return [[first, first + limit - 1]];
+  return first > 1 ? [[first, first]] : [];
+}

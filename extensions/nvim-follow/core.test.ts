@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { editRanges, editsOf, pathOf, writeRanges } from './core.ts';
+import { editRanges, editsOf, pathOf, readRanges, writeRanges } from './core.ts';
 
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
 const apply = (text: string, edits: { oldText: string; newText: string }[]) =>
@@ -102,4 +102,23 @@ test('repeated lines and a missing final newline do not confuse the diff', () =>
   assert.deepEqual(writeRanges('a\na\na\n', 'a\na\na\na\n'), [[4, 4]]);
   assert.deepEqual(writeRanges('a\nb', 'a\nb\n'), []); // The same lines.
   assert.deepEqual(writeRanges('a\nb\n', 'a\nB'), [[2, 2]]);
+});
+
+// Reads
+
+test('a read marks the lines it asked for', () => {
+  assert.deepEqual(readRanges({ path: 'a', offset: 40, limit: 20 }), [[40, 59]]);
+  assert.deepEqual(readRanges({ path: 'a', limit: 10 }), [[1, 10]]); // From the top.
+  assert.deepEqual(readRanges({ path: 'a', offset: 300 }), [[300, 300]]); // Where it started, to the end.
+  assert.deepEqual(readRanges({ path: 'a' }), []); // The whole file.
+  assert.deepEqual(readRanges({ path: 'a', offset: 1 }), []);
+});
+
+test('odd offsets and limits are made sense of', () => {
+  assert.deepEqual(readRanges({ path: 'a', offset: 0, limit: 5 }), [[1, 5]]);
+  assert.deepEqual(readRanges({ path: 'a', offset: -3 }), []);
+  assert.deepEqual(readRanges({ path: 'a', offset: 7.8, limit: 2.5 }), [[7, 8]]);
+  assert.deepEqual(readRanges({ path: 'a', offset: 5, limit: 0 }), [[5, 5]]);
+  assert.deepEqual(readRanges({ path: 'a', offset: '5', limit: null }), []);
+  assert.deepEqual(readRanges({ path: 'a', offset: Infinity, limit: NaN }), []);
 });

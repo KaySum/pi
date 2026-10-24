@@ -31,6 +31,8 @@ Neovim it runs inside, when started from a Neovim terminal.
 [`nvim-follow`](extensions/nvim-follow/README.md) uses it to show Pi's edits there as they happen,
 and [`nvim-virtual-text`](extensions/nvim-virtual-text/README.md) lets other extensions annotate
 the code there with virtual text.
+[`nvim-view`](extensions/nvim-view/README.md) gives them what you see there: tabs, splits,
+windows, buffers and focus.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

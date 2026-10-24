@@ -7,8 +7,9 @@ const OUTPUT_LIMIT = 16384;
 const timeoutMs = Type.Optional(Type.Integer({ minimum: 100, maximum: 60000, description: 'Default 10000.' }));
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 // What a caught value says about a prompt: anything can be thrown or aborted with, null included.
-// An editor that did not answer in time: the deadline has passed, and nvim-remote said so.
-const timedOut = (error: unknown, end: number) => Date.now() >= end && /did not answer within/.test(errorText(error));
+// An editor that did not answer in time: the deadline has passed (the timer and the clock can
+// differ by a millisecond or so), and nvim-remote said so.
+const timedOut = (error: unknown, end: number) => Date.now() >= end - 20 && /did not answer within/.test(errorText(error));
 const atPrompt = (error: unknown) => (error as { blocking?: boolean } | null)?.blocking === true;
 
 function result(text: string) {
@@ -34,11 +35,14 @@ const PART_BYTES = 4096;
 // by number (Char-65, Char-0x41, Char-0101), a key's name (Esc, F12, lt, ScrollWheelUp) or any
 // one character, punctuation included (<C-]>, <C-\>, <C->>). Anything else is one character.
 const KEY = /<(?:[CSMADTcsmadt]-)*(?:[Cc][Hh][Aa][Rr]-(?:0[xX][0-9A-Fa-f]+|[0-9]+)|[A-Za-z0-9_]+|[^\s])>|[\s\S]/gu;
-// Refuses, with -1, while Pi's own terminal has focus; otherwise queues the keys. In one go in
-// the editor, so focus cannot move between the look and the typing.
-const TYPE = `local part = ...
-if vim.api.nvim_get_current_buf() == remote.terminal then return -1 end
-return vim.api.nvim_input(part)`;
+// Keys reach Pi itself only while its terminal is in terminal mode. Away from Pi's terminal
+// the whole part is queued; on it, only its first key, and none in terminal mode (-1): a key
+// that enters it may go in, the one after it may not. In one go in the editor, so neither
+// focus nor mode can change between the look and the typing.
+const TYPE = `local part, first = ...
+if vim.api.nvim_get_current_buf() ~= remote.terminal then return { written = vim.api.nvim_input(part), whole = true } end
+if vim.api.nvim_get_mode().mode:sub(1, 1) == 't' then return { written = -1, whole = false } end
+return { written = vim.api.nvim_input(first), whole = false }`;
 
 /** As many whole keys from `keys[from]` on as fit in PART_BYTES (at least one), and where the rest starts. */
 function partOf(keys: string[], from: number): [part: string, next: number] {
@@ -163,7 +167,7 @@ export default function (pi: ExtensionAPI) {
     name: 'nvim_control_keys',
     label: 'Neovim control keys',
     promptSnippet: "Type keys into the user's Neovim and see the resulting state",
-    description: "Type keys into the focused window of the user's Neovim, as they would, in Neovim notation (<Esc>, <CR>, <C-w>, <lt> for a literal <). Returns mode, buffer, cursor and the last message. Empty keys just looks. Refused while the focused window is Pi's own terminal, where keys would be typed into Pi: focus another window with nvim_control_lua first, or use nvim_control_lua instead.",
+    description: "Type keys into the focused window of the user's Neovim, as they would, in Neovim notation (<Esc>, <CR>, <C-w>, <lt> for a literal <). Returns mode, buffer, cursor and the last message. Empty keys just looks. Refused while Pi's own terminal is in terminal mode, where keys would be typed into Pi (in its other modes, such as at a dialog, keys go to Neovim and are typed one at a time): focus another window with nvim_control_lua first, or use nvim_control_lua instead.",
     executionMode: 'sequential',
     parameters: Type.Object({
       keys: Type.String({ description: 'Keys to type; may be empty.' }),
@@ -199,13 +203,19 @@ export default function (pi: ExtensionAPI) {
           // that answers it goes in that way. The keys after it may go anywhere once it closes,
           // so they wait for the check, as any others do.
           const { blocking } = await remote.request('nvim_get_mode', [], options) as { blocking: boolean };
-          const [part, next] = blocking ? [keys[at], at + 1] : partOf(keys, at);
+          let [part, next] = blocking ? [keys[at], at + 1] : partOf(keys, at);
+          let written: number;
+          if (blocking) written = await remote.request('nvim_input', [part], options) as number;
+          else {
+            const typing = await remote.lua(TYPE, [part, keys[at]], options) as { written: number; whole: boolean };
+            written = typing.written;
+            if (!typing.whole) [part, next] = [keys[at], at + 1]; // On Pi's terminal: one key at a time.
+          }
           at = next;
-          const written = blocking ? await remote.request('nvim_input', [part], options) as number : await remote.lua(TYPE, [part], options) as number;
           if (written < 0) {
             throw new Error(typed
-              ? `Stopped after typing ${typed} of ${total} bytes of keys: focus moved to Pi's own terminal, where the rest would be typed into Pi`
-              : "The focused window is Pi's own terminal, where these keys would be typed into Pi. Focus another window with nvim_control_lua first, or use nvim_control_lua.");
+              ? `Stopped after typing ${typed} of ${total} bytes of keys: Pi's own terminal is in terminal mode, where the rest would be typed into Pi`
+              : "Pi's own terminal has focus in terminal mode, where these keys would be typed into Pi. Focus another window with nvim_control_lua first, or use nvim_control_lua.");
           }
           typed += written;
           if (written < Buffer.byteLength(part)) {

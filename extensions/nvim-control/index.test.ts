@@ -69,6 +69,22 @@ async function attached(t: TestContext, options?: Parameters<typeof attach>[1]):
   return remote;
 }
 
+/** Resolves to what `check` returns once that is truthy. */
+async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<T> {
+  for (const end = Date.now() + ms; ; await delay(20)) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > end) assert.fail(`not within ${ms} ms`);
+  }
+}
+
+const mode = async () => ((await editor.request('nvim_get_mode', [])) as { mode: string }).mode;
+/** Back to normal mode, out of terminal or insert mode, as the user would get there. */
+async function normalMode() {
+  await editor.request('nvim_input', ['<C-\\><C-n><Esc>']);
+  await eventually(async () => ['n', 'nt'].includes(await mode()));
+}
+
 /** A scratch buffer focused in a normal window, as the user might have. */
 const scratch = () => lua(`vim.cmd('silent! only | enew!'); vim.bo.buftype = ''; return vim.api.nvim_get_current_buf()`);
 
@@ -195,8 +211,16 @@ test("nvim_control_keys will not type into Pi's own terminal, but can look at it
   t.after(() => lua('pcall(vim.api.nvim_buf_delete, ..., { force = true })', buf));
   const [child] = await lua('return vim.api.nvim_get_proc_children(...)', shell);
   const { run } = load(await attached(t, { pid: child }));
-  await assert.rejects(run('nvim_control_keys', { keys: 'echo hi<CR>' }), /Pi's own terminal.*Focus another window with nvim_control_lua first/);
-  assert.match(await run('nvim_control_keys', { keys: '' }), /\(your own terminal\)/);
+  // In terminal mode keys would reach Pi: refused, all of them.
+  await lua('vim.cmd.startinsert()');
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 't');
+  await assert.rejects(run('nvim_control_keys', { keys: 'echo hi<CR>' }), /Pi's own terminal has focus in terminal mode.*Focus another window with nvim_control_lua first/);
+  assert.match(await run('nvim_control_keys', { keys: '' }), /^mode t \| .*\(your own terminal\)/); // Looking is fine.
+  // Out of terminal mode the keys are Neovim's: a command line, say.
+  await lua('vim.cmd.stopinsert()');
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'nt');
+  assert.match(await run('nvim_control_keys', { keys: ':let g:from_pi_terminal = 1<CR>' }), /^mode nt \| /);
+  assert.equal(await lua('return vim.g.from_pi_terminal'), 1);
 });
 
 test('at a prompt, nvim_control_keys says so and can answer it; nvim_control_lua says to', async t => {
@@ -321,6 +345,7 @@ test('a key name with punctuation reaches Neovim whole, wherever it falls', asyn
 
 test("keys stop the moment Pi's own terminal takes focus, even partway through", async t => {
   // A terminal standing in for Pi's, attached as it, so it is remote.terminal.
+  await normalMode();
   const [term, job] = await lua(`vim.cmd('silent! only | enew!')
     local job = vim.fn.jobstart({ 'cat' }, { term = true })
     return { vim.api.nvim_get_current_buf(), vim.fn.jobpid(job) }`);
@@ -334,14 +359,18 @@ test("keys stop the moment Pi's own terminal takes focus, even partway through",
     async lua(code: string, args: unknown[], options?: object) {
       const value = await remote.lua(code, args, options);
       if (code.includes('nvim_input') && ++parts === 1) {
-        await lua(`vim.cmd.stopinsert(); vim.api.nvim_set_current_buf(...)`, term);
+        // As when the user goes back to Pi's terminal to type, between parts: in terminal mode.
+        while (await lua('return vim.fn.getchar(1) ~= 0')) await delay(10);
+        await normalMode();
+        await lua('vim.api.nvim_set_current_buf(...); vim.cmd.startinsert()', term);
+        await eventually(async () => (await mode()) === 't');
       }
       return value;
     },
   }) as Remote;
   const { run } = load(watched);
   await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(5000)}UNSAFE_SUFFIX<CR>` }),
-    /Stopped after typing 4096 of \d+ bytes of keys: focus moved to Pi's own terminal/);
+    /Stopped after typing 4096 of \d+ bytes of keys: Pi's own terminal is in terminal mode/);
   assert.equal(parts, 2); // The second part was refused, not typed.
   await delay(100);
   assert.ok(!(await lua('return table.concat(vim.api.nvim_buf_get_lines(..., 0, -1, false), "\\n")', term)).includes('UNSAFE_SUFFIX'));
@@ -359,7 +388,7 @@ function typing(remote: Remote, part: (n: number, type: () => Promise<unknown>) 
 }
 
 test('a part Neovim takes only some of is reported, and nothing after it is typed', async t => {
-  const { remote, parts } = typing(await attached(t), async (n, type) => n === 2 ? 512 : type()); // Says it took 512 bytes.
+  const { remote, parts } = typing(await attached(t), async (n, type) => n === 2 ? { written: 512, whole: true } : type()); // Says it took 512 bytes.
   const { run } = load(remote);
   const buf = await scratch();
   await assert.rejects(run('nvim_control_keys', { keys: `i${'x'.repeat(10000)}<Esc>` }), /took only 512 of 4096 bytes of keys; the rest were not typed/);
@@ -384,6 +413,7 @@ test('stopping the call between parts types nothing more', async t => {
 });
 
 test("answering a prompt does not let the keys after the answer into Pi's terminal", async t => {
+  await normalMode();
   const [term, job] = await lua(`vim.cmd('silent! only | enew!')
     local job = vim.fn.jobstart({ 'cat' }, { term = true })
     return { vim.api.nvim_get_current_buf(), vim.fn.jobpid(job) }`);
@@ -399,10 +429,12 @@ test("answering a prompt does not let the keys after the answer into Pi's termin
   try {
     // Focus on Pi's terminal, a prompt open over it: the answer goes in, the rest does not.
     await prompt();
-    await assert.rejects(run('nvim_control_keys', { keys: '<CR>iPROMPT_SUFFIX<CR>' }), /Stopped after typing 4 of \d+ bytes of keys: focus moved to Pi's own terminal/);
+    // <CR> answers it, i enters terminal mode, and nothing after that goes in.
+    await assert.rejects(run('nvim_control_keys', { keys: '<CR>iPROMPT_SUFFIX<CR>' }), /Stopped after typing 5 of \d+ bytes of keys: Pi's own terminal is in terminal mode/);
     await delay(100);
     assert.ok(!(await lua('return table.concat(vim.api.nvim_buf_get_lines(..., 0, -1, false), "\\n")', term)).includes('PROMPT_SUFFIX'));
-    // Only answering it is fine.
+    // Only answering it is fine. (The i above did enter terminal mode: out of it first.)
+    await normalMode();
     await prompt();
     assert.match(await run('nvim_control_keys', { keys: '<CR>' }), /^mode nt \| .*\(your own terminal\)/); // Normal mode, in a terminal.
   } finally {
@@ -518,4 +550,50 @@ test("a cancellation mid-call is passed on as it is, even one that looks like th
       await drained();
     }
   }
+});
+
+/** Pi's terminal, standing in with `cat`, focused out of terminal mode, and an attachment as Pi. */
+async function piTerminal(t: TestContext) {
+  await normalMode();
+  const [term, job] = await lua(`vim.cmd('silent! only | enew!')
+    local job = vim.fn.jobstart({ 'cat' }, { term = true })
+    return { vim.api.nvim_get_current_buf(), vim.fn.jobpid(job) }`);
+  t.after(() => lua('pcall(vim.api.nvim_buf_delete, ..., { force = true })', term));
+  const remote = await attached(t, { pid: job });
+  assert.equal(remote.info.terminal, term);
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'nt');
+  const received = async () => lua('return table.concat(vim.api.nvim_buf_get_lines(..., 0, -1, false), "\\n")', term) as Promise<string>;
+  return { term, run: load(remote).run, received };
+}
+
+test("a confirm dialog over Pi's terminal can be answered", async t => {
+  const { run, received } = await piTerminal(t);
+  await editor.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]); // Dialogs need a screen.
+  t.after(() => editor.request('nvim_ui_detach'));
+  for (const [keys, answer] of [['y', 1], ['n', 2], ['<CR>', 1]] as const) {
+    await lua('vim.g.answer = nil');
+    editor.notify('nvim_exec_lua', ['vim.g.answer = vim.fn.confirm("Go on?", "&Yes\\n&No")', []]);
+    await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'r?');
+    await run('nvim_control_keys', { keys });
+    assert.equal(await eventually(() => lua('return vim.g.answer')), answer, keys);
+  }
+  assert.doesNotMatch(await received(), /[yn]/); // None of it reached Pi.
+});
+
+test("an input dialog over Pi's terminal can be answered, one key at a time", async t => {
+  const { run, received } = await piTerminal(t);
+  editor.notify('nvim_exec_lua', ['vim.g.name = vim.fn.input("Name? ")', []]);
+  await eventually(async () => (await editor.request('nvim_get_mode', [])).mode === 'c');
+  await run('nvim_control_keys', { keys: 'Pi λ🦀<CR>' });
+  assert.equal(await eventually(() => lua('return vim.g.name')), 'Pi λ🦀');
+  assert.doesNotMatch(await received(), /Pi/);
+});
+
+test("window commands work from Pi's terminal", async t => {
+  const { term, run } = await piTerminal(t);
+  await lua(`vim.cmd('vsplit | enew!'); vim.api.nvim_set_current_win(vim.fn.win_getid(vim.fn.bufwinnr(...)))`, term);
+  await eventually(async () => (await lua('return vim.api.nvim_get_current_buf()')) === term);
+  const state = await run('nvim_control_keys', { keys: '<C-w>w' });
+  assert.doesNotMatch(state, /your own terminal/);
+  assert.notEqual(await lua('return vim.api.nvim_get_current_buf()'), term);
 });

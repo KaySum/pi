@@ -28,13 +28,15 @@ changes, or write buffers you are editing without being asked.
 
 ## Typing keys
 
-Keys go to the window that has focus, which while you talk to Pi is Pi's own terminal: they
-would be typed into Pi. `nvim_control_keys` refuses then; the model can focus another window with
-`nvim_control_lua` first (taking your focus there too), or do the work with `nvim_control_lua`, which
-needs no focus. It looks again before each part of long keys, in the same step as typing it,
-so if you put focus on Pi's terminal partway it stops there and says how much was typed.
-(Keys are queued, then taken a moment later: a change of focus in that moment cannot be
-seen.)
+Keys go to the window that has focus, which while you talk to Pi is usually Pi's own
+terminal. Keys reach Pi itself only while that terminal is in terminal mode, so that is the one
+place `nvim_control_keys` will not type: it refuses then, and the model can focus another window
+with `nvim_control_lua` first (taking your focus there too), or do the work with
+`nvim_control_lua`, which needs no focus. In the terminal's other modes, at a dialog or the
+command line say, keys go to Neovim, and are typed one at a time with the check before each; a
+key that enters terminal mode may go in, the one after it may not. The check and the typing are
+one step in the editor, so focus and mode cannot change between them. (Keys are queued, then
+taken a moment later: a change in that moment cannot be seen.)
 
 A busy editor (in Lua, a plugin's say) still answers calls but takes in typed keys only when
 it is done, so `nvim_control_keys` waits until they are taken before saying what they did. Neovim

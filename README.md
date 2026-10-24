@@ -28,6 +28,8 @@ npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
 [`nvim-refactor`](extensions/nvim-refactor/README.md) build on it and need no install.
 [`nvim-remote`](extensions/nvim-remote/README.md) reuses its RPC client to let Pi control the
 Neovim it runs inside, when started from a Neovim terminal.
+[`nvim-control`](extensions/nvim-control/README.md) builds on it to let the model
+control that editor, as nvim-service lets it control its own.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

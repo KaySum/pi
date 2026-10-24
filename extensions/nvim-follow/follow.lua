@@ -8,7 +8,7 @@ local path, ranges, ms, group, cursor = ...
 -- gone with it.
 local state = remote.nvim_follow
 if not state then
-  state = { ns = vim.api.nvim_create_namespace('nvim-follow.' .. remote.channel), shown = 0 }
+  state = { ns = vim.api.nvim_create_namespace('nvim-follow.' .. remote.channel), shown = {} }
   remote.nvim_follow = state
   remote.on_detach(function()
     for _, b in ipairs(vim.api.nvim_list_bufs()) do vim.api.nvim_buf_clear_namespace(b, state.ns, 0, -1) end
@@ -60,11 +60,12 @@ for _, range in ipairs(ranges) do
   vim.api.nvim_buf_set_extmark(buf, state.ns, math.min(range[1], count) - 1, 0,
     { end_row = math.min(range[2], count), hl_group = group or 'PiFollow', hl_eol = true, strict = false })
 end
--- Only the latest change's timer clears, so a quick second change keeps its highlight.
-state.shown = state.shown + 1
-local shown = state.shown
+-- Only the latest change to a buffer clears it, so a quick second change keeps its highlight;
+-- counted by buffer, so a change to another file does not stop this one clearing.
+state.shown[buf] = (state.shown[buf] or 0) + 1
+local shown = state.shown[buf]
 vim.defer_fn(function()
-  if state.shown == shown and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, state.ns, 0, -1) end
+  if state.shown[buf] == shown and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, state.ns, 0, -1) end
 end, ms)
 
 if cursor == vim.NIL then cursor = nil end

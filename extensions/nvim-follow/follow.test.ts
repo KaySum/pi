@@ -236,6 +236,20 @@ test('the changed lines flash, then clear; a quick second change keeps its own',
   assert.deepEqual(await marks(code), [[5, 6]]);
 });
 
+test('changes to two files in quick succession both clear', async t => {
+  const { code } = await layout(t);
+  const a = await file('qa.txt', lines(5)), b = await file('qb.txt', lines(5));
+  await follow(a, [[2, 2]], 150);
+  await delay(50);
+  await follow(b, [[3, 3]], 150); // Before the first file's highlight has cleared.
+  const left = () => lua(`local ns = require('nvim_remote.v1').contexts[${remote.channel}].nvim_follow.ns
+    local n = 0
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do n = n + #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {}) end
+    return n`);
+  await eventually(async () => (await left()) === 0);
+  void code;
+});
+
 test('highlights live apart from what other features put in remote.ns, and go on detach', async t => {
   const { code } = await layout(t);
   const own = await attach(socket, { onError: () => {} });

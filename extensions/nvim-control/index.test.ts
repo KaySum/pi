@@ -22,8 +22,11 @@ const editor = await connect(socket); // The user.
 after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
 
-// The Neovim these tests may run under stays out of them.
-const clean = () => { process.env.NVIM = socket; };
+// The Neovim these tests may run under stays out of them; control starts on each time.
+const clean = () => {
+  process.env.NVIM = socket;
+  delete (globalThis as Record<symbol, unknown>)[Symbol.for('pi.nvim-control')];
+};
 clean();
 afterEach(clean);
 
@@ -32,17 +35,27 @@ type Tool = {
   execute(id: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{ content: { text: string }[] }>;
 };
 
-/** The extension loaded into a Pi whose nvim-remote hands out `remote` (or nothing). */
+type Command = { handler(args: string, ctx: object): Promise<void>; getArgumentCompletions?(prefix: string): unknown };
+
+/** The extension loaded into a Pi whose nvim-remote hands out `remote` (or nothing), its session started. */
 function load(remote?: Remote) {
   const bus = new EventEmitter(), hooks = new EventEmitter(), tools: Record<string, Tool> = {};
+  const commands: Record<string, Command> = {}, notes: [string, string | undefined][] = [];
+  let active = ['read', 'bash']; // Pi's own, which control must leave alone.
   register({
     events: { on: (channel: string, handler: (data: unknown) => void) => bus.on(channel, handler), emit: (channel: string, data: unknown) => bus.emit(channel, data) },
     on: (event: string, handler: () => void) => hooks.on(event, handler),
-    registerTool: (tool: Tool) => { tools[tool.name] = tool; },
+    registerTool: (tool: Tool) => { tools[tool.name] = tool; active.push(tool.name); }, // Active once registered, as in Pi.
+    registerCommand: (name: string, command: Command) => { commands[name] = command; },
+    getActiveTools: () => [...active],
+    setActiveTools: (names: string[]) => { active = [...names]; },
   } as unknown as ExtensionAPI);
   bus.on('nvim-remote:get', (request: { reply(handle?: Remote): void }) => request.reply(remote));
+  const ctx = { hasUI: true, ui: { notify: (text: string, type?: string) => notes.push([text, type]) } };
+  hooks.listeners('session_start').forEach(handler => handler({ reason: 'startup' }, ctx));
   const run = async (name: string, params: Record<string, unknown>) => (await tools[name].execute('id', params)).content[0].text;
-  return { tools, run };
+  const command = (args = '') => commands['nvim-control'].handler(args, ctx);
+  return { tools, run, commands, command, notes, active: () => active };
 }
 
 async function attached(t: TestContext, options?: Parameters<typeof attach>[1]): Promise<Remote> {
@@ -54,9 +67,11 @@ async function attached(t: TestContext, options?: Parameters<typeof attach>[1]):
 /** A scratch buffer focused in a normal window, as the user might have. */
 const scratch = () => lua(`vim.cmd('silent! only | enew!'); vim.bo.buftype = ''; return vim.api.nvim_get_current_buf()`);
 
-test('outside Neovim there are no tools, so they cost nothing', () => {
+test('outside Neovim there are no tools, so they cost nothing, and no command', () => {
   delete process.env.NVIM;
-  assert.deepEqual(Object.keys(load().tools), []);
+  const { tools, commands } = load();
+  assert.deepEqual(Object.keys(tools), []);
+  assert.deepEqual(Object.keys(commands), []);
 });
 
 test("inside, two tools for the user's editor, each told apart from the private instance's", () => {
@@ -170,4 +185,57 @@ test('at a prompt, editor_keys says so and can answer it; editor_lua says to', a
     await delay(50);
     await editor.request('nvim_ui_detach');
   }
+});
+
+// /nvim-control
+
+const ours = (active: string[]) => active.filter(name => name.startsWith('editor_'));
+
+test("control starts on: the model has the editor's tools", () => {
+  const { active } = load();
+  assert.deepEqual(ours(active()).sort(), ['editor_keys', 'editor_lua']);
+});
+
+test('/nvim-control off takes the tools away from the model, and on gives them back; others stay', async () => {
+  const { command, active, notes } = load();
+  await command('off');
+  assert.deepEqual(active(), ['read', 'bash']);
+  assert.deepEqual(notes.at(-1), ['The model can no longer control your editor', 'info']);
+  await command('off'); // Already off: still off.
+  assert.deepEqual(active(), ['read', 'bash']);
+  await command('on');
+  assert.deepEqual(active(), ['read', 'bash', 'editor_lua', 'editor_keys']);
+  assert.deepEqual(notes.at(-1), ['The model can control your editor', 'info']);
+  await command('on'); // Not added twice.
+  assert.equal(ours(active()).length, 2);
+});
+
+test('/nvim-control alone toggles', async () => {
+  const { command, active } = load();
+  await command();
+  assert.deepEqual(ours(active()), []);
+  await command();
+  assert.equal(ours(active()).length, 2);
+});
+
+test('control stays off across /reload', async () => {
+  const first = load();
+  await first.command('off');
+  const second = load(); // Everything loaded afresh: the tools are registered, so active again,
+  assert.deepEqual(ours(second.active()), []); // until the session starts with control off.
+  await second.command('on');
+  assert.equal(ours(load().active()).length, 2);
+});
+
+test('/nvim-control offers its two options, and explains itself for anything else', async () => {
+  const { commands, command, notes, active } = load();
+  const complete = (prefix: string) => commands['nvim-control'].getArgumentCompletions!(prefix) as { value: string }[] | null;
+  assert.deepEqual(complete('')?.map(item => item.value), ['on', 'off']);
+  assert.deepEqual(complete('of')?.map(item => item.value), ['off']);
+  assert.equal(complete('x'), null);
+  for (const args of ['maybe', 'on off', 'OFF']) {
+    await command(args);
+    assert.deepEqual(notes.at(-1), ['Usage: /nvim-control [on|off]', 'warning']);
+  }
+  assert.equal(ours(active()).length, 2); // Nothing changed.
 });

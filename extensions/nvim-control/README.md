@@ -12,6 +12,12 @@ two tools' descriptions are in the system prompt.
 
 Both take `timeoutMs` (default 10000). Output is cut at 16 KB.
 
+`/nvim-control off` takes the tools away from the model, so it cannot use them and their
+descriptions leave the system prompt; `/nvim-control on` gives them back, and `/nvim-control`
+alone toggles. Control starts on, and keeps its setting across `/reload` and session
+switches until Pi exits. Toggling changes the system prompt, so Pi's prompt cache is rebuilt
+once on the next turn.
+
 `editor_lua` is arbitrary code running in your editor, with your unsaved buffers: the same
 trust as the bash tool, but where you are working. The model is told these are your editor,
 not its private instance, and never to quit Neovim, close Pi's terminal, discard unsaved

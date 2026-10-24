@@ -29,10 +29,48 @@ function describe(mode: string, s: State) {
     + (s.message ? ` | last message: ${s.message}` : '');
 }
 
+const TOOLS = ['editor_lua', 'editor_keys'];
+// Pi loads extensions afresh on /reload and for every session, in the same process; the
+// setting outlives this module there, and ends with Pi.
+const SETTING = Symbol.for('pi.nvim-control');
+type Setting = { on: boolean };
+const USAGE = 'Usage: /nvim-control [on|off]';
+
 export default function (pi: ExtensionAPI) {
   // Outside Neovim there is no editor to control, and no tools to cost the model anything.
   if (!process.env.NVIM) return;
+  const setting = ((globalThis as { [SETTING]?: Setting })[SETTING] ??= { on: true });
   const nvim = useRemote(pi);
+
+  // Off, the tools are not declared to the model: it cannot call them, and their descriptions
+  // leave the system prompt. Every other tool stays as it was.
+  function apply() {
+    const others = pi.getActiveTools().filter(name => !TOOLS.includes(name));
+    pi.setActiveTools(setting.on ? [...others, ...TOOLS] : others);
+  }
+
+  pi.on('session_start', () => {
+    if (!setting.on) apply(); // Registered tools start active.
+  });
+
+  pi.registerCommand('nvim-control', {
+    description: 'Let the model control the Neovim Pi runs inside (on) or not (off); alone, toggles',
+    getArgumentCompletions: prefix => {
+      const items = [
+        { value: 'on', label: 'on', description: 'Let the model control your editor' },
+        { value: 'off', label: 'off', description: 'Take its tools for your editor away' },
+      ].filter(item => item.value.startsWith(prefix.trim()));
+      return items.length ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const arg = args.trim();
+      const on = arg === 'on' ? true : arg === 'off' ? false : arg ? undefined : !setting.on;
+      if (on === undefined) return ctx.ui.notify(USAGE, 'warning');
+      setting.on = on;
+      apply();
+      ctx.ui.notify(on ? 'The model can control your editor' : 'The model can no longer control your editor', 'info');
+    },
+  });
 
   async function run<T>(ms: number | undefined, signal: AbortSignal | undefined, work: (remote: Remote, options: { timeout: number; signal?: AbortSignal }) => Promise<T>) {
     const remote = nvim();

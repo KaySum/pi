@@ -262,6 +262,26 @@ test('a refresh brings every extension the view it made, and one from a Pi gone 
   assert.equal(late.view(), undefined);
 });
 
+test('views keep coming while you type, not only once you stop', async () => {
+  const { view, changes, shutdown } = await pi();
+  try {
+    await eventually(() => view());
+    await delay(100);
+    const before = changes.length;
+    await editor.request('nvim_input', ['i']);
+    // Keystrokes closer together than a view's interval, for half a second.
+    for (let i = 0; i < 50; i++) {
+      await editor.request('nvim_input', ['x']);
+      await delay(10);
+    }
+    const during = changes.length - before;
+    await editor.request('nvim_input', ['<Esc>']);
+    assert.ok(during >= 5, `${during} views while typing`);
+    // Then, once you stop: all of it, and the mode you left in.
+    await eventually(() => { const v = changes.at(-1)!; return bufferOf(v, v.focus.buf)?.bytes === 51 && v.editor.mode === 'n'; });
+  } finally { await shutdown(); }
+});
+
 test('buffers no one sees and no one listed are counted, not listed', async () => {
   const { view, shutdown } = await pi();
   try {

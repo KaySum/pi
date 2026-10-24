@@ -34,17 +34,26 @@ const TYPE = `local part = ...
 if vim.api.nvim_get_current_buf() == remote.terminal then return -1 end
 return vim.api.nvim_input(part)`;
 
-/** `keys` cut into parts of at most PART_BYTES, never inside a key's name or a character. */
-export function parts(keys: string): string[] {
-  const out: string[] = [];
-  let part = '', bytes = 0;
-  for (const [key] of keys.matchAll(KEY)) {
-    const size = Buffer.byteLength(key);
-    if (bytes + size > PART_BYTES && part) { out.push(part); part = ''; bytes = 0; }
-    part += key;
+/** As many whole keys from `keys[from]` on as fit in PART_BYTES (at least one), and where the rest starts. */
+function partOf(keys: string[], from: number): [part: string, next: number] {
+  let text = '', bytes = 0, next = from;
+  for (; next < keys.length; next++) {
+    const size = Buffer.byteLength(keys[next]);
+    if (bytes + size > PART_BYTES && text) break;
+    text += keys[next];
     bytes += size;
   }
-  if (part) out.push(part);
+  return [text, next];
+}
+
+/** `keys` cut into parts of at most PART_BYTES, never inside a key's name or a character. */
+export function parts(keys: string): string[] {
+  const all = Array.from(keys.matchAll(KEY), ([key]) => key), out: string[] = [];
+  for (let at = 0; at < all.length;) {
+    const [text, next] = partOf(all, at);
+    out.push(text);
+    at = next;
+  }
   return out;
 }
 
@@ -164,10 +173,15 @@ export default function (pi: ExtensionAPI) {
       // Neovim's input buffer holds about 16 KB and takes only what fits, so the keys go in
       // parts well below that, each once the one before is taken.
       const total = Buffer.byteLength(params.keys);
+      const keys = Array.from(params.keys.matchAll(KEY), ([key]) => key);
       let typed = 0;
-      for (const part of parts(params.keys)) {
-        // At a prompt the editor runs no Lua, and the keys go to the prompt, not a terminal.
+      for (let at = 0; at < keys.length;) {
+        // At a prompt the editor runs no Lua, so the focus cannot be checked: only the one key
+        // that answers it goes in that way. The keys after it may go anywhere once it closes,
+        // so they wait for the check, as any others do.
         const { blocking } = await remote.request('nvim_get_mode', [], options) as { blocking: boolean };
+        const [part, next] = blocking ? [keys[at], at + 1] : partOf(keys, at);
+        at = next;
         const written = blocking ? await remote.request('nvim_input', [part], options) as number : await remote.lua(TYPE, [part], options) as number;
         if (written < 0) {
           throw new Error(typed

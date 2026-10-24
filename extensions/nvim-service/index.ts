@@ -59,6 +59,8 @@ export default function (pi: ExtensionAPI) {
       handle = Object.assign(nvim, { apiVersion: 1 as const, info, restart });
       process.env.PI_NVIM_SOCKET = info.socket;
       pi.events.emit('nvim-service:ready', handle);
+      const problems = await nvim.lua('return __pi_nvim_disable_problems and __pi_nvim_disable_problems() or ""').catch(() => '');
+      if (problems) warn(`nvim-service.json: ${problems}`);
     } catch (error) {
       if (service !== current) return;
       service = undefined;

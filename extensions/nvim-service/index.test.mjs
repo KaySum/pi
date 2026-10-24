@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { once, EventEmitter } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { useNvim } from './api.mjs';
 import { gone } from './test/helpers.mjs';
 
 process.env.PI_NVIM_INIT = 'NONE';
+// The user's own nvim-service.json stays out of the tests.
+const agentDir = process.env.PI_CODING_AGENT_DIR = await mkdtemp('/tmp/pi-nvim-agent-');
+after(() => rm(agentDir, { recursive: true, force: true }));
 // Load the real extension entry point, wired to the real service modules.
 const source = stripTypeScriptTypes(await readFile(new URL('./index.ts', import.meta.url), 'utf8'))
   .replace(/'(\.\/[a-z]+\.mjs|@earendil-works\/pi-ai|@earendil-works\/pi-coding-agent)'/g, (_, specifier) => JSON.stringify(import.meta.resolve(specifier)));
@@ -116,4 +120,13 @@ test('startup failure and an unexpected exit are reported, and recoverable', asy
   assert.throws(f.late, /unavailable/);
   assert.match(await f.call('nvim_restart'), /^Neovim restarted/);
   assert.equal(await f.call('nvim_lua', { code: 'return 2' }), '2');
+});
+
+test('plugins in nvim-service.json that stay enabled are warned about', async t => {
+  await writeFile(join(agentDir, 'nvim-service.json'), '{ "disabledPlugins": ["persistence.nvim"] }');
+  t.after(() => rm(join(agentDir, 'nvim-service.json')));
+  const f = fakePi(t);
+  assert.match(await f.command('restart'), /^info: Neovim PID \d+\n/);
+  assert.deepEqual(f.notes.filter(note => note.startsWith('warning')),
+    ['warning: nvim-service.json: lazy.nvim was not set up, so no plugin was disabled']);
 });

@@ -111,9 +111,12 @@ test('plugins named in the settings are disabled through lazy.nvim', async t => 
     "local M = { defaults = { defaults = {} } }\nfunction M.setup(opts) M.options = vim.tbl_deep_extend('force', M.defaults, opts) end\nreturn M");
   const init = join(directory, 'init.lua');
   await writeFile(init, `vim.opt.rtp:prepend(${JSON.stringify(join(directory, 'lazy'))})
-require('lazy.core.config').setup({ defaults = { cond = function(plugin) return plugin.name ~= 'user-off' end } })`);
+local Config = require('lazy.core.config')
+Config.setup({ defaults = { cond = function(plugin) return plugin.name ~= 'user-off' end } })
+-- What lazy.nvim would make of it: a spec's own \`cond\` keeps a plugin enabled.
+Config.plugins, Config.spec = { ['own-cond'] = {} }, { disabled = { ['pi-off'] = {} } }`);
   const settings = join(directory, 'nvim-service.json');
-  await writeFile(settings, JSON.stringify({ disabledPlugins: ['pi-off'] }));
+  await writeFile(settings, JSON.stringify({ disabledPlugins: ['pi-off', 'own-cond', 'missing'] }));
 
   const service = launch({ ...fast, init, settings });
   const rpc = await connectRpc((await service.ready).socket);
@@ -121,6 +124,8 @@ require('lazy.core.config').setup({ defaults = { cond = function(plugin) return 
   const conds = await rpc.request('nvim_exec_lua', [
     "local cond = require('lazy.core.config').options.defaults.cond\nreturn vim.tbl_map(function(name) return cond({ name = name }) end, { 'pi-off', 'user-off', 'on' })", []]);
   assert.deepEqual(conds, [false, false, true]);
+  assert.equal(await rpc.request('nvim_exec_lua', ['return __pi_nvim_disable_problems()', []]),
+    'own-cond is still enabled: its spec sets its own `cond`\nmissing is not a lazy.nvim plugin');
 
   await writeFile(settings, '{ "disabledPlugins": "pi-off" }');
   await assert.rejects(launch({ ...fast, init, settings }).ready, /must be JSON like/);

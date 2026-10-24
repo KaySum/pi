@@ -476,6 +476,17 @@ local function delete(buf, ns, extmarks)
 	end
 end
 
+-- Where on its line text in `position` goes: before the mark's columns, after them, or at 0.
+local function text_col(buf, spec, last)
+	local position = spec.position
+	if position == "overlay" or position == "inline" then
+		return spec.col or 0
+	elseif position == "after" then
+		return spec.endCol or #vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1]
+	end
+	return 0
+end
+
 -- `reuse`: the extmarks to draw over, by part, keeping their ids.
 local function render(buf, ns, spec, resolve, extmarks, reuse)
 	local needles = spec.match and needles_of(spec.match)
@@ -554,10 +565,9 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 				opts.virt_text_pos = POSITIONS[position]
 			end
 		end
-		local col = (position == "overlay" or position == "inline") and spec.col
-			or position == "after" and (spec.endCol or #vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1])
-			or 0
-		put("text", at, col, opts)
+		-- Text inserted where the mark ends goes after `after`'s text, as after the mark's end.
+		opts.right_gravity = position ~= "after"
+		put("text", at, text_col(buf, spec, last), opts)
 	end
 	return needles or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
 end
@@ -731,8 +741,14 @@ function state.update(group, id, patch)
 		given.path = nil
 	end
 	for key, value in pairs(patch) do
-		spec[key] = value ~= vim.NIL and value or nil
-		given[key] = spec[key]
+		if value == vim.NIL then
+			value = nil -- Taken away; `false` is a value, kept.
+		end
+		spec[key], given[key] = value, value
+	end
+	-- Turned off, `columns` takes the columns the match gave with it; any given stay.
+	if patch.columns ~= nil and not spec.columns and (mark.given or {}).columns then
+		spec.col, spec.endCol = given.col, given.endCol
 	end
 	local moves = vim.iter(WHERE):any(function(key)
 		return patch[key] ~= nil
@@ -810,6 +826,11 @@ local function astray(mark, spec)
 		local last = spec.position == "below" or spec.position == "after"
 		local line = part == "text" and last and (spec.endLine or spec.line) or spec.line
 		if not found[1] or found[3].invalid or found[1] ~= line - 1 then
+			return true
+		end
+		-- Text within the line, too, belongs where the mark's columns are.
+		local within = spec.position == "inline" or spec.position == "overlay" or spec.position == "after"
+		if part == "text" and within and found[2] ~= text_col(spec.buf, spec, line - 1) then
 			return true
 		end
 	end

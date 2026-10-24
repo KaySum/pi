@@ -337,6 +337,51 @@ test('a columns mark follows its text through edits and reloads, along its line 
   await assert.rejects(text.place({ path, line: 1, columns: true }), /columns needs a match/);
 });
 
+test('after text stays at the end of the match, whatever is typed there', async () => {
+  for (const [content, match] of [['target suffix\n', 'target'], ['call(\n  a) + 1\n', 'call(\na)']] as const) {
+    const path = await file(content);
+    await open(path);
+    await text.place({ path, match, columns: true, text: 'NOTE', position: 'after' });
+    const [mark] = await text.list();
+    await lua('local row, col = ...; vim.api.nvim_buf_set_text(0, row, col, row, col, { "EXTRA" })', mark.endLine! - 1, mark.endCol);
+    await delay(20);
+    const [moved] = await text.list();
+    assert.equal(moved.endCol, mark.endCol, match);
+    assert.deepEqual((await shown(path)).map(([row, col]) => [row, col]), [[mark.endLine! - 1, mark.endCol]], match);
+    await text.clear();
+  }
+});
+
+test('turning columns off marks the match\'s whole lines again; columns given stay through edits', async () => {
+  for (const off of [false, null]) {
+    const path = await file('prefix target tail\n');
+    const [id] = await text.place({ path, match: 'target', columns: true, highlight: 'Visual' });
+    await text.update(id, { columns: off });
+    const [, , col, span] = (await extmarks(path)).find(m => m[3].hl_group)!;
+    assert.deepEqual([col, span.hl_eol], [0, true], `columns: ${off}`);
+    await text.clear();
+  }
+  const path = await file('let total = 1;\n');
+  await open(path);
+  const [id] = await text.place({ path, line: 1, col: 4, endCol: 9, highlight: 'Visual' });
+  await lua('vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { "const " })');
+  await text.update(id, { highlight: 'Search' });
+  const [mark] = await text.list();
+  assert.deepEqual([mark.col, mark.endCol], [10, 15]);
+});
+
+test('false is a value an update keeps, so set knows the mark unchanged', async () => {
+  const path = await file('a\nb\nc\n');
+  await open(path);
+  const spec = { key: 'k', path, line: 2, text: 'note', position: 'below' as const, fill: true };
+  const [id] = await text.set([spec]);
+  await text.update(id, { fill: false });
+  assert.equal((await text.list())[0].fill, false);
+  await lua('vim.api.nvim_buf_set_lines(0, 0, 0, true, { "new" })');
+  await text.set([{ ...spec, fill: false }]); // Just as last given: left where it moved.
+  assert.deepEqual((await text.list()).map(m => [m.id, m.line]), [[id, 3]]);
+});
+
 test('reloaded from disk, marks move back onto their text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

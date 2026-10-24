@@ -79,3 +79,21 @@ test('close is reported once, whichever end closes', async t => {
   rpc.onClose(error => seen.push(`late: ${error.message}`));
   assert.deepEqual(seen, ['Neovim RPC connection closed', 'late: Neovim RPC connection closed']);
 });
+
+test('a request aborted while it waits rejects with the reason, however falsy', async t => {
+  const { rpc } = await open(t);
+  for (const reason of [null, 0, false, '', NaN, undefined]) {
+    const controller = new AbortController();
+    const pending = rpc.request('nvim_exec_lua', ['vim.wait(200)', []], controller.signal);
+    await new Promise(resolve => setTimeout(resolve, 20)); // Started, not answered.
+    controller.abort(reason);
+    await assert.rejects(pending, error => Object.is(error, reason === undefined ? controller.signal.reason : reason), String(reason));
+  }
+  assert.equal(await rpc.request('nvim_eval', ['1 + 1']), 2); // Still usable after.
+});
+
+test('a request that succeeds with nil resolves, and one that fails always rejects', async t => {
+  const { rpc, lua } = await open(t);
+  assert.equal(await lua('return nil'), null);
+  await assert.rejects(lua('error("")'), /Lua/); // An empty message is still a failure.
+});

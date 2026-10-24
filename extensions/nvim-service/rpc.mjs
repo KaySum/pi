@@ -15,13 +15,15 @@ export async function connectRpc(path, signal) {
   const closers = new Set();
   const opened = Promise.withResolvers();
   let nextId = 0;
-  let closed;
+  // Whether it is closed is kept apart from why: anything can be the reason, null included.
+  let closed = false, why;
 
   function close(error = new Error('Neovim RPC connection closed')) {
     if (closed) return;
-    closed = error;
+    closed = true;
+    why = error;
     opened.reject(error);
-    for (const finish of [...pending.values()]) finish(error);
+    for (const finish of [...pending.values()]) finish(true, error);
     socket.destroy();
     for (const handler of closers) try { handler(error); } catch { /* subscriber's problem */ }
   }
@@ -47,7 +49,7 @@ export async function connectRpc(path, signal) {
         if (!Array.isArray(message)) throw new Error('Invalid Neovim RPC message');
         const [type, a, b, c] = message;
         if (type === 1) {
-          pending.get(a)?.(b == null ? undefined : new Error(Array.isArray(b) ? String(b[1]) : String(b)), c);
+          pending.get(a)?.(b != null, b == null ? c : new Error(Array.isArray(b) ? String(b[1]) : String(b)));
         } else if (type === 0) void serve(a, b, c);
         else if (type === 2) {
           // One failing subscriber must not take the connection down with it.
@@ -62,12 +64,12 @@ export async function connectRpc(path, signal) {
   finally { signal?.removeEventListener('abort', abort); }
 
   return {
-    get closed() { return Boolean(closed); },
+    get closed() { return closed; },
     close: () => close(),
     notify: (method, args = []) => send([2, method, args]),
     /** Called once the connection closes, from either end (at once if it has); returns an unsubscribe. */
     onClose(handler) {
-      if (closed) { handler(closed); return () => {}; }
+      if (closed) { handler(why); return () => {}; }
       closers.add(handler);
       return () => closers.delete(handler);
     },
@@ -80,14 +82,15 @@ export async function connectRpc(path, signal) {
     request(method, args = [], requestSignal) {
       return new Promise((resolve, reject) => {
         requestSignal?.throwIfAborted();
-        if (closed) throw closed;
+        if (closed) throw why;
         const id = ++nextId;
-        const cancel = () => finish(requestSignal.reason);
-        const finish = (error, result) => {
+        const cancel = () => finish(true, requestSignal.reason);
+        // Whether it failed is said, not read from the value: a request can fail with null.
+        const finish = (failed, value) => {
           if (!pending.delete(id)) return;
           requestSignal?.removeEventListener('abort', cancel);
           if (!pending.size) socket.unref();
-          if (error) reject(error); else resolve(result);
+          if (failed) reject(value); else resolve(value);
         };
         pending.set(id, finish);
         requestSignal?.addEventListener('abort', cancel, { once: true });

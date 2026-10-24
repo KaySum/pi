@@ -15,8 +15,9 @@ local DEFAULTS = {
 
 local state = remote.nvim_virtual_text
 if not state then
-	-- `marks[id]` is { group, spec, ns, extmarks, generation }: `spec` is the mark as given,
-	-- its file resolved to `buf`; `extmarks[1]` spans its lines and moves with them.
+	-- `marks[id]` is { group, spec, ns, extmarks, anchor, generation }: `spec` is the mark as
+	-- given, its file resolved to `buf`; `extmarks[1]` spans its lines and moves with them, and
+	-- `anchor` is the text it was placed on, found again when the file is reloaded.
 	-- `styles` are the groups made from style tables.
 	state = { namespaces = {}, marks = {}, styles = {}, next = 0 }
 	remote.nvim_virtual_text = state
@@ -42,6 +43,14 @@ if not state then
 					state.marks[id] = nil
 				end
 			end
+		end,
+	})
+	-- Reloaded from disk, a buffer keeps its marks at the same line numbers, wherever its
+	-- text went; each is moved back onto its own. Edits within the buffer move them anyway.
+	vim.api.nvim_create_autocmd("BufReadPost", {
+		group = remote.group,
+		callback = function(ev)
+			state.reanchor(ev.buf)
 		end,
 	})
 end
@@ -201,32 +210,83 @@ local function virtual_lines(buf, spec, row)
 	end, lines)
 end
 
-local function draw(group, spec)
+-- What `match` looks for: its lines, without the space around them, each found within a line.
+local function needles_of(match)
+	local needles = vim.tbl_map(vim.trim, vim.split(match, "\n", { plain = true }))
+	while needles[#needles] == "" do
+		table.remove(needles)
+	end
+	while needles[1] == "" do
+		table.remove(needles, 1)
+	end
+	return #needles > 0 and needles or error("match is only space", 0)
+end
+
+local function holds(lines, needles, line)
+	for i, needle in ipairs(needles) do
+		local text = lines[line + i - 1]
+		if not (text and vim.trim(text):find(needle, 1, true)) then
+			return false
+		end
+	end
+	return true
+end
+
+-- The line nearest `near` where `needles` start, earlier on a tie.
+local function locate(buf, needles, near)
+	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
+	near = math.max(1, math.min(near, #lines))
+	if holds(lines, needles, near) then
+		return near
+	end
+	for distance = 1, #lines do
+		for _, line in ipairs({ near - distance, near + distance }) do
+			if line >= 1 and holds(lines, needles, line) then
+				return line
+			end
+		end
+	end
+end
+
+-- Draw `spec`; returns its namespace, extmarks and anchor. `strict`: a `match` not found
+-- fails, rather than leave the mark where it was.
+local function draw(group, spec, strict)
 	local buf, ns = buffer(spec), namespace(group)
 	spec.buf, spec.path = buf, nil
+	local needles = spec.match and needles_of(spec.match)
+	if needles then
+		local found = locate(buf, needles, spec.line or 1)
+		if not found and (strict or not spec.line) then
+			error(("not found in %s: %s"):format(vim.api.nvim_buf_get_name(buf), spec.match), 0)
+		end
+		spec.line = found or spec.line
+		spec.endLine = spec.line + #needles - 1
+	end
 	local count = vim.api.nvim_buf_line_count(buf)
 	local function row(line)
 		return math.max(1, math.min(line, count)) - 1
 	end
 	local first, last = row(spec.line), row(spec.endLine or spec.line)
+	local anchor = needles
+		or vim.tbl_map(vim.trim, vim.api.nvim_buf_get_lines(buf, first, last + 1, true))
 	local base = { priority = spec.priority, strict = false }
 
 	-- Whole lines unless columns are given: then a span of characters.
-	local anchor = vim.tbl_extend("force", base, { hl_group = highlight(spec.highlight) })
+	local span = vim.tbl_extend("force", base, { hl_group = highlight(spec.highlight) })
 	local col = 0
 	if spec.col or spec.endCol then
 		col = spec.col or 0
-		anchor.end_row = last
-		anchor.end_col = spec.endCol or #vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1]
+		span.end_row = last
+		span.end_col = spec.endCol or #vim.api.nvim_buf_get_lines(buf, last, last + 1, true)[1]
 	else
-		anchor.end_row, anchor.end_col, anchor.hl_eol = last + 1, 0, spec.highlight ~= nil
+		span.end_row, span.end_col, span.hl_eol = last + 1, 0, spec.highlight ~= nil
 	end
 	if spec.sign then
 		local sign = type(spec.sign) == "string" and { spec.sign } or spec.sign
-		anchor.sign_text = sign[1]
-		anchor.sign_hl_group = highlight(sign[2]) or highlight(spec.hl) or "PiVirtualText"
+		span.sign_text = sign[1]
+		span.sign_hl_group = highlight(sign[2]) or highlight(spec.hl) or "PiVirtualText"
 	end
-	local extmarks = { vim.api.nvim_buf_set_extmark(buf, ns, first, col, anchor) }
+	local extmarks = { vim.api.nvim_buf_set_extmark(buf, ns, first, col, span) }
 
 	if spec.text then
 		local position = spec.position or "eol"
@@ -251,7 +311,7 @@ local function draw(group, spec)
 		local at_col = (position == "overlay" or position == "inline") and spec.col or 0
 		table.insert(extmarks, vim.api.nvim_buf_set_extmark(buf, ns, at, at_col, vim.tbl_extend("force", base, opts)))
 	end
-	return ns, extmarks
+	return ns, extmarks, anchor
 end
 
 local function erase(mark)
@@ -287,11 +347,13 @@ local function current(mark)
 	return spec
 end
 
-local function draw_as(id, group, spec)
-	local mark = { group = group, spec = spec, generation = (state.marks[id] or { generation = 0 }).generation + 1 }
-	mark.ns, mark.extmarks = draw(group, spec)
+-- Draw `spec` as mark `id`. `moved`: only moved, so a `ttl` runs on as it was.
+local function draw_as(id, group, spec, strict, moved)
+	local generation = (state.marks[id] or { generation = 0 }).generation
+	local mark = { group = group, spec = spec, generation = moved and generation or generation + 1 }
+	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, strict)
 	state.marks[id] = mark
-	if spec.ttl then
+	if spec.ttl and not moved then
 		vim.defer_fn(function()
 			if state.marks[id] and state.marks[id].generation == mark.generation then
 				remove(id)
@@ -306,7 +368,7 @@ function state.place(group, marks)
 	local ids = {}
 	for _, spec in ipairs(marks) do
 		state.next = state.next + 1
-		draw_as(state.next, group, spec)
+		draw_as(state.next, group, spec, true)
 		table.insert(ids, state.next)
 	end
 	return ids
@@ -314,13 +376,14 @@ end
 
 --- Change the mark `id` of `group` by `patch`: what it does not give stays, and `vim.NIL`
 --- takes away. Lines and columns not given stay where edits have moved them. Returns
---- whether there was such a mark.
+--- whether there was such a mark; one that cannot be changed so stays as it was.
 function state.update(group, id, patch)
 	local mark = state.marks[id]
 	if not mark or mark.group ~= group then
 		return false
 	end
-	local spec = current(mark)
+	local before = current(mark)
+	local spec = vim.deepcopy(before)
 	if patch.path then
 		spec.buf = nil
 	end
@@ -328,12 +391,28 @@ function state.update(group, id, patch)
 		spec[key] = value ~= vim.NIL and value or nil
 	end
 	erase(mark)
-	local ok, err = pcall(draw_as, id, group, spec)
+	local ok, err = pcall(draw_as, id, group, spec, patch.match ~= nil)
 	if not ok then
-		state.marks[id] = nil
+		draw_as(id, group, before, false, true)
 		error(err, 0)
 	end
 	return true
+end
+
+--- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is.
+function state.reanchor(buf)
+	for id, mark in pairs(state.marks) do
+		if mark.spec.buf == buf then
+			local spec = current(mark)
+			local found = locate(buf, mark.anchor, spec.line)
+			if found and found ~= spec.line then
+				spec.endLine = spec.endLine and spec.endLine + found - spec.line
+				spec.line = found
+				erase(mark)
+				draw_as(id, mark.group, spec, false, true)
+			end
+		end
+	end
 end
 
 function state.remove(group, ids)

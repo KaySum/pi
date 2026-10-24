@@ -31,7 +31,12 @@ export type Mark = {
   /** Or a buffer, by number. */
   buf?: number;
   /** 1-based lines; `endLine` (default `line`) ends what `highlight` covers, and is where `below` goes. */
-  line: number; endLine?: number;
+  line?: number; endLine?: number;
+  /**
+   * Code to find instead, and mark the lines it is on: each of its lines within one of the
+   * buffer's, in order, the space around them aside. The occurrence nearest `line` wins.
+   */
+  match?: string;
   /** 0-based byte columns. Without them `highlight` covers whole lines, to the window's edge. */
   col?: number; endCol?: number;
   /** A string, or chunks in different highlights; a newline starts another line for `above` and `below`, and is a space elsewhere. */
@@ -56,7 +61,7 @@ export type Mark = {
 };
 
 /** A mark as `list` gives it: as placed and updated, where edits have moved it, its file found. */
-export type Placed = Mark & { id: number; group: string; buf: number; path: string };
+export type Placed = Mark & { id: number; group: string; buf: number; path: string; line: number };
 /** What `update` changes: `null` takes an option away. */
 export type Patch = { [K in keyof Mark]?: Mark[K] | null };
 type Where = { path?: string; buf?: number };
@@ -102,7 +107,7 @@ function check(mark: Patch) {
 
 function checkMark(mark: Mark) {
   if ((mark.path === undefined) === (mark.buf === undefined)) throw new Error('A mark needs a path or a buf, not both');
-  if (mark.line === undefined) throw new Error('A mark needs a line');
+  if (mark.line === undefined && !mark.match) throw new Error('A mark needs a line or a match');
   return check(mark);
 }
 

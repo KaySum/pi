@@ -26,7 +26,7 @@ export default function (pi) {
   pi.on('tool_result', async () => {
     const ids = await text()?.place([
       { path: '/abs/file.ts', line: 12, text: 'parses the header', hl: 'PiVirtualTextInfo' },
-      { path: '/abs/file.ts', line: 20, endLine: 24, highlight: 'Visual', sign: '▶',
+      { path: '/abs/file.ts', match: 'async function fetchAll(', highlight: 'Visual', sign: '▶',
         text: [['why: ', 'Title'], ['retries here before giving up']],
         position: 'above', indent: true, wrap: true },
       { path: '/abs/file.ts', line: 3, text: 'flash', hl: { fg: '#ff9e64', bold: true }, ttl: 1500 },
@@ -44,7 +44,7 @@ on every new attachment.
 | Member | Behavior |
 | --- | --- |
 | `place(marks, options?)` | Place one mark or several. Resolves to their ids, in order. A mark that can't be placed rejects the call, and the marks before it stay. |
-| `update(id, patch, options?)` | Change a mark and keep its id. What `patch` leaves out stays; `null` takes an option away. Lines and columns it doesn't give stay where edits have moved them, and a `ttl` starts again. Resolves to whether this group had such a mark. |
+| `update(id, patch, options?)` | Change a mark and keep its id. What `patch` leaves out stays; `null` takes an option away. Lines and columns it doesn't give stay where edits have moved them, and a `ttl` starts again. Resolves to whether this group had such a mark. One that can't be changed so (its new `match` isn't found, say) rejects, and the mark stays as it was. |
 | `remove(ids, options?)` | Remove marks by id. Ids already gone, or another group's, are ignored. |
 | `list(where?, options?)` | This group's marks, or only those in `{ path }` or `{ buf }`, in the order placed. Each is the mark as placed and updated, with its `id`, `group`, `buf` and `path`, and its lines and columns where edits have moved them. |
 | `clear(where?, options?)` | Remove this group's marks, or only those in `{ path }` or `{ buf }`. Resolves to how many went. |
@@ -55,6 +55,7 @@ on every new attachment.
 | --- | --- |
 | `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it. |
 | `line`, `endLine` | 1-based lines, clamped to the buffer. `endLine` (default `line`) ends the span `highlight` covers, and is where `below` goes. |
+| `match` | Code to find instead of giving lines: the mark covers the lines it's on. Each line of `match` must be found within one of the buffer's, in order, ignoring the whitespace around it, so quoted code needn't be indented as in the file. The occurrence nearest `line` wins (the first, without it). Not found, the call is rejected. |
 | `col`, `endCol` | 0-based byte columns: where `overlay` and `inline` go, and a character span for `highlight`. Without them `highlight` covers whole lines, to the window's edge. |
 | `text` | A string, or `[text, hl?]` chunks. A newline starts another line for `above` and `below`, and becomes a space elsewhere. |
 | `position` | `eol` (default), `right` (the window's edge), `overlay`, `inline`, `above`, `below`, or a number: that screen column, to line notes up. |
@@ -67,8 +68,10 @@ on every new attachment.
 | `ttl` | Remove the mark after this many milliseconds. |
 | `priority` | As for extmarks. |
 
-Marks are extmarks, so they move with the text as it's edited in the buffer. A file reloaded
-from disk keeps its marks at the same line numbers, wherever its text moved.
+Marks are extmarks, so they move with the text as it's edited in the buffer. Every mark also
+keeps the text of its lines (or its `match`). When the file is reloaded from disk (`:edit`,
+or autoread after Pi edits it), a mark whose lines no longer hold that text moves to the
+nearest place that does. A mark whose text is gone stays where it was.
 
 ## Development
 

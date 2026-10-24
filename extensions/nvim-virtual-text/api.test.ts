@@ -167,6 +167,55 @@ test('update changes a mark in place, keeping its id and where it moved', async 
   assert.equal(await virtualText(remote, 'other').update(id, { text: 'theirs' }), false);
 });
 
+test('match finds code by its text, the occurrence nearest line', async () => {
+  const path = await file('function a() {\n  return 1;\n}\nfunction b() {\n  return 1;\n}\n');
+  const [first, near] = await text.place([
+    { path, match: 'return 1;' },
+    { path, match: 'return 1;', line: 6 },
+  ]);
+  await text.place({ path, match: '\nfunction b() {\n    return 1;\n', highlight: 'Visual' }); // Indented otherwise.
+  const marks = await text.list();
+  assert.deepEqual(marks.map(m => [m.id, m.line, m.endLine]), [[first, 2, 2], [near, 5, 5], [near + 1, 4, 5]]);
+  await assert.rejects(text.place({ path, match: 'return 2;' }), /not found/);
+  await assert.rejects(text.place({ path, match: '\n  \n' }), /only space/);
+  await assert.rejects(text.place({ path }), /line or a match/);
+});
+
+test('reloaded from disk, marks move back onto their text', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  await open(path);
+  const [byLine, byMatch, span] = await text.place([
+    { path, line: 3, text: 'on c' },
+    { path, match: 'd', text: 'on d' },
+    { path, line: 2, endLine: 3, highlight: 'Visual' },
+  ]);
+  const lines = async () => Object.fromEntries((await text.list()).map(m => [m.id, [m.line, m.endLine]]));
+
+  await writeFile(path, 'new\nnew\na\nb\nc\nd\n');
+  await lua('vim.cmd.edit()');
+  assert.deepEqual(await lines(), { [byLine]: [5, 5], [byMatch]: [6, 6], [span]: [4, 5] });
+
+  // As autoread reloads it.
+  await delay(1100); // A change within the same second can go unseen.
+  await writeFile(path, 'new\na\nb\nc\nd\n');
+  await lua('vim.o.autoread = true; vim.cmd.checktime()');
+  assert.deepEqual(await lines(), { [byLine]: [4, 4], [byMatch]: [5, 5], [span]: [3, 4] });
+
+  // Text that is gone leaves its mark where it was.
+  await writeFile(path, 'x\ny\nz\nw\nv\n');
+  await lua('vim.cmd.edit()');
+  assert.deepEqual(await lines(), { [byLine]: [4, 4], [byMatch]: [5, 5], [span]: [3, 4] });
+});
+
+test('an update whose match is not found leaves the mark as it was', async () => {
+  const path = await file();
+  const [id] = await text.place({ path, match: 'two', text: 'note' });
+  await assert.rejects(text.update(id, { match: 'four', text: 'changed' }), /not found/);
+  const [mark] = await text.list();
+  assert.deepEqual([mark.id, mark.line, mark.match, mark.text], [id, 2, 'two', 'note']);
+  assert.equal((await shown(path)).length, 1);
+});
+
 test('marks go by id, by file, after their ttl, and with each group apart', async () => {
   const a = await file(), b = await file();
   const other = virtualText(remote, 'other');

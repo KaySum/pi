@@ -1,0 +1,13 @@
+{
+  "extends": "../nvim-service/tsconfig.json",
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "typeRoots": ["../nvim-service/node_modules/@types"],
+    "paths": { "@earendil-works/*": ["../nvim-service/node_modules/@earendil-works/*"] }
+  },
+  "include": ["*.ts"]
+}

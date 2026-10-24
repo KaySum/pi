@@ -1,9 +1,11 @@
 # nvim-virtual-text
 
-Lets other extensions put virtual text and highlights in the Neovim Pi runs inside: notes at
-the end of a line, at the window's edge, over or between characters, or as lines of their own
-above or below, in any highlight group or a style of their own. It only draws: opening files,
-moving the cursor and scrolling are for others. Built on [nvim-remote](../nvim-remote/README.md),
+Lets other extensions put virtual text and highlights in the Neovim Pi runs inside. Notes can
+go at the end of a line, at the window's edge, at a fixed screen column, over or between
+characters, or as lines of their own above or below, wrapped and indented to fit the code.
+They can also highlight lines or characters and put signs in the gutter, in any highlight
+group or a style of their own. It only draws: opening files, moving the cursor and scrolling
+are for others. Built on [nvim-remote](../nvim-remote/README.md),
 and needs no install.
 
 ## For you
@@ -24,10 +26,12 @@ export default function (pi) {
   pi.on('tool_result', async () => {
     const ids = await text()?.place([
       { path: '/abs/file.ts', line: 12, text: 'parses the header', hl: 'PiVirtualTextInfo' },
-      { path: '/abs/file.ts', line: 20, endLine: 24, highlight: 'Visual',
-        text: [['why: ', 'Title'], ['retries here\nbefore giving up']], position: 'below' },
+      { path: '/abs/file.ts', line: 20, endLine: 24, highlight: 'Visual', sign: '▶',
+        text: [['why: ', 'Title'], ['retries here before giving up']],
+        position: 'above', indent: true, wrap: true },
       { path: '/abs/file.ts', line: 3, text: 'flash', hl: { fg: '#ff9e64', bold: true }, ttl: 1500 },
     ]);
+    await text()?.update(ids[0], { text: 'parses the header and the trailer' });
   });
 }
 ```
@@ -40,7 +44,9 @@ on every new attachment.
 | Member | Behavior |
 | --- | --- |
 | `place(marks, options?)` | Place one mark or several. Resolves to their ids, in order. A mark that can't be placed rejects the call, and the marks before it stay. |
-| `remove(ids, options?)` | Remove marks by id. Ids already gone are ignored. |
+| `update(id, patch, options?)` | Change a mark and keep its id. What `patch` leaves out stays; `null` takes an option away. Lines and columns it doesn't give stay where edits have moved them, and a `ttl` starts again. Resolves to whether this group had such a mark. |
+| `remove(ids, options?)` | Remove marks by id. Ids already gone, or another group's, are ignored. |
+| `list(where?, options?)` | This group's marks, or only those in `{ path }` or `{ buf }`, in the order placed. Each is the mark as placed and updated, with its `id`, `group`, `buf` and `path`, and its lines and columns where edits have moved them. |
 | `clear(where?, options?)` | Remove this group's marks, or only those in `{ path }` or `{ buf }`. Resolves to how many went. |
 
 `options` are nvim-remote's `{ signal?, timeout? }`.
@@ -51,14 +57,18 @@ on every new attachment.
 | `line`, `endLine` | 1-based lines, clamped to the buffer. `endLine` (default `line`) ends the span `highlight` covers, and is where `below` goes. |
 | `col`, `endCol` | 0-based byte columns: where `overlay` and `inline` go, and a character span for `highlight`. Without them `highlight` covers whole lines, to the window's edge. |
 | `text` | A string, or `[text, hl?]` chunks. A newline starts another line for `above` and `below`, and becomes a space elsewhere. |
-| `position` | `eol` (default), `right`, `overlay`, `inline`, `above`, `below`. |
+| `position` | `eol` (default), `right` (the window's edge), `overlay`, `inline`, `above`, `below`, or a number: that screen column, to line notes up. |
 | `hl` | The highlight for text without its own, default `PiVirtualText`. Either a group name or a style (`{ fg, bg, sp, bold, italic, underline, undercurl, strikethrough, reverse }`), which gets a group of its own and is reapplied after `:colorscheme`. |
 | `highlight` | Highlight the lines or span marked. |
-| `fill` | For `above` and `below`: pad each line to the widest window showing the buffer, so its background fills the line. The width is taken when the mark is placed. A buffer shown in no window gets no padding. |
+| `sign` | Up to two cells in the sign column at `line`: a string, or `[text, hl]`. In `hl` unless given its own. |
+| `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
+| `wrap` | For `above` and `below`: break lines at spaces to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
+| `fill` | For `above` and `below`: give each line's background the window's whole width, whatever its size. |
 | `ttl` | Remove the mark after this many milliseconds. |
 | `priority` | As for extmarks. |
 
-Marks are extmarks, so they move with the text as it is edited.
+Marks are extmarks, so they move with the text as it's edited in the buffer. A file reloaded
+from disk keeps its marks at the same line numbers, wherever its text moved.
 
 ## Development
 

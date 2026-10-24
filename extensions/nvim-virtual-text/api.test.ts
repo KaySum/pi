@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
+import { createScreen } from '../nvim-service/screen.mjs';
 import { attach, connect } from '../nvim-remote/remote.ts';
 import { virtualText } from './api.ts';
 
@@ -27,12 +28,21 @@ async function file(text = 'one\ntwo\nthree\n') {
 }
 
 const text = virtualText(remote, 'test');
-afterEach(() => text.clear());
+afterEach(async () => {
+  await text.clear();
+  await lua('vim.cmd("silent! only | silent! %bwipeout!")');
+});
 
-/** The marks of `group` in the buffer of `path`: [row, col, details]. */
-const marks = (path: string, group = 'test') => lua(`local path, group = ...
+type Extmark = [id: number, row: number, col: number, details: Record<string, any>];
+/** The extmarks of `group` in the buffer of `path`. */
+const extmarks = (path: string, group = 'test'): Promise<Extmark[]> => lua(`local path, group = ...
   local ns = vim.api.nvim_get_namespaces()['nvim-virtual-text.${remote.channel}.' .. group]
   return vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, { details = true })`, path, group);
+/** Those that show text: [row, col, details]. */
+const shown = async (path: string, group?: string) =>
+  (await extmarks(path, group)).filter(m => m[3].virt_text || m[3].virt_lines).map(([, row, col, details]) => [row, col, details] as const);
+const words = (line: string[][]) => line.map(chunk => chunk[0]).join('');
+const open = (path: string) => lua('vim.cmd.edit(...)', path);
 
 test('text goes where it is asked to, in the highlights given', async () => {
   const path = await file();
@@ -40,12 +50,15 @@ test('text goes where it is asked to, in the highlights given', async () => {
     { path, line: 1, text: 'after', hl: 'PiVirtualTextInfo' },
     { path, line: 2, col: 1, text: [['in', 'ErrorMsg'], ['line']], position: 'inline' },
     { path, line: 3, text: 'right', position: 'right' },
+    { path, line: 3, text: 'aligned\nacross', position: 40 },
   ]);
-  assert.equal(ids.length, 3);
-  const [eol, inline, right] = await marks(path);
-  assert.deepEqual([eol[1], eol[3].virt_text, eol[3].virt_text_pos], [0, [['after', 'PiVirtualTextInfo']], 'eol']);
-  assert.deepEqual([inline[1], inline[2], inline[3].virt_text, inline[3].virt_text_pos], [1, 1, [['in', 'ErrorMsg'], ['line', 'PiVirtualText']], 'inline']);
-  assert.equal(right[3].virt_text_pos, 'right_align');
+  assert.equal(ids.length, 4);
+  const found = await shown(path);
+  const [eol, inline, right, column] = ['eol', 'inline', 'right_align', 'win_col'].map(pos => found.find(m => m[2].virt_text_pos === pos)!);
+  assert.deepEqual([eol[0], eol[2].virt_text, eol[2].virt_text_pos], [0, [['after', 'PiVirtualTextInfo']], 'eol']);
+  assert.deepEqual([inline[0], inline[1], inline[2].virt_text, inline[2].virt_text_pos], [1, 1, [['in', 'ErrorMsg'], ['line', 'PiVirtualText']], 'inline']);
+  assert.equal(right[2].virt_text_pos, 'right_align');
+  assert.deepEqual([column[2].virt_text_win_col, words(column[2].virt_text)], [40, 'aligned across']);
   // A file the user has not opened is loaded, not listed.
   assert.deepEqual(await lua('local b = vim.fn.bufnr(...); return { vim.api.nvim_buf_is_loaded(b), vim.bo[b].buflisted }', path), [true, false]);
 });
@@ -56,19 +69,68 @@ test('lines above and below, split at newlines, below the last line marked', asy
     { path, line: 1, text: 'first\nsecond', position: 'above' },
     { path, line: 1, endLine: 2, text: 'under', position: 'below', highlight: 'Visual' },
   ]);
-  const found = await marks(path);
-  const above = found.find((m: any) => m[3].virt_lines_above);
-  const below = found.find((m: any) => m[3].virt_lines && !m[3].virt_lines_above);
-  const span = found.find((m: any) => m[3].hl_group);
-  assert.deepEqual(above[3].virt_lines, [[['first', 'PiVirtualText']], [['second', 'PiVirtualText']]]);
-  assert.equal(below[1], 1);
+  const [above, below] = await shown(path);
+  assert.deepEqual([above[2].virt_lines, above[2].virt_lines_above], [[[['first', 'PiVirtualText']], [['second', 'PiVirtualText']]], true]);
+  assert.equal(below[0], 1);
+  const span = (await extmarks(path)).find(m => m[3].hl_group)!;
   assert.deepEqual([span[1], span[3].end_row, span[3].hl_eol], [0, 2, true]);
+});
+
+test('a span of characters, and a sign by the line', async () => {
+  const path = await file('let answer = 42\n');
+  await text.place({ path, line: 1, col: 4, endCol: 10, highlight: 'Search', sign: ['▶', 'WarningMsg'] });
+  const [[, row, col, details]] = await extmarks(path);
+  assert.deepEqual([row, col, details.end_row, details.end_col, details.hl_eol], [0, 4, 0, 10, false]);
+  assert.deepEqual([details.sign_text.trim(), details.sign_hl_group], ['▶', 'WarningMsg']);
+});
+
+test('indent lines up with the code, and wrap breaks at spaces', async () => {
+  const path = await file('top\n\t  nested\n');
+  await lua('vim.o.tabstop = 4');
+  await text.place([
+    { path, line: 2, text: 'about nested', position: 'above', indent: true },
+    { path, line: 1, text: 'one two three four five', position: 'below', indent: 2, wrap: 12 },
+  ]);
+  const [[, , below], [, , above]] = await shown(path);
+  assert.deepEqual(above.virt_lines, [[['      '], ['about nested', 'PiVirtualText']]]);
+  assert.deepEqual(below.virt_lines.map(words), ['  one two ', '  three four ', '  five']);
+});
+
+test('wrap fits the window showing the buffer', async () => {
+  const path = await file();
+  await open(path);
+  const width = await lua('return vim.api.nvim_win_get_width(0) - vim.fn.getwininfo(vim.api.nvim_get_current_win())[1].textoff');
+  await text.place({ path, line: 1, text: 'word '.repeat(width), position: 'below', wrap: true });
+  const [[, , details]] = await shown(path);
+  assert.ok(details.virt_lines.length > 1);
+  for (const line of details.virt_lines) assert.ok(words(line).trimEnd().length <= width);
+});
+
+test('fill pads virtual lines to the editor, cut at the edge of narrower windows', async () => {
+  const path = await file();
+  await open(path);
+  await text.place({ path, line: 2, text: 'removed', position: 'above', fill: true, hl: 'DiffDelete' });
+  const [[, , details]] = await shown(path);
+  assert.equal(words(details.virt_lines[0]).length, await lua('return vim.o.columns'));
+
+  // As the user sees it, beside another window.
+  const ui = await connect(socket);
+  const screen = createScreen();
+  ui.on('redraw', (...batches: unknown[]) => screen.apply(batches));
+  try {
+    await ui.request('nvim_ui_attach', [60, 8, { ext_linegrid: true }]);
+    await lua(`vim.cmd('rightbelow vnew'); vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'beside' }); vim.cmd('wincmd p')`);
+    await delay(100);
+    const rows = screen.lines();
+    assert.match(rows[1], /^removed +│~/);
+    assert.match(rows[0], /^one +│beside/);
+  } finally { ui.close(); }
 });
 
 test('a style of its own becomes a highlight group, kept across a colorscheme', async () => {
   const path = await file();
   await text.place({ path, line: 1, text: 'hi', hl: { fg: '#ff0000', bold: true } });
-  const [[, , , details]] = await marks(path);
+  const [[, , details]] = await shown(path);
   const name = details.virt_text[0][1];
   assert.match(name, /^PiVirtualText_/);
   await lua('vim.cmd.colorscheme("default")');
@@ -76,44 +138,75 @@ test('a style of its own becomes a highlight group, kept across a colorscheme', 
   assert.deepEqual({ fg, bold }, { fg: 0xff0000, bold: true });
 });
 
+test('list gives the marks as placed, where edits have moved them', async () => {
+  const path = await file('a\nb\nc\nd\n');
+  const [id] = await text.place({ path, line: 2, endLine: 3, text: 'note', highlight: 'Visual', position: 'below' });
+  await lua('local b = vim.fn.bufnr(...); vim.api.nvim_buf_set_lines(b, 0, 0, true, { "new", "new" })', path);
+  const [mark] = await text.list();
+  assert.deepEqual(
+    { id: mark.id, group: mark.group, path: mark.path, line: mark.line, endLine: mark.endLine, text: mark.text },
+    { id, group: 'test', path, line: 4, endLine: 5, text: 'note' },
+  );
+  assert.deepEqual(await text.list({ path: join(dir, 'elsewhere.txt') }), []);
+});
+
+test('update changes a mark in place, keeping its id and where it moved', async () => {
+  const path = await file('a\nb\nc\n');
+  const [id] = await text.place({ path, line: 2, text: 'before', highlight: 'Visual' });
+  await lua('local b = vim.fn.bufnr(...); vim.api.nvim_buf_set_lines(b, 0, 0, true, { "new" })', path);
+  assert.equal(await text.update(id, { text: 'after', highlight: null, hl: 'PiVirtualTextWarn' }), true);
+  const [mark] = await text.list();
+  assert.deepEqual([mark.id, mark.line, mark.text, mark.highlight], [id, 3, 'after', undefined]);
+  const [[row, , details]] = await shown(path);
+  assert.deepEqual([row, details.virt_text], [2, [['after', 'PiVirtualTextWarn']]]);
+  assert.equal((await extmarks(path)).filter(m => m[3].hl_group).length, 0);
+
+  assert.equal(await text.update(id, { line: 1 }), true);
+  assert.equal((await shown(path))[0][0], 0);
+  assert.equal(await text.update(999, { text: 'x' }), false);
+  assert.equal(await virtualText(remote, 'other').update(id, { text: 'theirs' }), false);
+});
+
 test('marks go by id, by file, after their ttl, and with each group apart', async () => {
   const a = await file(), b = await file();
   const other = virtualText(remote, 'other');
   const [first] = await text.place([{ path: a, line: 1, text: 'x' }, { path: a, line: 2, text: 'y' }]);
   await text.place({ path: b, line: 1, text: 'z' });
-  await other.place({ path: a, line: 3, text: 'theirs' });
-  await text.remove(first);
-  assert.equal((await marks(a)).length, 1);
+  const [theirs] = await other.place({ path: a, line: 3, text: 'theirs' });
+  await text.remove([first, theirs]); // Another group's id is not this one's to remove.
+  assert.equal((await text.list({ path: a })).length, 1);
   assert.equal(await text.clear({ path: b }), 1);
-  assert.equal((await marks(b)).length, 0);
+  assert.equal((await text.list({ path: b })).length, 0);
   assert.equal(await text.clear(), 1);
-  assert.equal((await marks(a, 'other')).length, 1);
+  assert.equal((await other.list()).length, 1);
   await other.clear();
 
-  await text.place({ path: a, line: 1, text: 'brief', ttl: 50 });
-  assert.equal((await marks(a)).length, 1);
-  await delay(150);
-  assert.equal((await marks(a)).length, 0);
-});
-
-test('fill pads virtual lines to the window showing the buffer', async () => {
-  const path = await file();
-  await lua('vim.cmd("silent! only | edit " .. vim.fn.fnameescape(...))', path);
-  await text.place({ path, line: 1, text: 'wide', position: 'above', fill: true, hl: 'DiffDelete' });
-  const [[, , , details]] = await marks(path);
-  const width = await lua('return vim.api.nvim_win_get_width(0) - vim.fn.getwininfo(vim.api.nvim_get_current_win())[1].textoff');
-  assert.equal(details.virt_lines[0].map((c: string[]) => c[0]).join('').length, width);
-  await lua('vim.cmd("silent! %bwipeout!")');
+  const [brief] = await text.place({ path: a, line: 1, text: 'brief', ttl: 100 });
+  await delay(60);
+  await text.update(brief, { text: 'renewed' }); // Starts its ttl again.
+  await delay(60);
+  assert.equal((await shown(a)).length, 1);
+  await delay(100);
+  assert.equal((await shown(a)).length, 0);
+  assert.deepEqual(await text.list(), []);
 });
 
 test('lines past the end are clamped, and bad marks are refused', async () => {
   const path = await file();
   await text.place({ path, line: 99, text: 'end' });
-  assert.equal((await marks(path))[0][1], 2);
+  assert.equal((await shown(path))[0][0], 2);
   await assert.rejects(text.place({ path: 'relative.txt', line: 1 }), /absolute/);
   await assert.rejects(text.place({ path, line: 0 }), /line/);
+  await assert.rejects(text.place({ path, buf: 1, line: 1 }), /not both/);
   await assert.rejects(text.place({ path: join(dir, 'missing.txt'), line: 1, text: 'x' }), /no such file/);
   assert.throws(() => virtualText(remote, 'bad name'), /group/);
+});
+
+test('a wiped buffer takes its marks with it', async () => {
+  const path = await file();
+  await text.place({ path, line: 1, text: 'x' });
+  await lua('vim.cmd.bwipeout({ vim.fn.bufnr(...), bang = true })', path);
+  assert.deepEqual(await text.list(), []);
 });
 
 test('everything goes when Pi detaches', async () => {

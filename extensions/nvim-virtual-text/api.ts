@@ -20,9 +20,10 @@ export type Highlight = string | Style;
 export type Chunk = [text: string, hl?: Highlight];
 /**
  * `eol` after the line's text, `right` at the window's right edge, `overlay` over the text at
- * `col`, `inline` between characters at `col`; `above` and `below` as lines of their own.
+ * `col`, `inline` between characters at `col`, a number at that screen column; `above` and
+ * `below` as lines of their own.
  */
-export type Position = 'eol' | 'right' | 'overlay' | 'inline' | 'above' | 'below';
+export type Position = 'eol' | 'right' | 'overlay' | 'inline' | 'above' | 'below' | number;
 
 export type Mark = {
   /** The file, absolute: loaded in the editor (not listed) if the user has not opened it. */
@@ -37,23 +38,42 @@ export type Mark = {
   text?: string | Chunk[];
   /** Default `eol`. */
   position?: Position;
-  /** For text not given its own. Default `PiVirtualText`. */
+  /** For text (and the sign) not given its own. Default `PiVirtualText`. */
   hl?: Highlight;
   /** Highlight the lines (or columns) marked. */
   highlight?: Highlight;
-  /** `above` and `below`: pad each line to the widest window showing the buffer, so its background fills it. */
+  /** Up to two cells in the sign column at `line`, in `hl` unless given its own. */
+  sign?: string | Chunk;
+  /** `above` and `below`: start at the indentation of the line they go by (`true`) or this many columns. */
+  indent?: boolean | number;
+  /** `above` and `below`: break lines at spaces to fit the window showing the buffer (`true`) or this many columns. */
+  wrap?: boolean | number;
+  /** `above` and `below`: give each line's background the whole window's width. */
   fill?: boolean;
   /** Remove it after this many milliseconds. */
   ttl?: number;
   priority?: number;
 };
 
+/** A mark as `list` gives it: as placed and updated, where edits have moved it, its file found. */
+export type Placed = Mark & { id: number; group: string; buf: number; path: string };
+/** What `update` changes: `null` takes an option away. */
+export type Patch = { [K in keyof Mark]?: Mark[K] | null };
+type Where = { path?: string; buf?: number };
+
 export type VirtualText = {
   /** Resolves to an id for each mark, in order. */
   place(marks: Mark | Mark[], options?: CallOptions): Promise<number[]>;
+  /**
+   * Change a mark, keeping its id: lines and columns not given stay where edits have moved
+   * them, and a `ttl` starts again. Resolves to whether there was such a mark.
+   */
+  update(id: number, patch: Patch, options?: CallOptions): Promise<boolean>;
   remove(ids: number | number[], options?: CallOptions): Promise<void>;
+  /** This group's marks, only in one file or buffer if given, in the order placed. */
+  list(where?: Where, options?: CallOptions): Promise<Placed[]>;
   /** Remove this group's marks, only in one file or buffer if given. Resolves to how many went. */
-  clear(where?: { path?: string; buf?: number }, options?: CallOptions): Promise<number>;
+  clear(where?: Where, options?: CallOptions): Promise<number>;
 };
 
 type Lua = Pick<Remote, 'lua'>;
@@ -66,43 +86,36 @@ export async function call(remote: Lua, fn: string, args: unknown[], options?: C
   return remote.lua(CALL, [fn, ...args], options);
 }
 
+/** Without what is undefined, which would reach Lua as `vim.NIL`. */
 const defined = <T extends object>(value: T) =>
   Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
+const list = <T>(value: unknown): T[] => Array.isArray(value) ? value : [];
 
-const chunk = (text: string, hl?: Highlight): Chunk => hl === undefined ? [text] : [text, hl];
-
-/** Text as lines of chunks: one line except above and below. */
-function linesOf(text: string | Chunk[], block: boolean): Chunk[][] {
-  const lines: Chunk[][] = [[]];
-  for (const [part, hl] of typeof text === 'string' ? [[text] as Chunk] : text) {
-    part.split('\n').forEach((piece, i) => {
-      if (i) block ? lines.push([]) : lines.at(-1)!.push(chunk(' ', hl));
-      if (piece) lines.at(-1)!.push(chunk(piece, hl));
-    });
+function check(mark: Patch) {
+  if (mark.path != null && !isAbsolute(mark.path)) throw new Error(`A mark's path must be absolute: ${mark.path}`);
+  for (const key of ['line', 'endLine'] as const) {
+    const line = mark[key];
+    if (line != null && (!Number.isInteger(line) || line < 1)) throw new Error(`A mark's ${key} must be a whole number from 1: ${line}`);
   }
-  return lines;
+  return defined(mark);
 }
 
-function normalize(mark: Mark) {
+function checkMark(mark: Mark) {
   if ((mark.path === undefined) === (mark.buf === undefined)) throw new Error('A mark needs a path or a buf, not both');
-  if (mark.path !== undefined && !isAbsolute(mark.path)) throw new Error(`A mark's path must be absolute: ${mark.path}`);
-  if (!Number.isInteger(mark.line) || mark.line < 1) throw new Error(`A mark's line must be a whole number from 1: ${mark.line}`);
-  const { text, ...rest } = mark;
-  const block = mark.position === 'above' || mark.position === 'below';
-  return defined({ ...rest, lines: text === undefined ? undefined : linesOf(text, block) });
+  if (mark.line === undefined) throw new Error('A mark needs a line');
+  return check(mark);
 }
 
 /** Virtual text in the editor of `remote`, kept apart from other groups'. */
 export function virtualText(remote: Lua, group: string): VirtualText {
   if (!/^[\w.-]+$/.test(group)) throw new Error(`A group name is letters, digits, "_", "." and "-": ${group}`);
   return {
-    async place(marks, options) {
-      const ids = await call(remote, 'place', [group, [marks].flat().map(normalize)], options);
-      return Array.isArray(ids) ? ids : [];
-    },
+    place: async (marks, options) => list(await call(remote, 'place', [group, [marks].flat().map(checkMark)], options)),
+    update: (id, patch, options) => call(remote, 'update', [group, id, check(patch)], options),
     async remove(ids, options) {
-      await call(remote, 'remove', [[ids].flat()], options);
+      await call(remote, 'remove', [group, [ids].flat()], options);
     },
+    list: async (where = {}, options) => list(await call(remote, 'list', [group, defined(where)], options)),
     clear: (where = {}, options) => call(remote, 'clear', [group, defined(where)], options),
   };
 }

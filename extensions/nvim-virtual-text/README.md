@@ -10,7 +10,11 @@ and needs no install.
 
 ## For you
 
-`/virtual-text clear` removes every mark Pi placed. They all go anyway when Pi detaches.
+`/nvim-virtual-text` shows what Pi has placed: every mark by group, with its file, lines,
+position, a preview of its text, and whether it uses `match`, `ttl` or `invalidate`, is hidden
+by a deletion, or was changed while hidden. Also how many buffers are watched for edits and
+how many styles have been made. `/nvim-virtual-text-clear` removes every mark. They all go
+anyway when Pi detaches.
 
 The default highlights are linked, unless you define them: `PiVirtualText` to `Comment`, and
 `PiVirtualTextInfo`, `…Hint`, `…Warn`, `…Error` and `…Ok` to the `DiagnosticVirtualText` group

@@ -817,6 +817,16 @@ function state.list(group, filter)
 	return marks
 end
 
+--- What there is, for `/nvim-virtual-text`: every mark as `list` gives it, `stale` if changed
+--- while hidden; and how many buffers are watched and styles made.
+function state.inspect()
+	local marks = state.list(nil, {})
+	for _, mark in ipairs(marks) do
+		mark.stale = state.marks[mark.id].stale
+	end
+	return { marks = marks, watched = vim.tbl_count(state.watched), styles = vim.tbl_count(state.styles) }
+end
+
 --- Remove the marks `list` would give. Returns how many went.
 function state.clear(group, filter)
 	local removed = 0

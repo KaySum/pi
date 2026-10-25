@@ -42,7 +42,7 @@ export type Window = {
    * start, and the first only its end, past `skipcol`. How far it is scrolled sideways.
    */
   topline: number; botline: number; leftcol: number; skipcol: number;
-  /** The rows those lines take on screen, wrapped, folded and with virtual lines; the rest are empty. */
+  /** How many rows are taken: by text, virtual lines, or `@` where a line does not fit; the rest are empty. */
   rows: number;
   /** The lines on screen, top to bottom; a closed fold is one, its first line. */
   shown: ShownLine[];

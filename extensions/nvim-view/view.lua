@@ -59,7 +59,7 @@ end
 -- What a window shows: its last line, even if only in part; each line on screen, top to
 -- bottom, with the screen row its text starts on and the rows it takes, a closed fold as one
 -- with the last line it hides; and how many rows are not empty.
-local function shown(win, info, buf, skipcol)
+local function shown(win, info, buf, view)
 	local count = vim.api.nvim_buf_line_count(buf)
 	-- Neovim's botline is the last line shown whole: with wrap, the one below may show its
 	-- start in the rows left.
@@ -67,7 +67,8 @@ local function shown(win, info, buf, skipcol)
 	if botline < count and vim.o.display ~= "" and vim.fn.screenpos(win, botline + 1, 1).row ~= 0 then
 		botline = botline + 1
 	end
-	local lines, line, top, bottom = {}, info.topline, info.winrow, info.winrow + info.height
+	-- Filler above the top line is measured apart: only the part scrolled into view shows.
+	local lines, line, top, bottom = {}, info.topline, info.winrow + view.topfill, info.winrow + info.height
 	vim.api.nvim_win_call(win, function()
 		while line <= botline and top < bottom do
 			local fold = vim.fn.foldclosedend(line)
@@ -75,17 +76,20 @@ local function shown(win, info, buf, skipcol)
 			local height = vim.api.nvim_win_text_height(win, {
 				start_row = line - 1,
 				end_row = last - 1,
-				start_vcol = line == info.topline and skipcol or nil,
+				start_vcol = line == info.topline and view.skipcol or nil,
 			})
 			-- Virtual or filler lines above it push its text down; only then is it worth asking.
 			local row = height.fill > 0 and vim.fn.screenpos(win, line, 1).row or 0
 			row = row ~= 0 and row or top
-			table.insert(lines, {
-				line = line,
-				row = row,
-				rows = math.min(height.all - height.fill, bottom - row),
-				fold = fold ~= -1 and fold or nil,
-			})
+			-- A line concealed whole (`conceal_lines`) takes no row: it is not on screen.
+			if height.all > height.fill then
+				table.insert(lines, {
+					line = line,
+					row = row,
+					rows = math.min(height.all - height.fill, bottom - row),
+					fold = fold ~= -1 and fold or nil,
+				})
+			end
 			line, top = last + 1, top + height.all
 		end
 	end)
@@ -94,9 +98,24 @@ local function shown(win, info, buf, skipcol)
 	local rows = vim.api.nvim_win_text_height(win, {
 		start_row = info.topline - 1,
 		end_row = botline < count and botline or nil,
-		start_vcol = skipcol,
+		start_vcol = view.skipcol,
 	}).all
-	return botline, lines, math.min(rows, info.height)
+	return botline, lines, math.min(rows + view.topfill, info.height)
+end
+
+-- Where the cursor is on screen: on a tab, its last cell. With inline virtual text just before
+-- it, Neovim gives a column as if the line did not wrap; wrapped here.
+local function screen_cursor(win, info, cursor)
+	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
+	if screen.row == 0 then
+		return nil
+	end
+	local left, width = info.wincol + info.textoff, info.width - info.textoff
+	local past = screen.curscol - left
+	if past < width or width <= 0 or not vim.wo[win].wrap then
+		return { screen.row, screen.curscol }
+	end
+	return { screen.row + math.floor(past / width), left + past % width }
 end
 
 local function window(win, current, previous, cwd)
@@ -109,8 +128,7 @@ local function window(win, current, previous, cwd)
 	for _, name in ipairs(OPTIONS) do
 		options[name] = vim.wo[win][name]
 	end
-	local botline, lines, rows = shown(win, info, buf, view.skipcol)
-	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
+	local botline, lines, rows = shown(win, info, buf, view)
 	return {
 		id = win,
 		number = info.winnr,
@@ -132,7 +150,7 @@ local function window(win, current, previous, cwd)
 		leftcol = view.leftcol,
 		skipcol = view.skipcol,
 		cursor = { cursor[1], cursor[2] },
-		screenCursor = screen.row ~= 0 and { screen.row, screen.curscol } or nil,
+		screenCursor = screen_cursor(win, info, cursor),
 		-- getcwd() for a window is slow; most have no directory of their own, nor their tab.
 		cwd = (vim.fn.haslocaldir(info.winnr, info.tabnr) ~= 0 or vim.fn.haslocaldir(-1, info.tabnr) ~= 0)
 				and vim.fn.getcwd(info.winnr, info.tabnr)

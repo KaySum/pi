@@ -284,6 +284,39 @@ test('lines moving between rows with nothing else changed are seen; virtual rows
   } finally { await shutdown(); }
 });
 
+test('what Neovim draws besides text: filler above the top line, lines concealed whole, inline text before the cursor', async () => {
+  const { changes, shutdown } = await pi();
+  try {
+    // Two virtual lines above the first line, scrolled into view: the text starts below them.
+    const win = await lua(`vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c', 'd', 'e', 'f' })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_lines = { { { 'v1' } }, { { 'v2' } } }, virt_lines_above = true })
+      vim.fn.winrestview({ topline = 1, topfill = 2, lnum = 1, col = 0 })
+      return vim.api.nvim_get_current_win()`);
+    const latest = () => windowOf(changes.at(-1), win);
+    const filled = await eventually(() => latest()?.shown[0].row === 3 && latest()!);
+    assert.equal(filled.rows, 8);
+
+    // Lines concealed whole are not on screen.
+    await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.wo.conceallevel, vim.wo.concealcursor = 2, 'nvic'
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 1, 0, { end_row = 3, conceal_lines = '' })`);
+    const concealed = await eventually(() => latest()?.shown.length === 3 && latest()!);
+    assert.deepEqual(concealed.shown.map(s => [s.line, s.row]), [[1, 1], [5, 2], [6, 3]]);
+    assert.deepEqual([isShown(concealed, 2), concealed.rows], [false, 3]);
+
+    // Inline text wider than the window before the cursor: the cursor is where it wraps to.
+    await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'AAAA' })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_text = { { string.rep('v', 90) } }, virt_text_pos = 'inline' })
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })`);
+    const wrapped = await eventually(() => latest()?.rows === 2 && latest()!);
+    assert.deepEqual(wrapped.screenCursor, [2, 11]);
+  } finally {
+    await lua('vim.wo.conceallevel, vim.wo.concealcursor = 0, ""');
+    await shutdown();
+  }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {

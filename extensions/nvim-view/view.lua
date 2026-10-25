@@ -1,6 +1,7 @@
 -- Installs `remote.nvim_view`, once for each attachment: a snapshot of what the user sees
--- (tabs, splits, windows, buffers), sent to Pi as `nvim-view:changed` whenever it changes.
--- It runs through nvim-remote, with `remote` in scope.
+-- (the current tab's splits and floats, and the buffers in them), sent to Pi as
+-- `nvim-view:changed` whenever it changes. What is not on screen (other tabs' windows, hidden
+-- buffers) is not in it. It runs through nvim-remote, with `remote` in scope.
 
 -- A view goes as soon as the editor is free after a change: a burst (a split opens: WinNew,
 -- WinEnter, BufEnter, WinResized…) all fires before then, and makes one. While changes keep
@@ -68,7 +69,6 @@ local function window(win, current, previous, cwd)
 	return {
 		id = win,
 		number = info.winnr,
-		tab = vim.api.nvim_win_get_tabpage(win),
 		buf = buf,
 		kind = kind(win, buf, config, info),
 		focused = win == current or nil,
@@ -115,7 +115,6 @@ local function buffer(buf)
 		lines = lines,
 		bytes = lines and vim.api.nvim_buf_get_offset(buf, lines) or nil,
 		changedtick = vim.api.nvim_buf_get_changedtick(buf),
-		windows = vim.fn.win_findbuf(buf),
 		-- Loading vim.lsp to ask would cost more than the rest; not loaded, nothing is attached.
 		lsp = package.loaded["vim.lsp"] and vim.tbl_map(function(client)
 			return client.name
@@ -140,36 +139,34 @@ local function yours(windows)
 	return best and windows[best].id or nil
 end
 
---- What the user sees now.
+--- What the user sees now: the current tab's windows (but floats it hides), the buffers they
+--- show, and the tabs the tabline names.
 function state.snapshot()
 	local current = vim.api.nvim_get_current_win()
 	local previous = vim.fn.win_getid(vim.fn.winnr("#"))
-	local windows, tabs, shown = {}, {}, {}
 	local cwd = vim.fn.getcwd(-1, -1)
-	for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-		local number = vim.api.nvim_tabpage_get_number(tab)
-		local ids = vim.api.nvim_tabpage_list_wins(tab)
-		for _, win in ipairs(ids) do
+	local windows, buffers, showing = {}, {}, {}
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if not vim.api.nvim_win_get_config(win).hide then
 			local entry = window(win, current, previous, cwd)
 			table.insert(windows, entry)
-			shown[entry.buf] = true
+			if not showing[entry.buf] then
+				showing[entry.buf] = {}
+				table.insert(buffers, buffer(entry.buf))
+			end
+			table.insert(showing[entry.buf], win)
 		end
+	end
+	for _, entry in ipairs(buffers) do
+		entry.windows = showing[entry.id]
+	end
+	local tabs = {}
+	for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
 		table.insert(tabs, {
 			id = tab,
-			number = number,
+			number = vim.api.nvim_tabpage_get_number(tab),
 			focused = tab == vim.api.nvim_get_current_tabpage() or nil,
-			windows = ids,
-			layout = layout(vim.fn.winlayout(number)),
 		})
-	end
-	-- Unlisted buffers nobody sees (plugins' scratch buffers, say) are left out, but counted.
-	local buffers, hidden = {}, 0
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		if shown[buf] or buf == remote.terminal or vim.fn.buflisted(buf) == 1 then
-			table.insert(buffers, buffer(buf))
-		else
-			hidden = hidden + 1
-		end
 	end
 	local mode = vim.api.nvim_get_mode()
 	return {
@@ -189,11 +186,11 @@ function state.snapshot()
 			previous = previous ~= 0 and previous or nil,
 		},
 		you = yours(windows),
-		pi = remote.terminal and { buf = remote.terminal, windows = vim.fn.win_findbuf(remote.terminal) } or nil,
+		pi = showing[remote.terminal] and { buf = remote.terminal, windows = showing[remote.terminal] } or nil,
 		tabs = tabs,
+		layout = layout(vim.fn.winlayout()),
 		windows = windows,
 		buffers = buffers,
-		omitted = hidden,
 	}
 end
 
@@ -217,14 +214,14 @@ local function send()
 	end
 end
 
--- What changes with no autocommand to say so: a float's config, a cursor in a window not
--- current, a buffer edited or unloaded while unseen, all by the API. After each command,
--- while idle, this is compared; a cheap look, unlike a snapshot, which here would loop.
--- Everything `window` gives of a float is in it; buffers are summed, their changedticks only
--- rising.
+-- What changes on screen with no autocommand to say so: a float's config, a cursor in a
+-- window not current, a buffer shown but not current edited, all by the API. After each
+-- command, while idle, this is compared; a cheap look, unlike a snapshot, which here would
+-- loop. Everything `window` gives of a float is in it; buffers are summed, their changedticks
+-- only rising.
 local function unreported()
 	local parts = {}
-	for _, win in ipairs(vim.api.nvim_list_wins()) do
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local cursor = vim.api.nvim_win_get_cursor(win)
 		table.insert(parts, win .. ":" .. cursor[1] .. ":" .. cursor[2])
 		local config = vim.api.nvim_win_get_config(win)
@@ -232,12 +229,11 @@ local function unreported()
 			local row, col = unpack(vim.api.nvim_win_get_position(win))
 			table.insert(parts, table.concat({
 				row, col, config.width, config.height, config.relative, tostring(config.zindex),
-				tostring(config.focusable), vim.inspect(config.border),
+				tostring(config.focusable), vim.inspect(config.border), tostring(config.hide),
 			}, ","))
 		end
 	end
-	-- Only the buffers in the view: one left out joins it by being listed (BufAdd, OptionSet)
-	-- or shown (window events), both reported, so thousands of plugins' buffers cost nothing.
+	-- The buffers on screen: one joins them by being shown, which window events report.
 	local ticks, loaded = 0, 0
 	for _, entry in ipairs(state.sent and state.sent.buffers or {}) do
 		local buf = entry.id

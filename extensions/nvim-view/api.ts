@@ -3,21 +3,18 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 /** Tab ids, window ids and buffer ids are Neovim's handles. Lines are 1-based. */
 export type Layout = { win: number } | { split: 'row' | 'col'; children: Layout[] };
 
+/** A tab, as the tabline names it; only the current one's windows are on screen. */
 export type Tab = {
   id: number;
   /** As `:tabnext` counts them, from 1. */
   number: number;
   focused?: true;
-  windows: number[];
-  /** Its splits: a `row` side by side, a `col` stacked. */
-  layout: Layout;
 };
 
 export type Window = {
   id: number;
   /** As `<C-w>` counts them in its tab, from 1. */
   number: number;
-  tab: number;
   buf: number;
   /** `normal` shows a file; else `float`, `terminal`, `help`, `quickfix`, `loclist`, `nofile`, `prompt`… */
   kind: string;
@@ -55,7 +52,7 @@ export type Buffer = {
   lines?: number; bytes?: number;
   /** Goes up with every change to its text. */
   changedtick: number;
-  /** The windows showing it, in any tab. */
+  /** The windows on screen showing it. */
   windows: number[];
   /** Names of the language servers attached. */
   lsp: string[];
@@ -78,14 +75,15 @@ export type View = {
    * the one they came from, else any showing a file.
    */
   you?: number;
-  /** Pi's terminal buffer, and the windows showing it, if Pi runs in one of the editor's. */
+  /** Pi's terminal buffer, and the windows showing it, if it is on screen. */
   pi?: { buf: number; windows: number[] };
   tabs: Tab[];
+  /** The current tab's splits: a `row` side by side, a `col` stacked, windows its leaves. */
+  layout: Layout;
+  /** What is on screen: the current tab's windows, floats included but those it hides. */
   windows: Window[];
-  /** Listed ones, ones shown, and Pi's terminal. */
+  /** The buffers they show. */
   buffers: Buffer[];
-  /** How many buffers that are none of those (plugins' scratch buffers, say) were left out. */
-  omitted: number;
 };
 
 // Lookups in a view, or in none: `windowOf(view(), id)` while not attached is undefined.

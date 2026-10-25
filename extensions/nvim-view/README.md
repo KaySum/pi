@@ -10,19 +10,30 @@ needs no install.
 
 ## For you
 
-`/nvim-view` shows what it gives extensions, readably:
+`/nvim-view` shows what it gives extensions, all of it, readably:
 
 ```
-Editor 212×58, mode n, cwd ~/Code/app
-Tab 1 of 2: [[#1000 / #1002] | #1001]
-  #1000 normal src/app.ts  120×40 at 1,1, text 115  lines 40–84 of 812 in 40 rows, folded 51–56  cursor 63:4  [yours, previous]
-  #1002 quickfix [No Name]  120×10 at 42,1, text 120  lines 1–10 of 23 in 10 rows  cursor 1:0
-  #1001 terminal Pi  91×52 at 1,122, text 91  lines 1–52 of 52 in 52 rows  cursor 52:2  [focused]
-Buffers shown: 3
-  #1 src/app.ts  typescript  812 lines, 24.1 KB  in #1000  lsp tsserver
-  ...
+Editor 212×58, cmdheight 1, mode n, cwd /Users/me/app, terminal focused
+Focus: tab 1, window 1001, buffer 3, previous 1000; yours 1000; Pi's buffer 3 in 1001
+Tab 1 of 2; ids 1, 2
+Layout: row[col[1000, 1002], 1001]
+
+Window 1000 (#1), normal, buffer 1  [yours, previous]
+  120×40 at 1,1, text 115 wide after a gutter of 5
+  lines 37–75 in 40 rows: 37–38, 39 (4 rows), 40, 41–44 folded, (1 virtual) 45, 46–75
+  cursor 40:4, at 7,10 on screen
+  colorcolumn= conceallevel=0 nocursorline nodiff foldcolumn=0 nolist number norelativenumber ...
+
+Buffer 1 /Users/me/app/src/app.ts, typescript
+  812 lines, 24100 bytes, changedtick 9, in 1000, lsp tsserver
+  listed loaded modified noreadonly modifiable
+...
+
 Views sent: 132; the last took 0.21 ms to make
 ```
+
+A window's lines are in runs: a line that wraps says how many rows it takes, a closed fold
+which lines it hides, and virtual lines a plugin put above a line how many rows they take.
 
 `/nvim-view-json` shows exactly what they get, as JSON.
 

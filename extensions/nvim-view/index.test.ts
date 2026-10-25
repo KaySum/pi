@@ -289,6 +289,11 @@ test('buffers no one sees and no one listed are counted, not listed', async () =
     const v = await eventually(() => view.refresh()); // Once attached.
     assert.equal(v.omitted, 5);
     assert.ok(v.buffers.some(buf => buf.listed && !buf.windows.length && buf.lines === 1));
+    // One left out joins the view once listed, by the API alone, and is followed from then on.
+    const scratch = await lua('local b = vim.api.nvim_create_buf(false, true) vim.api.nvim_set_option_value("buflisted", true, { buf = b }) return b');
+    await eventually(() => bufferOf(view(), scratch)?.listed);
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "one", "two" })', scratch);
+    await eventually(() => bufferOf(view(), scratch)?.lines === 2);
   } finally { await shutdown(); }
 });
 

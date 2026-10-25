@@ -220,8 +220,8 @@ end
 -- What changes with no autocommand to say so: a float's config, a cursor in a window not
 -- current, a buffer edited or unloaded while unseen, all by the API. After each command,
 -- while idle, this is compared; a cheap look, unlike a snapshot, which here would loop.
--- Everything `window` gives of a float is in it; buffers are summed (a few microseconds
--- for hundreds), their changedticks only rising.
+-- Everything `window` gives of a float is in it; buffers are summed, their changedticks only
+-- rising.
 local function unreported()
 	local parts = {}
 	for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -236,11 +236,16 @@ local function unreported()
 			}, ","))
 		end
 	end
+	-- Only the buffers in the view: one left out joins it by being listed (BufAdd, OptionSet)
+	-- or shown (window events), both reported, so thousands of plugins' buffers cost nothing.
 	local ticks, loaded = 0, 0
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		ticks = ticks + vim.api.nvim_buf_get_changedtick(buf)
-		if vim.api.nvim_buf_is_loaded(buf) then
-			loaded = loaded + buf
+	for _, entry in ipairs(state.sent and state.sent.buffers or {}) do
+		local buf = entry.id
+		if vim.api.nvim_buf_is_valid(buf) then
+			ticks = ticks + vim.api.nvim_buf_get_changedtick(buf)
+			if vim.api.nvim_buf_is_loaded(buf) then
+				loaded = loaded + buf
+			end
 		end
 	end
 	table.insert(parts, ticks .. ":" .. loaded)

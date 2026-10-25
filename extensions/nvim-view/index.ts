@@ -37,15 +37,14 @@ export function describe(view: View, cwd: string, stats?: Stats) {
   ];
   const tab = view.tabs.find(tab => tab.focused);
   lines.push(`Tab ${tab?.number ?? 1} of ${view.tabs.length}: ${layoutOf(view.layout)}`);
-  {
-    for (const win of view.windows) {
-      const buf = bufferOf(view, win.buf);
-      const name = win.pi ? 'Pi' : buf ? shortPath(buf.name, cwd) : `buffer ${win.buf}`;
-      const shows = buf?.lines ? `  lines ${win.topline}–${win.botline} of ${buf.lines}` : '';
-      lines.push(`  #${win.id} ${win.kind} ${name}  ${win.width}×${win.height} at ${win.row},${win.col}, text ${win.textWidth}`
-        + `${shows}  cursor ${win.cursor[0]}:${win.cursor[1]}`
-        + flags([win.id === view.you && 'yours', win.focused && 'focused', win.previous && 'previous', win.float && `float z${win.float.zindex ?? 50}`]));
-    }
+  for (const win of view.windows) {
+    const buf = bufferOf(view, win.buf);
+    const name = win.pi ? 'Pi' : buf ? shortPath(buf.name, cwd) : `buffer ${win.buf}`;
+    const folds = win.shown.filter(shown => shown.fold).map(shown => `${shown.line}–${shown.fold}`);
+    const shows = buf?.lines ? `  lines ${win.topline}–${win.botline} of ${buf.lines} in ${win.rows} rows` : '';
+    lines.push(`  #${win.id} ${win.kind} ${name}  ${win.width}×${win.height} at ${win.row},${win.col}, text ${win.textWidth}`
+      + `${shows}${folds.length ? `, folded ${folds.join(', ')}` : ''}  cursor ${win.cursor[0]}:${win.cursor[1]}`
+      + flags([win.id === view.you && 'yours', win.focused && 'focused', win.previous && 'previous', win.float && `float z${win.float.zindex ?? 50}`]));
   }
   lines.push(`Buffers shown: ${view.buffers.length}`);
   for (const buf of view.buffers) {

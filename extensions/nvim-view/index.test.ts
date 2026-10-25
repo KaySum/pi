@@ -11,7 +11,7 @@ import { launch } from '../nvim-service/service.mjs';
 import { attach, connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
 import registerView from './index.ts';
-import { bufferFor, bufferOf, useView, windowOf, type View } from './api.ts';
+import { bufferFor, bufferOf, isShown, lineAtRow, shownLine, useView, windowOf, type View } from './api.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -203,6 +203,46 @@ test('changes on screen no event reports are seen: a cursor elsewhere, a buffer 
   } finally { await shutdown(); }
 });
 
+test('with wrap, every line on screen is in the view, with the rows it takes, folds and virtual lines too', async () => {
+  const { view, changes, shutdown } = await pi();
+  try {
+    // Every third line takes 4 rows of 80; with line 37 at the top, 48 has 2 of the 22 rows left.
+    const win = await lua(`local lines = {}
+      for i = 1, 60 do lines[i] = i % 3 == 0 and string.rep('x', 250) or 'line ' .. i end
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, lines)
+      vim.cmd('normal! 37Gzt')
+      return vim.api.nvim_get_current_win()`);
+    const shown = await eventually(() => windowOf(view(), win)?.topline === 37 && windowOf(view(), win)!);
+    assert.deepEqual([shown.height, shown.botline, shown.rows, shown.screenCursor], [22, 48, 22, [1, 1]]);
+    const long = (line: number) => line % 3 === 0;
+    let row = 1;
+    assert.deepEqual(shown.shown, Array.from({ length: 12 }, (_, i) => {
+      const line = 37 + i, rows = line === 48 ? 2 : long(line) ? 4 : 1;
+      return { line, row: (row += rows) - rows, rows };
+    }));
+    assert.deepEqual([lineAtRow(shown, 4)?.line, lineAtRow(shown, 22)?.line, lineAtRow(shown, 23)], [39, 48, undefined]);
+
+    // A fold closed by the API: one row, its lines hidden, the lines below it come up.
+    await lua('vim.cmd("39,44fold")');
+    const folded = await eventually(() => windowOf(changes.at(-1), win)?.shown[2].fold === 44 && windowOf(changes.at(-1), win)!);
+    assert.deepEqual(folded.shown.slice(2, 4), [{ line: 39, row: 3, rows: 1, fold: 44 }, { line: 45, row: 4, rows: 4 }]);
+    assert.deepEqual([isShown(folded, 39), isShown(folded, 40), shownLine(folded, 40)?.line, isShown(folded, 36)], [true, false, 39, false]);
+
+    // Fewer lines than rows: the rest are empty. A line made long by the API wraps.
+    await lua('vim.cmd("normal! zE") vim.api.nvim_buf_set_lines(0, 0, -1, true, { "a", "b" }) vim.cmd("normal! gg")');
+    await eventually(() => windowOf(changes.at(-1), win)?.rows === 2);
+    await lua('vim.api.nvim_buf_set_lines(0, 1, 2, true, { string.rep("y", 200) }) vim.api.nvim_win_set_cursor(0, { 2, 170 })');
+    const wrapped = await eventually(() => windowOf(changes.at(-1), win)?.rows === 4 && windowOf(changes.at(-1), win)!);
+    assert.deepEqual([wrapped.botline, wrapped.screenCursor, wrapped.shown], [2, [4, 11], [{ line: 1, row: 1, rows: 1 }, { line: 2, row: 2, rows: 3 }]]);
+
+    // Virtual lines a plugin adds above it push its text down.
+    await lua('vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace("test"), 1, 0, { virt_lines = { { { "note" } } }, virt_lines_above = true })');
+    const noted = await eventually(() => windowOf(changes.at(-1), win)?.rows === 5 && windowOf(changes.at(-1), win)!);
+    assert.deepEqual(noted.shown[1], { line: 2, row: 3, rows: 3 });
+    assert.equal(lineAtRow(noted, 2), undefined); // The virtual line's row.
+  } finally { await shutdown(); }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {
@@ -345,7 +385,7 @@ test('/nvim-view shows the view readably, /nvim-view-json exactly', async () => 
     assert.match(text, /^Editor \d+×\d+, mode n, cwd (\/private)?\/tmp/);
     assert.match(text, /^Tab 1 of 1: \[#\d+ \| #\d+\]$/m);
     assert.match(text, /^Buffers shown: 1$/m);
-    assert.match(text, /^ {2}#\d+ normal shown\.ts {2}\d+×\d+ at 1,1, text \d+ {2}lines 1–\d+ of 40 {2}cursor 1:0 {2}\[yours, focused\]$/m);
+    assert.match(text, /^ {2}#\d+ normal shown\.ts {2}\d+×\d+ at 1,1, text \d+ {2}lines 1–\d+ of 40 in \d+ rows {2}cursor 1:0 {2}\[yours, focused\]$/m);
     assert.match(text, new RegExp(`^ {2}#\\d+ shown\\.ts {2}40 lines, ${readFileSync(path).length} B {2}in #\\d+, #\\d+$`, 'm'));
     assert.match(text, /^Views sent: \d+; the last took \d+\.\d\d ms to make$/m);
 

@@ -103,19 +103,43 @@ local function shown(win, info, buf, view)
 	return botline, lines, math.min(rows + view.topfill, info.height)
 end
 
+-- The number column, which with 'cpoptions' n wrapped rows take for text (win_col_off2).
+local function number_column(win)
+	local wo = vim.wo[win]
+	if not vim.o.cpoptions:find("n", 1, true) or not (wo.number or wo.relativenumber) then
+		return 0
+	end
+	local last = wo.number and vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+		or vim.api.nvim_win_get_height(win)
+	return math.max(#tostring(last), wo.numberwidth - 1) + 1
+end
+
 -- Where the cursor is on screen: on a tab, its last cell. With inline virtual text just before
--- it, Neovim gives a column as if the line did not wrap; wrapped here.
+-- it, Neovim places the text's start, then adds its width without wrapping; wrapped here as
+-- Neovim wraps (textpos2screenpos), from the cursor's virtual column.
 local function screen_cursor(win, info, cursor)
 	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	if screen.row == 0 then
 		return nil
 	end
-	local left, width = info.wincol + info.textoff, info.width - info.textoff
-	local past = screen.curscol - left
-	if past < width or width <= 0 or not vim.wo[win].wrap then
+	local inner, off = info.width, info.textoff
+	local width = inner - off + number_column(win)
+	if screen.curscol - info.wincol < inner or width <= 0 or not vim.wo[win].wrap then
 		return { screen.row, screen.curscol }
 	end
-	return { screen.row + math.floor(past / width), left + past % width }
+	-- Rows below the line's first, and the column in the window, of a 0-based virtual column.
+	local function place(vcol)
+		local col = vcol + off
+		if col < inner then
+			return 0, col
+		end
+		local rows = math.floor((col - inner) / width) + 1
+		return rows, col - rows * width
+	end
+	local ccol = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }) - 1 - (screen.endcol - screen.curscol)
+	local start = place(ccol - (screen.curscol - screen.col))
+	local rows, col = place(ccol)
+	return { screen.row - start + rows, info.wincol + col }
 end
 
 local function window(win, current, previous, cwd)
@@ -143,8 +167,8 @@ local function window(win, current, previous, cwd)
 		height = info.height,
 		textWidth = info.width - info.textoff,
 		textOff = info.textoff,
-		topline = info.topline,
-		botline = botline,
+		topline = lines[1] and lines[1].line or info.topline,
+		botline = lines[#lines] and (lines[#lines].fold or lines[#lines].line) or botline,
 		rows = rows,
 		shown = lines,
 		leftcol = view.leftcol,
@@ -308,7 +332,9 @@ local function unreported()
 	local parts = {}
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local cursor = vim.api.nvim_win_get_cursor(win)
-		table.insert(parts, win .. ":" .. cursor[1] .. ":" .. cursor[2])
+		-- Its screen cell too: inline virtual text before it moves it, with no event.
+		local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
+		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol }, ":"))
 		table.insert(parts, placement(win))
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then

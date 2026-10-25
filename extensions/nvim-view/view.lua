@@ -56,6 +56,34 @@ local function layout(node)
 	return { split = node[1], children = vim.tbl_map(layout, node[2]) }
 end
 
+-- The lines on screen, top to bottom: the screen row where each one's text starts and how many
+-- rows it takes; a closed fold is one, with the last line it hides.
+local function shown(win, info, skipcol, botline)
+	local lines, line, top, bottom = {}, info.topline, info.winrow, info.winrow + info.height
+	vim.api.nvim_win_call(win, function()
+		while line <= botline and top < bottom do
+			local fold = vim.fn.foldclosedend(line)
+			local last = fold ~= -1 and fold or line
+			local height = vim.api.nvim_win_text_height(win, {
+				start_row = line - 1,
+				end_row = last - 1,
+				start_vcol = line == info.topline and skipcol or nil,
+			})
+			-- Virtual or filler lines above it push its text down; only then is it worth asking.
+			local row = height.fill > 0 and vim.fn.screenpos(win, line, 1).row or 0
+			row = row ~= 0 and row or top
+			table.insert(lines, {
+				line = line,
+				row = row,
+				rows = math.min(height.all - height.fill, bottom - row),
+				fold = fold ~= -1 and fold or nil,
+			})
+			line, top = last + 1, top + height.all
+		end
+	end)
+	return lines, math.min(top, bottom) - info.winrow
+end
+
 local function window(win, current, previous, cwd)
 	local buf = vim.api.nvim_win_get_buf(win)
 	local config = vim.api.nvim_win_get_config(win)
@@ -66,6 +94,18 @@ local function window(win, current, previous, cwd)
 	for _, name in ipairs(OPTIONS) do
 		options[name] = vim.wo[win][name]
 	end
+	-- Neovim's botline is the last line shown whole: with wrap, the one below may show its
+	-- start in the rows left.
+	local botline = info.botline
+	if
+		botline < vim.api.nvim_buf_line_count(buf)
+		and vim.o.display ~= ""
+		and vim.fn.screenpos(win, botline + 1, 1).row ~= 0
+	then
+		botline = botline + 1
+	end
+	local lines, rows = shown(win, info, view.skipcol, botline)
+	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	return {
 		id = win,
 		number = info.winnr,
@@ -81,10 +121,13 @@ local function window(win, current, previous, cwd)
 		textWidth = info.width - info.textoff,
 		textOff = info.textoff,
 		topline = info.topline,
-		botline = info.botline,
+		botline = botline,
+		rows = rows,
+		shown = lines,
 		leftcol = view.leftcol,
 		skipcol = view.skipcol,
 		cursor = { cursor[1], cursor[2] },
+		screenCursor = screen.row ~= 0 and { screen.row, screen.col } or nil,
 		-- getcwd() for a window is slow; most have no directory of their own, nor their tab.
 		cwd = (vim.fn.haslocaldir(info.winnr, info.tabnr) ~= 0 or vim.fn.haslocaldir(-1, info.tabnr) ~= 0)
 				and vim.fn.getcwd(info.winnr, info.tabnr)
@@ -223,7 +266,10 @@ local function unreported()
 	local parts = {}
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local cursor = vim.api.nvim_win_get_cursor(win)
-		table.insert(parts, win .. ":" .. cursor[1] .. ":" .. cursor[2])
+		-- Folds opened or closed and virtual lines added change the rows the lines on screen take.
+		local top, bottom = vim.fn.line("w0", win), vim.fn.line("w$", win)
+		local rows = vim.api.nvim_win_text_height(win, { start_row = top - 1, end_row = bottom - 1 }).all
+		table.insert(parts, table.concat({ win, cursor[1], cursor[2], top, bottom, rows }, ":"))
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then
 			local row, col = unpack(vim.api.nvim_win_get_position(win))

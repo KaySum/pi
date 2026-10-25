@@ -11,6 +11,16 @@ export type Tab = {
   focused?: true;
 };
 
+export type ShownLine = {
+  line: number;
+  /** The screen row its text starts on, 1-based, below any virtual lines above it. */
+  row: number;
+  /** The rows its text takes once wrapped, as many as fit. */
+  rows: number;
+  /** For a closed fold, the last line it hides. */
+  fold?: number;
+};
+
 export type Window = {
   id: number;
   /** As `<C-w>` counts them in its tab, from 1. */
@@ -27,10 +37,19 @@ export type Window = {
   row: number; col: number; width: number; height: number;
   /** The width left for text, and what the number, sign and fold columns take before it. */
   textWidth: number; textOff: number;
-  /** The first and last buffer lines it shows, and how far it is scrolled sideways. */
+  /**
+   * The first and last buffer lines it shows, even in part: with wrap, the last may show only its
+   * start, and the first only its end, past `skipcol`. How far it is scrolled sideways.
+   */
   topline: number; botline: number; leftcol: number; skipcol: number;
+  /** The rows those lines take on screen, wrapped, folded and with virtual lines; the rest are empty. */
+  rows: number;
+  /** The lines on screen, top to bottom; a closed fold is one, its first line. */
+  shown: ShownLine[];
   /** 1-based line, 0-based byte column. */
   cursor: [line: number, col: number];
+  /** Where the cursor is on the screen, 1-based, as `row` and `col` count. */
+  screenCursor?: [row: number, col: number];
   cwd: string;
   float?: { relative: string; zindex?: number; focusable?: boolean; border?: unknown };
   options: {
@@ -91,6 +110,15 @@ export const windowOf = (view: View | undefined, id: number | undefined) => view
 export const bufferOf = (view: View | undefined, id: number | undefined) => view?.buffers.find(buf => buf.id === id);
 /** The buffer of a file, by its absolute path. */
 export const bufferFor = (view: View | undefined, path: string) => view?.buffers.find(buf => buf.name === path);
+
+/** Where a line is on screen in a window: its own entry, or the closed fold hiding it. */
+export const shownLine = (win: Window | undefined, line: number) =>
+  win?.shown.find(shown => line >= shown.line && line <= (shown.fold ?? shown.line));
+/** Whether a line's text is on screen in a window, not hidden in a closed fold. */
+export const isShown = (win: Window | undefined, line: number) => shownLine(win, line)?.line === line;
+/** The line shown at a screen row in a window, if one is. */
+export const lineAtRow = (win: Window | undefined, row: number) =>
+  win?.shown.find(shown => row >= shown.row && row < shown.row + shown.rows);
 
 export type ViewHandle = {
   /** The latest view, at once; undefined while Pi is not attached to Neovim. */

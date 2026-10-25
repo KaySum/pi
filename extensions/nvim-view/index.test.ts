@@ -375,21 +375,30 @@ test('without Neovim, or once it goes, there is no view; without nvim-view, none
   } finally { await alone.shutdown(); }
 });
 
-test('/nvim-view shows the view readably, /nvim-view-json exactly', async () => {
+test('/nvim-view shows the view readably, all of it; /nvim-view-json exactly', async () => {
   const { view, run, shutdown } = await pi();
   try {
     const path = await file('shown.ts', 40);
-    await lua('vim.cmd("edit " .. vim.fn.fnameescape(...) .. " | vsplit")', path);
-    const [text, type] = await eventually(async () => { const said = await run('nvim-view'); return said[0].includes('#') && said; });
+    await lua('vim.cmd("edit " .. vim.fn.fnameescape(...) .. " | vsplit | 3,5fold")', path);
+    const [text, type] = await eventually(async () => { const said = await run('nvim-view'); return said[0].includes('folded') && said; });
     assert.equal(type, 'info');
-    assert.match(text, /^Editor \d+×\d+, mode n, cwd (\/private)?\/tmp/);
-    assert.match(text, /^Tab 1 of 1: \[#\d+ \| #\d+\]$/m);
-    assert.match(text, /^Buffers shown: 1$/m);
-    assert.match(text, /^ {2}#\d+ normal shown\.ts {2}\d+×\d+ at 1,1, text \d+ {2}lines 1–\d+ of 40 in \d+ rows {2}cursor 1:0 {2}\[yours, focused\]$/m);
-    assert.match(text, new RegExp(`^ {2}#\\d+ shown\\.ts {2}40 lines, ${readFileSync(path).length} B {2}in #\\d+, #\\d+$`, 'm'));
-    assert.match(text, /^Views sent: \d+; the last took \d+\.\d\d ms to make$/m);
+    const v = (await view.refresh())!;
+    const [win, other] = [v.focus.win, v.windows.find(w => w.id !== v.focus.win)!.id];
+    assert.match(text, /^Editor 80×24, cmdheight 1, mode n, cwd (\/private)?\/tmp$/m);
+    assert.match(text, new RegExp(`^Focus: tab ${v.focus.tab}, window ${win}, buffer ${v.focus.buf}, previous ${other}; yours ${win}$`, 'm'));
+    assert.match(text, /^Tab 1 of 1; ids \d+$/m);
+    assert.match(text, new RegExp(`^Layout: row\\[${win}, ${other}\\]$`, 'm'));
+    assert.match(text, new RegExp(`^Window ${win} \\(#1\\), normal, buffer ${v.focus.buf} {2}\\[yours, focused\\]$`, 'm'));
+    assert.match(text, /^ {2}40×22 at 1,1, text 40 wide after a gutter of 0$/m);
+    assert.match(text, /^ {2}lines 1–24 in 22 rows: 1–2, 3–5 folded, 6–24$/m);
+    assert.match(text, /^ {2}cursor 1:0, at 1,1 on screen$/m);
+    assert.match(text, /^ {2}colorcolumn= conceallevel=0 .* wrap$/m);
+    assert.match(text, new RegExp(`^Buffer ${v.focus.buf} ${path.replace(/[.]/g, '\\.')}$`, 'm'));
+    assert.match(text, new RegExp(`^ {2}40 lines, ${readFileSync(path).length} bytes, changedtick \\d+, in ${win}, ${other}$`, 'm'));
+    assert.match(text, /^ {2}listed loaded nomodified noreadonly modifiable$/m);
+    assert.match(text, /\n\nViews sent: \d+; the last took \d+\.\d\d ms to make$/);
 
-    const [json] = await run('nvim-view-json');
+  const [json] = await run('nvim-view-json');
     assert.deepEqual(JSON.parse(json), JSON.parse(JSON.stringify(await view.refresh())));
   } finally { await shutdown(); }
   const detached = await pi({ view: true });

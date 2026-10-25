@@ -56,9 +56,17 @@ local function layout(node)
 	return { split = node[1], children = vim.tbl_map(layout, node[2]) }
 end
 
--- The lines on screen, top to bottom: the screen row where each one's text starts and how many
--- rows it takes; a closed fold is one, with the last line it hides.
-local function shown(win, info, skipcol, botline)
+-- What a window shows: its last line, even if only in part; each line on screen, top to
+-- bottom, with the screen row its text starts on and the rows it takes, a closed fold as one
+-- with the last line it hides; and how many rows are not empty.
+local function shown(win, info, buf, skipcol)
+	local count = vim.api.nvim_buf_line_count(buf)
+	-- Neovim's botline is the last line shown whole: with wrap, the one below may show its
+	-- start in the rows left.
+	local botline = info.botline
+	if botline < count and vim.o.display ~= "" and vim.fn.screenpos(win, botline + 1, 1).row ~= 0 then
+		botline = botline + 1
+	end
 	local lines, line, top, bottom = {}, info.topline, info.winrow, info.winrow + info.height
 	vim.api.nvim_win_call(win, function()
 		while line <= botline and top < bottom do
@@ -81,7 +89,14 @@ local function shown(win, info, skipcol, botline)
 			line, top = last + 1, top + height.all
 		end
 	end)
-	return lines, math.min(top, bottom) - info.winrow
+	-- Virtual lines above the next line take rows even when its text is not on screen, and
+	-- those below the last line are only counted to the end.
+	local rows = vim.api.nvim_win_text_height(win, {
+		start_row = info.topline - 1,
+		end_row = botline < count and botline or nil,
+		start_vcol = skipcol,
+	}).all
+	return botline, lines, math.min(rows, info.height)
 end
 
 local function window(win, current, previous, cwd)
@@ -94,17 +109,7 @@ local function window(win, current, previous, cwd)
 	for _, name in ipairs(OPTIONS) do
 		options[name] = vim.wo[win][name]
 	end
-	-- Neovim's botline is the last line shown whole: with wrap, the one below may show its
-	-- start in the rows left.
-	local botline = info.botline
-	if
-		botline < vim.api.nvim_buf_line_count(buf)
-		and vim.o.display ~= ""
-		and vim.fn.screenpos(win, botline + 1, 1).row ~= 0
-	then
-		botline = botline + 1
-	end
-	local lines, rows = shown(win, info, view.skipcol, botline)
+	local botline, lines, rows = shown(win, info, buf, view.skipcol)
 	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	return {
 		id = win,
@@ -127,7 +132,7 @@ local function window(win, current, previous, cwd)
 		leftcol = view.leftcol,
 		skipcol = view.skipcol,
 		cursor = { cursor[1], cursor[2] },
-		screenCursor = screen.row ~= 0 and { screen.row, screen.col } or nil,
+		screenCursor = screen.row ~= 0 and { screen.row, screen.curscol } or nil,
 		-- getcwd() for a window is slow; most have no directory of their own, nor their tab.
 		cwd = (vim.fn.haslocaldir(info.winnr, info.tabnr) ~= 0 or vim.fn.haslocaldir(-1, info.tabnr) ~= 0)
 				and vim.fn.getcwd(info.winnr, info.tabnr)
@@ -262,14 +267,31 @@ end
 -- command, while idle, this is compared; a cheap look, unlike a snapshot, which here would
 -- loop. Everything `window` gives of a float is in it; buffers are summed, their changedticks
 -- only rising.
+-- Which line is on which row: folds opened or closed and virtual lines placed change it, and
+-- fire no event. Each line's rows (virtual lines below one count as the next's), through the
+-- one below the last on screen.
+local function placement(win)
+	local count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+	local line, last = vim.fn.line("w0", win), math.min(vim.fn.line("w$", win) + 1, count)
+	return vim.api.nvim_win_call(win, function()
+		local parts = { line }
+		while line <= last do
+			local fold = vim.fn.foldclosedend(line)
+			-- Virtual lines below the buffer's last line are only counted to the end.
+			local height = vim.api.nvim_win_text_height(win, { start_row = line - 1, end_row = line < count and line - 1 or nil })
+			table.insert(parts, fold ~= -1 and -fold or height.all)
+			line = fold ~= -1 and fold + 1 or line + 1
+		end
+		return table.concat(parts, ",")
+	end)
+end
+
 local function unreported()
 	local parts = {}
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local cursor = vim.api.nvim_win_get_cursor(win)
-		-- Folds opened or closed and virtual lines added change the rows the lines on screen take.
-		local top, bottom = vim.fn.line("w0", win), vim.fn.line("w$", win)
-		local rows = vim.api.nvim_win_text_height(win, { start_row = top - 1, end_row = bottom - 1 }).all
-		table.insert(parts, table.concat({ win, cursor[1], cursor[2], top, bottom, rows }, ":"))
+		table.insert(parts, win .. ":" .. cursor[1] .. ":" .. cursor[2])
+		table.insert(parts, placement(win))
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then
 			local row, col = unpack(vim.api.nvim_win_get_position(win))

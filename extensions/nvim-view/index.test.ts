@@ -243,6 +243,47 @@ test('with wrap, every line on screen is in the view, with the rows it takes, fo
   } finally { await shutdown(); }
 });
 
+test('lines moving between rows with nothing else changed are seen; virtual rows are not empty; a tab\'s cursor is on its last cell', async () => {
+  const { view, changes, shutdown } = await pi();
+  try {
+    const win = await lua(`vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c', 'd' })
+      _G.note = vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 1, 0, { virt_lines = { { { 'note' } } }, virt_lines_above = true })
+      return vim.api.nvim_get_current_win()`);
+    const rowsOf = () => windowOf(changes.at(-1), win)?.shown.map(s => s.row).join();
+    await eventually(() => rowsOf() === '1,3,4,5');
+    // The same rows in all, a different line under the virtual one.
+    await lua('vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace("test"), 2, 0, { id = _G.note, virt_lines = { { { "note" } } }, virt_lines_above = true })');
+    await eventually(() => rowsOf() === '1,2,4,5');
+
+    // One fold closed for another of the same size.
+    await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      local lines = {} for i = 1, 26 do lines[i] = 'l' .. i end
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, lines)
+      vim.cmd('2,4fold | 6,8fold | 6foldopen | normal! gg')`);
+    const foldsOf = () => windowOf(changes.at(-1), win)?.shown.filter(s => s.fold).map(s => s.line).join();
+    await eventually(() => foldsOf() === '2');
+    await lua('vim.cmd("2foldopen | 6foldclose | normal! gg")');
+    await eventually(() => foldsOf() === '6');
+
+    // Virtual lines below the last line, and above a line pushed off screen, take rows.
+    await lua(`vim.cmd('normal! zE')
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c' })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 2, 0, { virt_lines = { { { 'below' } } } })`);
+    await eventually(() => windowOf(changes.at(-1), win)?.rows === 4);
+    await lua('vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace("test"), 2, 0, { virt_lines = { { { "more" } } } })');
+    await eventually(() => windowOf(changes.at(-1), win)?.rows === 5); // No event says so.
+    await lua(`vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b' })
+      local many = {} for i = 1, 30 do many[i] = { { 'v' .. i } } end
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 1, 0, { virt_lines = many, virt_lines_above = true })`);
+    const pushed = await eventually(() => windowOf(changes.at(-1), win)?.rows === 22 && windowOf(changes.at(-1), win)!);
+    assert.deepEqual(pushed.shown, [{ line: 1, row: 1, rows: 1 }]);
+
+    // The cursor on a tab sits on its last cell, not where the tab starts.
+    await lua('vim.api.nvim_buf_clear_namespace(0, -1, 0, -1) vim.api.nvim_buf_set_lines(0, 0, -1, true, { "\\tX" }) vim.api.nvim_win_set_cursor(0, { 1, 0 })');
+    await eventually(() => windowOf(changes.at(-1), win)?.screenCursor?.[1] === 8);
+  } finally { await shutdown(); }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {

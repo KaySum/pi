@@ -77,8 +77,8 @@ directory; terminals; text changed; the cursor moved; options set; language serv
 the terminal's focus. Some changes fire no event at all: a float changed, a cursor moved in a
 window that isn't current, a shown buffer edited while another is current, a fold opened or
 closed, virtual lines added, all by plugins through the API. Those are seen once the editor is
-idle, by a quick look (a few microseconds) at what's on screen. Changes to what isn't on
-screen send nothing.
+idle, by a quick look at what's on screen: which line is on which row, about 1 µs a line.
+Changes to what isn't on screen send nothing.
 
 A view goes as soon as the editor is free after a change, so a burst (a split opening fires
 half a dozen events) makes one, and while changes keep coming (typing, scrolling) one goes

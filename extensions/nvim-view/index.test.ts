@@ -303,6 +303,15 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
     const concealed = await eventually(() => latest()?.shown.length === 3 && latest()!);
     assert.deepEqual(concealed.shown.map(s => [s.line, s.row]), [[1, 1], [5, 2], [6, 3]]);
     assert.deepEqual([isShown(concealed, 2), concealed.rows], [false, 3]);
+    // Concealed at either edge, they are not in the lines it shows.
+    await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_win_set_cursor(0, { 6, 0 })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { end_row = 2, conceal_lines = '' })`);
+    await eventually(() => latest()?.topline === 4);
+    await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 4, 0, { end_row = 5, conceal_lines = '' })`);
+    await eventually(() => latest()?.topline === 1 && latest()?.botline === 4);
 
     // Inline text wider than the window before the cursor: the cursor is where it wraps to.
     await lua(`vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
@@ -311,8 +320,24 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
       vim.api.nvim_win_set_cursor(0, { 1, 0 })`);
     const wrapped = await eventually(() => latest()?.rows === 2 && latest()!);
     assert.deepEqual(wrapped.screenCursor, [2, 11]);
+    // With 'cpoptions' n, wrapped rows take the number column for text too.
+    await lua(`vim.wo.number = true vim.opt.cpoptions:append('n')
+      vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { string.rep('A', 100) })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_text = { { string.rep('v', 90) } }, virt_text_pos = 'inline' })
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })`);
+    await eventually(() => latest()?.screenCursor?.join() === '2,15');
+
+    // Inline text that moves the cursor along its row changes nothing else: no event says so.
+    await lua(`vim.wo.number = false vim.opt.cpoptions:remove('n')
+      vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'A', 'B' })
+      _G.prefix = vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_text = { { 'vvvvvvv' } }, virt_text_pos = 'inline' })`);
+    await eventually(() => latest()?.screenCursor?.join() === '1,8');
+    await lua('vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace("test"), 0, 0, { id = _G.prefix, virt_text = { { "vvvvvvvvvv" } }, virt_text_pos = "inline" })');
+    await eventually(() => latest()?.screenCursor?.join() === '1,11');
   } finally {
-    await lua('vim.wo.conceallevel, vim.wo.concealcursor = 0, ""');
+    await lua('vim.wo.conceallevel, vim.wo.concealcursor, vim.wo.number = 0, "", false vim.opt.cpoptions:remove("n")');
     await shutdown();
   }
 });

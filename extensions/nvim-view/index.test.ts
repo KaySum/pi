@@ -63,7 +63,7 @@ async function file(name: string, n: number) {
   return path;
 }
 
-test('the view shows the tabs, their splits, the windows and the buffers in them', async () => {
+test('the view shows the splits, the windows and the buffers in them', async () => {
   const { view, shutdown } = await pi();
   try {
     const path = await file('app.ts', 300);
@@ -77,14 +77,12 @@ test('the view shows the tabs, their splits, the windows and the buffers in them
       vim.cmd('wincmd t | wincmd l')`, path);
     const v = await eventually(async () => { const v = await view.refresh(); return v?.windows.length === 4 && v; });
 
-    const [tab] = v.tabs;
-    assert.equal(v.tabs.length, 1);
-    assert.equal(tab.focused, true);
+    assert.deepEqual(v.tabs, [{ id: v.focus.tab, number: 1, focused: true }]);
     const code = v.windows.find(w => bufferOf(v, w.buf)?.name === path)!;
     const term = v.windows.find(w => w.kind === 'terminal')!;
     const scratch = v.windows.find(w => w.kind === 'nofile')!;
     const float = v.windows.find(w => w.kind === 'float')!;
-    assert.deepEqual(tab.layout, { split: 'row', children: [{ split: 'col', children: [{ win: code.id }, { win: scratch.id }] }, { win: term.id }] });
+    assert.deepEqual(v.layout, { split: 'row', children: [{ split: 'col', children: [{ win: code.id }, { win: scratch.id }] }, { win: term.id }] });
     assert.deepEqual([term.focused, code.previous, v.focus.win, v.focus.previous], [true, true, term.id, code.id]);
     assert.equal(v.you, code.id); // Not the terminal you are in: the window you came from.
     assert.deepEqual([float.float?.zindex, float.float?.relative], [60, 'editor']);
@@ -141,10 +139,10 @@ test('a window\'s directory is its own, else its tab\'s, else the editor\'s', as
     await lua(`vim.cmd('tabnew | tcd ' .. ...)
       vim.cmd('vsplit | lcd ' .. select(2, ...))`, home, temp);
     const v = await eventually(async () => { const v = await view.refresh(); return v?.tabs.length === 2 && v; });
-    const tab = v.tabs.find(t => t.focused)!;
-    const dirs = v.windows.filter(w => w.tab === tab.id).map(w => w.cwd).sort();
-    assert.deepEqual(dirs, [home, temp].sort()); // One of its own; one its tab's.
-    assert.equal(v.windows.find(w => w.tab !== tab.id)!.cwd, v.editor.cwd);
+    assert.deepEqual(v.windows.map(w => w.cwd).sort(), [home, temp].sort()); // One of its own; one its tab's.
+    await lua('vim.cmd("tabfirst")');
+    const first = await eventually(async () => { const v = await view.refresh(); return v?.tabs[0].focused && v; });
+    assert.deepEqual(first.windows.map(w => w.cwd), [first.editor.cwd]);
   } finally {
     await lua(`vim.cmd('cd ' .. ...)`, '/tmp');
     await shutdown();
@@ -181,37 +179,28 @@ test('a float moved by the API is seen, yet an idle editor makes no views', asyn
   } finally { await shutdown(); }
 });
 
-test('changes no event reports are seen: a cursor elsewhere, an unseen buffer edited or unloaded', async () => {
+test('changes on screen no event reports are seen: a cursor elsewhere, a buffer shown there edited', async () => {
   const { view, changes, shutdown } = await pi();
   try {
-    const path = await file('hidden.ts', 1);
-    const [other, hidden] = await lua(`vim.o.hidden = true
-      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c' })
+    const path = await file('beside.ts', 1);
+    const [other, beside] = await lua(`vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c' })
       vim.cmd('split')
       local other = vim.fn.win_getid(vim.fn.winnr('#'))
-      vim.cmd('edit ' .. vim.fn.fnameescape(...))
-      local hidden = vim.api.nvim_get_current_buf()
       vim.cmd('enew')
-      return { other, hidden }`, path);
-    await eventually(() => view()?.buffers.some(b => b.id === hidden && b.loaded && !b.windows.length));
+      vim.api.nvim_win_set_buf(other, vim.fn.bufadd(...))
+      vim.fn.bufload(vim.fn.bufadd(...))
+      return { other, vim.api.nvim_win_get_buf(other) }`, path);
+    await eventually(() => view()?.buffers.some(b => b.id === beside && b.loaded));
     await delay(100);
     const latest = () => changes.at(-1)!;
 
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "one", "two", "three" })', beside); // Not current.
+    await eventually(() => bufferOf(latest(), beside)?.lines === 3);
     await editor.request('nvim_win_set_cursor', [other, [2, 0]]); // Not the current window.
     await eventually(() => windowOf(latest(), other)?.cursor[0] === 2);
-
-    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "first" })', hidden); // Modified, unseen.
-    await eventually(() => bufferOf(latest(), hidden)?.modified);
-    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "second", "third" })', hidden); // Again.
-    await eventually(() => bufferOf(latest(), hidden)?.lines === 2);
-
-    await lua('vim.cmd("bunload! " .. ...)', hidden);
-    const unloaded = await eventually(() => bufferOf(latest(), hidden)?.loaded === false && bufferOf(latest(), hidden));
-    assert.deepEqual([unloaded.lines, unloaded.bytes], [undefined, undefined]);
-  } finally {
-    await lua('vim.o.hidden = false');
-    await shutdown();
-  }
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "again" })', beside); // Modified already.
+    await eventually(() => bufferOf(latest(), beside)?.lines === 1);
+  } finally { await shutdown(); }
 });
 
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
@@ -282,19 +271,39 @@ test('views keep coming while you type, not only once you stop', async () => {
   } finally { await shutdown(); }
 });
 
-test('buffers no one sees and no one listed are counted, not listed', async () => {
-  const { view, shutdown } = await pi();
+test('only what is on screen is in the view: not hidden buffers, other tabs or hidden floats', async () => {
+  const { view, changes, shutdown } = await pi();
   try {
-    await lua('for _ = 1, 5 do vim.api.nvim_create_buf(false, true) end; vim.api.nvim_create_buf(true, false)');
-    const v = await eventually(() => view.refresh()); // Once attached.
-    assert.equal(v.omitted, 5);
-    assert.ok(v.buffers.some(buf => buf.listed && !buf.windows.length && buf.lines === 1));
-    // One left out joins the view once listed, by the API alone, and is followed from then on.
-    const scratch = await lua('local b = vim.api.nvim_create_buf(false, true) vim.api.nvim_set_option_value("buflisted", true, { buf = b }) return b');
-    await eventually(() => bufferOf(view(), scratch)?.listed);
-    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "one", "two" })', scratch);
-    await eventually(() => bufferOf(view(), scratch)?.lines === 2);
-  } finally { await shutdown(); }
+    const [hidden, float, shown] = await lua(`vim.o.hidden = true
+      local hidden = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_buf_set_lines(hidden, 0, -1, true, { 'not on screen' })
+      local float = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, { relative = 'editor', row = 1, col = 1, width = 5, height = 2, hide = true })
+      vim.cmd('tabnew')
+      local shown = vim.api.nvim_get_current_buf()
+      vim.cmd('vsplit | tabfirst')
+      return { hidden, float, shown }`);
+    const v = await eventually(async () => { const v = await view.refresh(); return v?.tabs.length === 2 && v; });
+    assert.deepEqual([bufferOf(v, hidden), windowOf(v, float), bufferOf(v, shown)], [undefined, undefined, undefined]);
+    assert.equal(v.windows.length, 1); // This tab's one window; the other tab's two are not on screen.
+    assert.deepEqual(v.layout, { win: v.windows[0].id });
+    assert.deepEqual(v.tabs.map(t => [t.number, t.focused]), [[1, true], [2, undefined]]);
+
+    // Hidden things changing send nothing; shown, they are in the view, and followed.
+    await delay(100);
+    const before = changes.length;
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "still hidden" })', hidden);
+    await delay(150);
+    assert.equal(changes.length, before);
+    await lua('vim.api.nvim_win_set_config(..., { hide = false })', float);
+    await eventually(() => windowOf(view(), float));
+    await lua('vim.api.nvim_win_set_buf(0, ...)', hidden);
+    await eventually(() => bufferOf(view(), hidden)?.windows.length === 1);
+    await lua('vim.api.nvim_buf_set_lines(..., 0, -1, true, { "one", "two" })', hidden);
+    await eventually(() => bufferOf(view(), hidden)?.lines === 2);
+  } finally {
+    await lua('vim.o.hidden = false');
+    await shutdown();
+  }
 });
 
 test('Pi\'s own terminal, and the windows showing it, are marked', async () => {
@@ -334,7 +343,8 @@ test('/nvim-view shows the view readably, /nvim-view-json exactly', async () => 
     const [text, type] = await eventually(async () => { const said = await run('nvim-view'); return said[0].includes('#') && said; });
     assert.equal(type, 'info');
     assert.match(text, /^Editor \d+×\d+, mode n, cwd (\/private)?\/tmp/);
-    assert.match(text, /^Tab 1 \(focused\): \[#\d+ \| #\d+\]$/m);
+    assert.match(text, /^Tab 1 of 1: \[#\d+ \| #\d+\]$/m);
+    assert.match(text, /^Buffers shown: 1$/m);
     assert.match(text, /^ {2}#\d+ normal shown\.ts {2}\d+×\d+ at 1,1, text \d+ {2}lines 1–\d+ of 40 {2}cursor 1:0 {2}\[yours, focused\]$/m);
     assert.match(text, new RegExp(`^ {2}#\\d+ shown\\.ts {2}40 lines, ${readFileSync(path).length} B {2}in #\\d+, #\\d+$`, 'm'));
     assert.match(text, /^Views sent: \d+; the last took \d+\.\d\d ms to make$/m);

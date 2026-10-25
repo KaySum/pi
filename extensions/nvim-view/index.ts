@@ -35,9 +35,10 @@ export function describe(view: View, cwd: string, stats?: Stats) {
     `Editor ${editor.columns}×${editor.lines}, mode ${editor.mode}${editor.blocking ? ' (waiting at a prompt)' : ''}, cwd ${editor.cwd}`
       + (editor.focused === undefined ? '' : editor.focused ? ', terminal focused' : ', terminal not focused'),
   ];
-  for (const tab of view.tabs) {
-    lines.push(`Tab ${tab.number}${tab.focused ? ' (focused)' : ''}: ${layoutOf(tab.layout)}`);
-    for (const win of view.windows.filter(win => win.tab === tab.id)) {
+  const tab = view.tabs.find(tab => tab.focused);
+  lines.push(`Tab ${tab?.number ?? 1} of ${view.tabs.length}: ${layoutOf(view.layout)}`);
+  {
+    for (const win of view.windows) {
       const buf = bufferOf(view, win.buf);
       const name = win.pi ? 'Pi' : buf ? shortPath(buf.name, cwd) : `buffer ${win.buf}`;
       const shows = buf?.lines ? `  lines ${win.topline}–${win.botline} of ${buf.lines}` : '';
@@ -46,12 +47,12 @@ export function describe(view: View, cwd: string, stats?: Stats) {
         + flags([win.id === view.you && 'yours', win.focused && 'focused', win.previous && 'previous', win.float && `float z${win.float.zindex ?? 50}`]));
     }
   }
-  lines.push(`Buffers: ${view.buffers.length} shown${view.omitted ? `, ${view.omitted} unlisted and unseen left out` : ''}`);
+  lines.push(`Buffers shown: ${view.buffers.length}`);
   for (const buf of view.buffers) {
     const name = buf.pi ? 'Pi terminal' : shortPath(buf.name, cwd);
     const contents = buf.lines === undefined ? 'not loaded' : `${buf.lines} line${buf.lines === 1 ? '' : 's'}, ${size(buf.bytes ?? 0)}`;
     lines.push(`  #${buf.id} ${name}${buf.filetype ? `  ${buf.filetype}` : ''}  ${contents}`
-      + (buf.windows.length ? `  in ${buf.windows.map(id => `#${id}`).join(', ')}` : '')
+      + `  in ${buf.windows.map(id => `#${id}`).join(', ')}`
       + (buf.lsp.length ? `  lsp ${buf.lsp.join(', ')}` : '')
       + flags([buf.modified && 'modified', !buf.listed && 'unlisted', buf.readonly && 'readonly', buf.buftype]));
   }
@@ -115,7 +116,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.registerCommand('nvim-view', {
-    description: 'Show what nvim-view gives extensions: the editor\'s tabs, splits, windows and buffers',
+    description: 'Show what nvim-view gives extensions: what is on screen in Neovim, its splits, windows and buffers',
     handler: show((view, ctx) => describe(view, ctx.cwd, stats)),
   });
   pi.registerCommand('nvim-view-json', {

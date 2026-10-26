@@ -48,7 +48,11 @@ export type Window = {
   shown: ShownLine[];
   /** 1-based line, 0-based byte column. */
   cursor: [line: number, col: number];
-  /** Where the cursor is on the screen, 1-based, as `row` and `col` count. */
+  /**
+   * Where the cursor is on the screen, 1-based, as `row` and `col` count. Text concealed before
+   * it on its line is counted as if shown, as Neovim's `screenpos()` counts it: the column is
+   * then too far right.
+   */
   screenCursor?: [row: number, col: number];
   cwd: string;
   float?: { relative: string; zindex?: number; focusable?: boolean; border?: unknown };

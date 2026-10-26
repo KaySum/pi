@@ -336,8 +336,32 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
     await eventually(() => latest()?.screenCursor?.join() === '1,8');
     await lua('vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace("test"), 0, 0, { id = _G.prefix, virt_text = { { "vvvvvvvvvv" } }, virt_text_pos = "inline" })');
     await eventually(() => latest()?.screenCursor?.join() === '1,11');
+
+    // The inline text's start scrolled off sideways: the cursor after it is still on screen.
+    await lua(`vim.wo.wrap = false
+      vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { string.rep('A', 20) })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_text = { { string.rep('v', 90) } }, virt_text_pos = 'inline' })
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.fn.winrestview({ leftcol = 20 })`);
+    const leftcol: number = await lua('return vim.fn.winsaveview().leftcol'); // As Neovim keeps the cursor in view.
+    assert.ok(leftcol > 0);
+    await eventually(() => latest()?.screenCursor?.join() === `1,${91 - leftcol}`);
+
+    // A window not current, showing another buffer: its own line and tabstop, not the current's.
+    const other = await lua(`vim.wo.wrap = true
+      vim.api.nvim_buf_clear_namespace(0, -1, 0, -1)
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'x', 'y', '\\tA' })
+      vim.bo.tabstop = 8
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 2, 0, { virt_text = { { string.rep('v', 90) } }, virt_text_pos = 'inline' })
+      vim.api.nvim_win_set_cursor(0, { 3, 0 })
+      local other = vim.api.nvim_get_current_win()
+      vim.cmd('rightbelow split | enew | setlocal tabstop=2')
+      return other`);
+    // 90 cells of inline text, then the tab to cell 96 (with a tabstop of 2, 92): on the next row.
+    await eventually(() => windowOf(changes.at(-1), other)?.screenCursor?.join() === '4,16');
   } finally {
-    await lua('vim.wo.conceallevel, vim.wo.concealcursor, vim.wo.number = 0, "", false vim.opt.cpoptions:remove("n")');
+    await lua('vim.wo.conceallevel, vim.wo.concealcursor, vim.wo.number, vim.wo.wrap = 0, "", false, true vim.opt.cpoptions:remove("n")');
     await shutdown();
   }
 });

@@ -103,10 +103,15 @@ local function shown(win, info, buf, view)
 	return botline, lines, math.min(rows + view.topfill, info.height)
 end
 
--- The number column, which with 'cpoptions' n wrapped rows take for text (win_col_off2).
-local function number_column(win)
+-- The number column, which with 'cpoptions' n wrapped rows take for text (win_col_off2). A
+-- 'statuscolumn' draws the whole gutter, all of which they take then.
+local function number_column(win, info)
 	local wo = vim.wo[win]
-	if not vim.o.cpoptions:find("n", 1, true) or not (wo.number or wo.relativenumber) then
+	if not vim.o.cpoptions:find("n", 1, true) then
+		return 0
+	elseif wo.statuscolumn ~= "" then
+		return info.textoff
+	elseif not (wo.number or wo.relativenumber) then
 		return 0
 	end
 	local last = wo.number and vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
@@ -125,7 +130,7 @@ local function screen_cursor(win, info, cursor, view, lines)
 	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - info.wincol < inner or not wrap) then
 		return { screen.row, screen.curscol }
 	end
-	local reclaimed = number_column(win)
+	local reclaimed = number_column(win, info)
 	local width = inner - off + reclaimed
 	if width <= 0 then
 		return nil

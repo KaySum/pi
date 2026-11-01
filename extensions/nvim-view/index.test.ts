@@ -327,6 +327,10 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
       vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 0, 0, { virt_text = { { string.rep('v', 90) } }, virt_text_pos = 'inline' })
       vim.api.nvim_win_set_cursor(0, { 1, 0 })`);
     await eventually(() => latest()?.screenCursor?.join() === '2,15');
+    // A 'statuscolumn' draws the whole gutter, all of which they take then: 8 cells here.
+    await lua('vim.wo.number = false vim.wo.statuscolumn = "........"');
+    await eventually(() => latest()?.screenCursor?.join() === '2,19');
+    await lua('vim.wo.statuscolumn = ""');
 
     // Inline text that moves the cursor along its row changes nothing else: no event says so.
     await lua(`vim.wo.number = false vim.opt.cpoptions:remove('n')
@@ -383,7 +387,7 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
     // 90 cells of inline text, then the tab to cell 96 (with a tabstop of 2, 92): on the next row.
     await eventually(() => windowOf(changes.at(-1), other)?.screenCursor?.join() === '4,16');
   } finally {
-    await lua('vim.wo.conceallevel, vim.wo.concealcursor, vim.wo.number, vim.wo.wrap = 0, "", false, true vim.opt.cpoptions:remove("n") vim.o.virtualedit = ""');
+    await lua('vim.wo.conceallevel, vim.wo.concealcursor, vim.wo.number, vim.wo.wrap = 0, "", false, true vim.opt.cpoptions:remove("n") vim.o.virtualedit = "" vim.wo.statuscolumn = ""');
     await shutdown();
   }
 });

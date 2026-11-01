@@ -378,7 +378,9 @@ local function unreported()
 		-- off, or the offset, moves it where screenpos() sees nothing.
 		local coladd = vim.fn.getcurpos(win)[4]
 		local vcol = vim.fn.virtcol({ cursor[1], cursor[2] + 1, coladd }, false, win)
-		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol, vcol }, ":"))
+		-- And the gutter: signs coming or going widen it, moving the cursor, with no event.
+		local textoff = vim.fn.getwininfo(win)[1].textoff
+		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol, vcol, textoff }, ":"))
 		table.insert(parts, placement(win))
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then

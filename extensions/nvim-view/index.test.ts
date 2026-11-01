@@ -388,7 +388,7 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
   }
 });
 
-test('scrolled sideways past the start of its lines, a line still starts below the virtual lines above it', async () => {
+test('scrolled sideways past the start of its lines, a line still starts below the virtual lines above it, and a cursor still moves with the gutter', async () => {
   const { changes, shutdown } = await pi();
   try {
     const win = await lua(`vim.wo.wrap = false
@@ -400,6 +400,19 @@ test('scrolled sideways past the start of its lines, a line still starts below t
     const shown = await eventually(() => windowOf(changes.at(-1), win)?.leftcol === 20 && windowOf(changes.at(-1), win)!);
     assert.deepEqual(shown.shown.map(s => s.row), [1, 4, 5]);
     assert.equal(lineAtRow(shown, 2), undefined);
+
+    // In a window not current (which Neovim does not scroll to its cursor), inline text at the
+    // cursor starting off screen, so screenpos() cannot see the cursor; then a sign widens the
+    // gutter, moving the cursor though nothing else changed: no event says so.
+    const buf = await lua(`local buf = vim.api.nvim_win_get_buf(...)
+      vim.api.nvim_buf_set_extmark(buf, vim.api.nvim_create_namespace('test'), 0, 50, { virt_text = { { string.rep('v', 30) } }, virt_text_pos = 'inline' })
+      vim.cmd('rightbelow split | enew')
+      vim.api.nvim_win_call(..., function() vim.fn.winrestview({ leftcol = 60 }) end)
+      return buf`, win);
+    await eventually(() => windowOf(changes.at(-1), win)?.screenCursor?.join() === '1,21');
+    await delay(100);
+    await lua('vim.api.nvim_buf_set_extmark(..., vim.api.nvim_create_namespace("test"), 2, 0, { sign_text = "S" })', buf);
+    await eventually(() => windowOf(changes.at(-1), win)?.screenCursor?.join() === '1,23');
   } finally {
     await lua('vim.wo.wrap = true');
     await shutdown();

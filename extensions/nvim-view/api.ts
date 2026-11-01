@@ -51,7 +51,8 @@ export type Window = {
   /**
    * Where the cursor is on the screen, 1-based, as `row` and `col` count. Text concealed before
    * it on its line is counted as if shown, as Neovim's `screenpos()` counts it: the column is
-   * then too far right.
+   * then too far right. And with 'cpoptions' n, a 'statuscolumn' beside sign or fold columns,
+   * and inline virtual text at the cursor scrolled off by smoothscroll, it can be misplaced.
    */
   screenCursor?: [row: number, col: number];
   cwd: string;

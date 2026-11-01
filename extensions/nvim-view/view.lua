@@ -78,11 +78,11 @@ local function shown(win, info, buf, view)
 				end_row = last - 1,
 				start_vcol = line == info.topline and view.skipcol or nil,
 			})
-			-- Virtual or filler lines above it push its text down; only then is it worth asking.
-			local row = height.fill > 0 and vim.fn.screenpos(win, line, 1).row or 0
-			row = row ~= 0 and row or top
-			-- A line concealed whole (`conceal_lines`) takes no row: it is not on screen.
-			if height.all > height.fill then
+			-- Virtual or filler lines above it (a line's fill is all above it) push its text down.
+			local row = top + height.fill
+			-- A line concealed whole (`conceal_lines`) takes no row, nor one pushed off the bottom:
+			-- neither is on screen.
+			if height.all > height.fill and row < bottom then
 				table.insert(lines, {
 					line = line,
 					row = row,
@@ -125,7 +125,8 @@ local function screen_cursor(win, info, cursor, view, lines)
 	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - info.wincol < inner or not wrap) then
 		return { screen.row, screen.curscol }
 	end
-	local width = inner - off + number_column(win)
+	local reclaimed = number_column(win)
+	local width = inner - off + reclaimed
 	if width <= 0 then
 		return nil
 	end
@@ -174,7 +175,8 @@ local function screen_cursor(win, info, cursor, view, lines)
 		-- In the part smoothscroll hides, which inserting does not scroll back: drawn on top.
 		rows = math.max(rows, info.winrow - row)
 	end
-	if col < off or col >= inner or rows + row < info.winrow or rows + row >= info.winrow + info.height then
+	-- Rows after the first start in the number column with 'cpoptions' n.
+	if col < off - (rows > 0 and reclaimed or 0) or col >= inner or rows + row < info.winrow or rows + row >= info.winrow + info.height then
 		return nil
 	end
 	return { row + rows, info.wincol + col }

@@ -388,6 +388,24 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
   }
 });
 
+test('scrolled sideways past the start of its lines, a line still starts below the virtual lines above it', async () => {
+  const { changes, shutdown } = await pi();
+  try {
+    const win = await lua(`vim.wo.wrap = false
+      vim.api.nvim_buf_set_lines(0, 0, -1, true, { string.rep('A', 100), string.rep('B', 100), string.rep('C', 100) })
+      vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('test'), 1, 0, { virt_lines = { { { 'one' } }, { { 'two' } } }, virt_lines_above = true })
+      vim.api.nvim_win_set_cursor(0, { 1, 50 })
+      vim.fn.winrestview({ leftcol = 20 })
+      return vim.api.nvim_get_current_win()`);
+    const shown = await eventually(() => windowOf(changes.at(-1), win)?.leftcol === 20 && windowOf(changes.at(-1), win)!);
+    assert.deepEqual(shown.shown.map(s => s.row), [1, 4, 5]);
+    assert.equal(lineAtRow(shown, 2), undefined);
+  } finally {
+    await lua('vim.wo.wrap = true');
+    await shutdown();
+  }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {

@@ -32,6 +32,16 @@ for a clean editor). The instance runs without swap files (`-n`), so files you h
 elsewhere never raise a swap prompt, and without shada (`-i NONE`), so Pi's history stays
 out of yours.
 
+Plugins that do not belong in it, such as a session manager that would overwrite your
+session for the same directory on exit, can be kept out with lazy.nvim's names in
+`~/.pi/agent/nvim-service.json`, read at each start:
+
+```json
+{ "disabledPlugins": ["persistence.nvim"] }
+```
+
+They are disabled as by a false `cond`, unless their spec sets its own `cond`.
+
 ## For Pi
 
 | Tool | Use |

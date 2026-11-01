@@ -1,7 +1,17 @@
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** @typedef {{ socket: string, pid: number, supervisorPid: number, cwd: string }} NvimInfo */
+
+// Pi's agent directory, found as Pi's getAgentDir() finds it, so that scripts started
+// outside Pi read the same nvim-service.json.
+function agentDir() {
+  const dir = process.env.PI_CODING_AGENT_DIR;
+  if (!dir) return join(homedir(), '.pi', 'agent');
+  return dir === '~' ? homedir() : dir.startsWith('~/') ? join(homedir(), dir.slice(2)) : dir;
+}
 
 /**
  * Start one private Neovim behind a supervisor that stops it when this process goes away,
@@ -9,7 +19,8 @@ import { fileURLToPath } from 'node:url';
  *
  * @param {{ cwd: string, executable?: string, init?: string, settings?: string, startupTimeoutMs?: number, graceMs?: number, killMs?: number }} options
  */
-export function launch({ cwd, executable = process.env.PI_NVIM_BIN || 'nvim', init = process.env.PI_NVIM_INIT || undefined, settings,
+export function launch({ cwd, executable = process.env.PI_NVIM_BIN || 'nvim', init = process.env.PI_NVIM_INIT || undefined,
+  settings = join(agentDir(), 'nvim-service.json'),
   startupTimeoutMs = 15000, graceMs = 500, killMs = 1500 }) {
   if (typeof cwd !== 'string' || !cwd) throw new Error('cwd is required');
   const config = { cwd, executable, init, settings, startupTimeoutMs, graceMs, killMs };

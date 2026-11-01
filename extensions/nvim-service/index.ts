@@ -1,6 +1,5 @@
 import { Type } from '@earendil-works/pi-ai';
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { join } from 'node:path';
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { launch } from './service.mjs';
 import { openNvim, describeState } from './nvim.mjs';
 
@@ -43,7 +42,7 @@ export default function (pi: ExtensionAPI) {
     lastError = undefined;
     // A Pi started from inside another Pi must not advertise its parent's socket.
     delete process.env.PI_NVIM_SOCKET;
-    const current = launch({ cwd, settings: join(getAgentDir(), 'nvim-service.json') });
+    const current = launch({ cwd });
     service = current;
     void current.exited.then(({ error }) => {
       if (service !== current) return; // Stopped on purpose, or startup already reported it.

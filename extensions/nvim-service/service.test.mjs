@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { launch } from './service.mjs';
 import { connectRpc } from './rpc.mjs';
 import { alive, gone } from './test/helpers.mjs';
+
+// The user's own nvim-service.json stays out of the tests.
+const agentDir = process.env.PI_CODING_AGENT_DIR = await mkdtemp('/tmp/pi-nvim-agent-');
+after(() => rm(agentDir, { recursive: true, force: true }));
 
 const fast = { cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 };
 

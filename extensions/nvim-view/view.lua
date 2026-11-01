@@ -140,18 +140,22 @@ local function screen_cursor(win, info, cursor, view, lines)
 		local rows = math.floor((col - inner) / width) + 1
 		return rows, col - rows * width
 	end
-	local last = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }, false, win) - 1
+	local cells = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }, true, win)
+	local last = cells[2] - 1
 	local ccol
 	if view.coladd > 0 then
 		ccol = vim.fn.virtcol({ cursor[1], cursor[2] + 1, view.coladd }, false, win) - 1
 	elseif screen.row ~= 0 then
 		ccol = last - (screen.endcol - screen.curscol)
 	else
-		-- Neovim's cursor sits on a tab's last cell, but where insert goes; on others, their first.
+		-- Inserting, the cursor is where text goes: before its character, and inline text there.
+		-- Else on a tab's last cell, and the first of others.
 		local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), cursor[1] - 1, cursor[1], true)[1]
 		local char = vim.fn.strpart(text, cursor[2], 1, true)
 		local insert = win == vim.api.nvim_get_current_win() and vim.api.nvim_get_mode().mode:find("^[iR]")
-		ccol = char == "\t" and not insert and last or last + 1 - math.max(vim.fn.strdisplaywidth(char), 1)
+		ccol = insert and cells[1] - 1
+			or char == "\t" and last
+			or last + 1 - math.max(vim.fn.strdisplaywidth(char), 1)
 	end
 	local rows, col = place(ccol)
 	-- The row the line starts on: from where screenpos() put its character, else from the lines
@@ -167,6 +171,8 @@ local function screen_cursor(win, info, cursor, view, lines)
 			return nil
 		end
 		row = line.row - (line.line == info.topline and wrap and place(view.skipcol) or 0)
+		-- In the part smoothscroll hides, which inserting does not scroll back: drawn on top.
+		rows = math.max(rows, info.winrow - row)
 	end
 	if col < off or col >= inner or rows + row < info.winrow or rows + row >= info.winrow + info.height then
 		return nil

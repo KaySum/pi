@@ -116,12 +116,13 @@ end
 
 -- Where the cursor is on screen: on a tab, its last cell. Neovim's screenpos() goes wrong with
 -- inline virtual text just before it: wrapped, it adds the text's width without wrapping; with
--- the text's start scrolled off (skipcol, leftcol), it gives nothing. Then it is placed here
--- from its virtual column, as Neovim places it (textpos2screenpos).
+-- the text's start scrolled off (skipcol, leftcol), it gives nothing. Nor does it know virtual
+-- editing's offset (coladd). Then it is placed here from its virtual column, as Neovim places
+-- it (textpos2screenpos).
 local function screen_cursor(win, info, cursor, view, lines)
 	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	local inner, off, wrap = info.width, info.textoff, vim.wo[win].wrap
-	if screen.row ~= 0 and (screen.curscol - info.wincol < inner or not wrap) then
+	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - info.wincol < inner or not wrap) then
 		return { screen.row, screen.curscol }
 	end
 	local width = inner - off + number_column(win)
@@ -131,37 +132,46 @@ local function screen_cursor(win, info, cursor, view, lines)
 	-- Rows below the line's first, and the column in the window, of a 0-based virtual column.
 	local function place(vcol)
 		local col = vcol + off
-		if not wrap or col < inner then
+		if not wrap then
+			return 0, col - view.leftcol
+		elseif col < inner then
 			return 0, col
 		end
 		local rows = math.floor((col - inner) / width) + 1
 		return rows, col - rows * width
 	end
 	local last = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }, false, win) - 1
-	if screen.row ~= 0 then
-		local ccol = last - (screen.endcol - screen.curscol)
-		local start = place(ccol - (screen.curscol - screen.col))
-		local rows, col = place(ccol)
-		return { screen.row - start + rows, info.wincol + col }
+	local ccol
+	if view.coladd > 0 then
+		ccol = vim.fn.virtcol({ cursor[1], cursor[2] + 1, view.coladd }, false, win) - 1
+	elseif screen.row ~= 0 then
+		ccol = last - (screen.endcol - screen.curscol)
+	else
+		-- Neovim's cursor sits on a tab's last cell, but where insert goes; on others, their first.
+		local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), cursor[1] - 1, cursor[1], true)[1]
+		local char = vim.fn.strpart(text, cursor[2], 1, true)
+		local insert = win == vim.api.nvim_get_current_win() and vim.api.nvim_get_mode().mode:find("^[iR]")
+		ccol = char == "\t" and not insert and last or last + 1 - math.max(vim.fn.strdisplaywidth(char), 1)
 	end
-	-- Neovim's cursor sits on a tab's last cell, but where insert goes; on others, their first.
-	local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), cursor[1] - 1, cursor[1], true)[1]
-	local char = vim.fn.strpart(text, cursor[2], 1, true)
-	local insert = win == vim.api.nvim_get_current_win() and vim.api.nvim_get_mode().mode:find("^[iR]")
-	local ccol = char == "\t" and not insert and last or last + 1 - math.max(vim.fn.strdisplaywidth(char), 1)
 	local rows, col = place(ccol)
-	local line = vim.iter(lines):find(function(entry)
-		return entry.line == cursor[1] and not entry.fold
-	end)
-	if not line then
+	-- The row the line starts on: from where screenpos() put its character, else from the lines
+	-- on screen, less the rows smoothscroll hides of the top one.
+	local row
+	if screen.row ~= 0 then
+		row = screen.row - place(last - (screen.endcol - screen.col))
+	else
+		local line = vim.iter(lines):find(function(entry)
+			return entry.line == cursor[1] and not entry.fold
+		end)
+		if not line then
+			return nil
+		end
+		row = line.row - (line.line == info.topline and wrap and place(view.skipcol) or 0)
+	end
+	if col < off or col >= inner or rows + row < info.winrow or rows + row >= info.winrow + info.height then
 		return nil
 	end
-	col = col - (wrap and 0 or view.leftcol)
-	rows = rows - (line.line == info.topline and wrap and place(view.skipcol) or 0)
-	if col < off or col >= inner or rows < 0 or rows >= line.rows then
-		return nil
-	end
-	return { line.row + rows, info.wincol + col }
+	return { row + rows, info.wincol + col }
 end
 
 local function window(win, current, previous, cwd)
@@ -356,7 +366,9 @@ local function unreported()
 		local cursor = vim.api.nvim_win_get_cursor(win)
 		-- Its screen cell too: inline virtual text before it moves it, with no event.
 		local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
-		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol }, ":"))
+		-- Its virtual column too: inline text scrolled off moves it where screenpos() sees nothing.
+		local vcol = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }, false, win)
+		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol, vcol }, ":"))
 		table.insert(parts, placement(win))
 		local config = vim.api.nvim_win_get_config(win)
 		if config.relative ~= "" then

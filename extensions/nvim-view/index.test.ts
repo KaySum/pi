@@ -363,7 +363,12 @@ test('what Neovim draws besides text: filler above the top line, lines concealed
       vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'ABCDE' })
       vim.fn.winrestview({ lnum = 1, col = 5, coladd = 6, leftcol = 0 })`);
     await eventually(() => latest()?.screenCursor?.join() === '1,12');
-    await lua('vim.o.virtualedit = ""');
+    // Moved by the offset alone, in a window not current: no event says so.
+    await lua('vim.cmd("rightbelow split | enew")');
+    await delay(100);
+    await lua('vim.api.nvim_win_call(..., function() vim.fn.winrestview({ lnum = 1, col = 5, coladd = 9 }) end)', win);
+    await eventually(() => latest()?.screenCursor?.join() === '1,15');
+    await lua('vim.cmd("only") vim.o.virtualedit = ""');
 
     // A window not current, showing another buffer: its own line and tabstop, not the current's.
     const other = await lua(`vim.wo.wrap = true

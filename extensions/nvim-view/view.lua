@@ -366,8 +366,10 @@ local function unreported()
 		local cursor = vim.api.nvim_win_get_cursor(win)
 		-- Its screen cell too: inline virtual text before it moves it, with no event.
 		local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
-		-- Its virtual column too: inline text scrolled off moves it where screenpos() sees nothing.
-		local vcol = vim.fn.virtcol({ cursor[1], cursor[2] + 1 }, false, win)
+		-- Its virtual column too, virtual editing's offset (coladd) included: inline text scrolled
+		-- off, or the offset, moves it where screenpos() sees nothing.
+		local coladd = vim.fn.getcurpos(win)[4]
+		local vcol = vim.fn.virtcol({ cursor[1], cursor[2] + 1, coladd }, false, win)
 		table.insert(parts, table.concat({ win, cursor[1], cursor[2], screen.row, screen.curscol, vcol }, ":"))
 		table.insert(parts, placement(win))
 		local config = vim.api.nvim_win_get_config(win)

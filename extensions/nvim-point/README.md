@@ -2,9 +2,10 @@
 
 Lets other extensions show you a place in the code, in the Neovim Pi runs inside: the file
 opened in your window, your cursor on the place, folds over it open, and scrolled to it if it
-is not on screen. Your focus stays where it is, in Pi's terminal, and `<C-o>` in your window
-takes you back. It never moves anything while you are typing there. It registers no tools.
-Built on [nvim-remote](../nvim-remote/README.md), and needs no install.
+is not on screen. Your focus stays where it is, in Pi's terminal (unless an extension asks for
+it, `focus: true`), and `<C-o>` in your window takes you back. It never moves anything while
+you are typing there. It registers no tools. Built on [nvim-remote](../nvim-remote/README.md),
+and needs no install.
 
 ## For you
 

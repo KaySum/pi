@@ -1,5 +1,5 @@
 -- Installs `remote.nvim_point`, once for each attachment: it shows the user a place in a file, in
--- their window (never Pi's terminal), its cursor there, leaving focus where it is. It runs
+-- their window (never Pi's terminal), its cursor there, leaving focus where it is unless asked. It runs
 -- through nvim-remote, with `remote` in scope.
 
 if remote.nvim_point then
@@ -252,7 +252,7 @@ function point.show(spec)
 	end
 	vim.bo[buf].buflisted = true
 
-	return vim.api.nvim_win_call(win, function()
+	local shown = vim.api.nvim_win_call(win, function()
 		local before = vim.fn.winsaveview()
 		vim.cmd(("silent! %d,%dfoldopen!"):format(line, last))
 		-- On screen already, it is left where it is: the user knows where to look.
@@ -277,4 +277,9 @@ function point.show(spec)
 			scrolled = after.topline ~= before.topline or after.skipcol ~= before.skipcol,
 		}
 	end)
+	-- Focus stays where it is, unless asked to follow, as when the user asked to go there.
+	if spec.focus then
+		vim.api.nvim_set_current_win(win)
+	end
+	return shown
 end

@@ -69,13 +69,18 @@ export type ShowOptions = CallOptions & {
    * `closed`. Default true: the file is opened in the user's window.
    */
   open?: boolean;
+  /**
+   * `true`: focus the window once the place is shown, as when the user asked to go there.
+   * Default false: focus stays where it is, in Pi's terminal as a rule.
+   */
+  focus?: boolean;
 };
 
 export type Point = {
   /**
    * Show the user `place`: in a window of the current tab showing its file, else theirs (never
    * Pi's terminal), opening the file there; its cursor on it, folds over it open, scrolled to it
-   * if it is not on screen. Focus stays where it is, and <C-o> there goes back.
+   * if it is not on screen. Focus stays where it is (unless `focus`), and <C-o> there goes back.
    */
   show(place: Place, options?: ShowOptions): Promise<Pointed>;
 };
@@ -115,8 +120,9 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
   }
   let latest = 0;
   return {
-    async show(place, { wait = 0, jump, scroll, open, ...options } = {}) {
+    async show(place, { wait = 0, jump, scroll, open, focus, ...options } = {}) {
       const spec = check(place, cwd);
+      if (focus === true) spec.focus = true;
       if (jump === false) spec.jump = false;
       if (open === false) spec.open = false;
       if (scroll !== undefined) {

@@ -527,6 +527,33 @@ test('with open: false, a file not open is closed at once, whatever the wait', a
   assert.ok(performance.now() - started < 200);
 });
 
+// --- Focus -------------------------------------------------------------------------------------
+
+test('with focus: true, focus goes to the window once the place is shown, from typing to Pi too', async () => {
+  const [yours, term] = await layout(await file());
+  const path = await file();
+  assert.equal(shown(await show({ path, line: 40 }, { focus: true })).win, yours);
+  assert.deepEqual([await current(), await mode(), (await state(yours)).cursor[0]], [yours, 'n', 40]);
+  await lua('vim.api.nvim_set_current_win(...)', term);
+  await editor.request('nvim_input', ['i']);
+  for (let i = 0; i < 50 && await mode() !== 't'; i++) await delay(10);
+  shown(await show({ path, line: 80 }, { focus: true }));
+  assert.deepEqual([await current(), await mode()], [yours, 'n']);
+});
+
+test('with focus: true, a window opened for the file is focused', async () => {
+  await lua('vim.cmd("terminal")');
+  const result = shown(await show({ path: await file(), line: 10 }, { focus: true }));
+  assert.equal(result.opened, true);
+  assert.equal(await current(), result.win);
+});
+
+test('with focus: true, nothing shown moves no focus', async () => {
+  const [, term] = await layout(await file());
+  assert.deepEqual(await show({ path: await file(), line: 10 }, { focus: true, open: false }), { shown: false, closed: true });
+  assert.equal(await current(), term);
+});
+
 // --- While you are busy -----------------------------------------------------------------------
 
 test('while you are inserting, replacing, selecting, mid-command or typing a command, nothing changes', async () => {

@@ -76,7 +76,7 @@ const layout = (path: string): Promise<number> => lua(`vim.cmd.edit(vim.fn.fname
   return yours`, path);
 const cursor = (win: number): Promise<[number, number]> => lua('return vim.api.nvim_win_get_cursor(...)', win);
 const nameIn = (win: number): Promise<string> => lua('return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))', win);
-const USAGE = ['Usage: /nvim-point <path>:<line>[-<end line>][:<column>]', 'warning'];
+const USAGE = ['Usage: /nvim-point <path>:<line>[-<end line>][:<column>] [option=value …]', 'warning'];
 
 test('there is one command; without Neovim it says so, and what is wrong with the usage first', async () => {
   const p = await pi({ remote: false });
@@ -175,4 +175,66 @@ test('paths complete as you type: directories go on with "/", files take ":" for
   for (const prefix of ['src/app.ts:', 'src/app.ts:12', 'src/app.ts:12-', 'src/app.ts:12-14:3', 'nothing/', 'zzz']) {
     assert.equal(await values(prefix), null, prefix);
   }
+});
+
+test('options after the place are as show takes them: scroll, jump, open, focus, context, wait', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  const path = await file('there.ts');
+  assert.deepEqual(await run('there.ts:200 scroll=top context=5'), [`Showed there.ts:200 in window ${yours} (scrolled)`, 'info']);
+  assert.equal(await lua('return vim.api.nvim_win_call(..., function() return vim.fn.line("w0") end)', yours), 195);
+  // Not open in a window of the tab, with open=false.
+  await file('closed.ts');
+  assert.deepEqual(await run('closed.ts:3 open=false'), ['Not open in Neovim: closed.ts:3', 'warning']);
+  // Focus, and no jump.
+  const jumps = () => lua('return #vim.fn.getjumplist(...)[1]', yours);
+  const before = await jumps();
+  assert.deepEqual(await run('there.ts:20 jump=false focus=true'), [`Showed there.ts:20 in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual([await jumps(), await lua('return vim.api.nvim_get_current_win()'), await nameIn(yours)], [before, yours, path]);
+});
+
+test('match="…" finds code, a line given the nearest; a path alone will do with it', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  await file('there.ts');
+  assert.deepEqual(await run('there.ts match="line 250"'), [`Showed there.ts at "line 250" in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual(await cursor(yours), [250, 2]);
+  assert.deepEqual(await run('there.ts:100 match=line'), [`Showed there.ts:100 at "line" in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual(await cursor(yours), [100, 2]);
+});
+
+test('buf=N stands for the path: lines alone, or a match alone', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  const buf = await lua('return vim.api.nvim_win_get_buf(...)', yours);
+  assert.deepEqual(await run(`120-122 buf=${buf}`), [`Showed buffer ${buf}:120-122 in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual(await cursor(yours), [120, 2]);
+  assert.deepEqual(await run(`buf=${buf} match="line 30"`), [`Showed buffer ${buf} at "line 30" in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual(await cursor(yours), [30, 2]);
+});
+
+test('what is wrong with the options says what', async () => {
+  const { run } = await attached();
+  await layout(await file('mine.ts'));
+  await file('there.ts');
+  assert.deepEqual(await run('there.ts:1 scrol=top'), ['No option scrol: match, buf, context, scroll, jump, open, focus, wait', 'warning']);
+  assert.deepEqual(await run('there.ts:1 scroll=middle'), ['scroll=middle is not a value scroll takes: center, top or minimal', 'warning']);
+  assert.deepEqual(await run('there.ts:1 focus=yes'), ['focus=yes is not a value focus takes: true: focus the window', 'warning']);
+  assert.deepEqual(await run('there.ts:1 wait=soon'), ['wait=soon is not a value wait takes: Milliseconds to wait while you are busy, or Infinity', 'warning']);
+  assert.deepEqual(await run('there.ts:1 match='), ['match= is not a value match takes: Code to find instead of a line; the line given, the nearest', 'warning']);
+  assert.deepEqual(await run('there.ts:1 focus=true stray'), USAGE);
+  assert.deepEqual(await run('there.ts match="nowhere"'), [`not found in ${join(dir, 'there.ts')}: nowhere`, 'warning']);
+  assert.deepEqual(await run('there.ts:3 buf=1'), ['A place needs a path or a buf, not both', 'warning']);
+});
+
+test('after the place, option names complete, and the values some take', async () => {
+  const p = await attached();
+  const complete = async (prefix: string) => (await p.commands['nvim-point'].getArgumentCompletions(prefix))?.map(item => item.value) ?? null;
+  assert.deepEqual(await complete('a.ts:3 sc'), ['a.ts:3 scroll=']);
+  assert.deepEqual(await complete('a.ts:3 scroll=m'), ['a.ts:3 scroll=minimal ']);
+  assert.deepEqual(await complete('a.ts:3 focus='), ['a.ts:3 focus=true ', 'a.ts:3 focus=false ']);
+  // Those given already are not offered again.
+  assert.equal((await complete('a.ts:3 scroll=top '))!.includes('a.ts:3 scroll=top scroll='), false);
+  assert.equal((await complete('a.ts:3 '))!.length, 8);
+  assert.equal(await complete('a.ts:3 wait='), null); // A number: nothing to offer.
 });

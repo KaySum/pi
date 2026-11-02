@@ -9,13 +9,18 @@ and needs no install.
 
 ## For you
 
-`/nvim-point <path>:<line>[-<end line>][:<column>]` shows a place as other extensions would,
-the path from Pi's working directory and the column from 1, as compilers and grep give them.
-Paths complete as you type:
+`/nvim-point <path>:<line>[-<end line>][:<column>] [option=value …]` shows a place as other
+extensions would, the path from Pi's working directory and the column from 1, as compilers and
+grep give them. The options are those below, as `show` takes them: `match`, `buf`, `context`,
+`scroll`, `jump`, `open`, `focus`, `wait`; a value with spaces is quoted, as JSON. With
+`match=`, a path alone will do (a line given picks the nearest); with `buf=`, the lines alone.
+Paths, options and their values complete as you type:
 
 ```
 /nvim-point src/app.ts:120-140
-/nvim-point src/app.ts:42:7
+/nvim-point src/app.ts:42:7 scroll=minimal focus=true
+/nvim-point src/app.ts match="async function retry("
+/nvim-point 120-130 buf=7 jump=false
 ```
 
 ## For other extensions

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -23,7 +23,7 @@ after(() => rm(dir, { recursive: true, force: true }));
 await lua('vim.cmd("filetype on")'); // As the user's config would.
 afterEach(async () => {
   await editor.request('nvim_input', ['<C-\\><C-n><Esc>']);
-  await lua(`vim.o.hidden, vim.o.wrap = true, true
+  await lua(`vim.o.hidden, vim.o.wrap, vim.o.cmdheight = true, true, 1
     vim.cmd('silent! tabonly | silent! only | enew! | silent! %bwipeout!')`);
 });
 
@@ -660,6 +660,132 @@ test('once the editor is gone, it rejects', async () => {
   const other = await attach(socket, { onError: () => {} });
   other.close();
   await assert.rejects(point(other).show({ path: await file(), line: 1 }));
+});
+
+// --- Harmless to the session -----------------------------------------------------------------
+
+test('Pi\'s terminal is left as it was: its buffer, its scroll, its mode', async () => {
+  const [, term] = await layout(await file());
+  const before = await lua('return vim.api.nvim_win_call(..., function() return { vim.api.nvim_get_current_buf(), vim.fn.winsaveview() } end)', term);
+  shown(await show({ path: await file(), line: 200 }));
+  assert.deepEqual(await lua('return vim.api.nvim_win_call(..., function() return { vim.api.nvim_get_current_buf(), vim.fn.winsaveview() } end)', term), before);
+  assert.equal(await mode(), 'nt');
+});
+
+test('in the command-line window (q:), it waits: no other window can change then', async () => {
+  const mine = await file();
+  const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', mine);
+  await editor.request('nvim_input', ['q:']);
+  for (let i = 0; i < 50 && await lua('return vim.fn.getcmdwintype()') === ''; i++) await delay(10);
+  assert.deepEqual(await show({ path: await file(), line: 10 }), { busy: 'cmdwin' });
+  await editor.request('nvim_input', [':quit<CR>']);
+  for (let i = 0; i < 50 && await lua('return vim.fn.getcmdwintype()') !== ''; i++) await delay(10);
+  assert.equal((await state(yours)).path, mine);
+});
+
+test('an error in your autocommands does not stop the file being shown in your window', async () => {
+  const [yours] = await layout(await file());
+  const path = await file();
+  await lua(`vim.api.nvim_create_augroup('broken', {})
+    vim.api.nvim_create_autocmd('BufWinEnter', { group = 'broken', callback = function() error('broken config') end })`);
+  try {
+    const result = shown(await show({ path, line: 30 }));
+    assert.deepEqual([result.win, result.opened, (await state(yours)).path, (await state(yours)).cursor[0]], [yours, false, path, 30]);
+  } finally { await lua('vim.api.nvim_del_augroup_by_name("broken")'); }
+});
+
+test('a file changed on disk since it was loaded is shown, reloaded if you had not changed it', async () => {
+  const path = await file(['old']);
+  await lua('vim.fn.bufload(vim.fn.bufadd(...))', path);
+  await writeFile(path, 'new one\nnew two\n');
+  await utimes(path, new Date(), new Date(Date.now() + 5000));
+  const [yours] = await layout(await file());
+  shown(await show({ path, line: 1 }));
+  await lua('vim.cmd("checktime")');
+  assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, -1, true)', path), ['new one', 'new two']);
+  assert.equal((await state(yours)).path, path);
+});
+
+test('a file changed on disk and in Neovim does not leave it at a warning: your changes stay', async () => {
+  const ui = await connect(socket);
+  await ui.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]);
+  try {
+    const path = await file(['old', 'two']);
+    const [yours] = await layout(await file());
+    await lua('local buf = vim.fn.bufadd(...) vim.fn.bufload(buf) vim.api.nvim_buf_set_lines(buf, 0, 1, true, { "yours" })', path);
+    await writeFile(path, 'theirs\ntwo\n');
+    await utimes(path, new Date(), new Date(Date.now() + 5000));
+    shown(await show({ path, line: 2 }));
+    await delay(50); // The warning, told after.
+    assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path), 'yours');
+    assert.equal((await state(yours)).cursor[0], 2);
+    // Told as a message instead.
+    await delay(50);
+    assert.match(await lua('return vim.api.nvim_exec2("messages", { output = true }).output'), /changed on disk and here: :e! loads it/);
+  } finally {
+    await editor.request('nvim_input', ['<Esc>']);
+    await ui.request('nvim_ui_detach', []);
+    ui.close();
+  }
+});
+
+test('a buffer named like a path that is not a file (scratch, acwrite) is not shown', async () => {
+  await layout(await file());
+  const scratch = join(dir, 'scratch.ts'), written = join(dir, 'acwrite.ts');
+  await lua(`local scratch, written = ...
+    local a = vim.api.nvim_create_buf(true, false) vim.api.nvim_buf_set_name(a, scratch) vim.bo[a].buftype = 'nofile'
+    local b = vim.api.nvim_create_buf(true, false) vim.api.nvim_buf_set_name(b, written) vim.bo[b].buftype = 'acwrite'`, scratch, written);
+  for (const path of [scratch, written]) await assert.rejects(show({ path, line: 1 }), /not a file/, path);
+});
+
+// --- Details ----------------------------------------------------------------------------------
+
+test('moving up and down from the place keeps its column', async () => {
+  const path = await file(['0123456789', '0123456789', 'ab', '0123456789']);
+  const [yours] = await layout(await file());
+  shown(await show({ path, line: 1, col: 7 }));
+  await inWin(yours, 'normal! jjj');
+  assert.deepEqual((await state(yours)).cursor, [4, 7]);
+});
+
+test('in a window too small for the context, the place is still on screen', async () => {
+  const path = await file();
+  const [yours] = await layout(await file());
+  await lua('vim.api.nvim_win_set_height(..., 2)', yours);
+  shown(await show({ path, line: 150, endLine: 152 }));
+  assert.notEqual(await drawn(yours), 0);
+  const now = await state(yours);
+  assert.ok(now.top <= 150 && 150 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+test('a read-only file is shown, read-only', async () => {
+  const path = await file();
+  await chmod(path, 0o444);
+  const [yours] = await layout(await file());
+  const result = shown(await show({ path, line: 10 }));
+  assert.equal((await state(yours)).path, path);
+  assert.equal(await lua('return vim.bo[...].readonly', result.buf), true);
+});
+
+test('a file with CRLF line ends: lines and columns as in Neovim, no \\r', async () => {
+  const path = join(dir, 'dos.ts');
+  await writeFile(path, '  one\r\n  two\r\nthree\r\n');
+  const [yours] = await layout(await file());
+  shown(await show({ path, line: 3, col: 99 }));
+  assert.deepEqual((await state(yours)).cursor, [3, 4]);
+  shown(await show({ path, line: 2 }));
+  assert.deepEqual((await state(yours)).cursor, [2, 2]);
+});
+
+test('with only Pi\'s terminal in this tab, a window opens here, not in the tab with your file', async () => {
+  const mine = await file();
+  await lua('vim.cmd.edit(vim.fn.fnameescape(...)) vim.cmd("tabnew | terminal")', mine);
+  const tab = await lua('return vim.api.nvim_get_current_tabpage()');
+  const path = await file();
+  const result = shown(await show({ path, line: 10 }));
+  assert.equal(result.opened, true);
+  assert.deepEqual([await lua('return vim.api.nvim_win_get_tabpage(...)', result.win), await lua('return vim.api.nvim_get_current_tabpage()')], [tab, tab]);
 });
 
 // --- Errors -----------------------------------------------------------------------------------

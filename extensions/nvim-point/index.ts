@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
           endLine: endLine ? Number(endLine) : undefined,
           col: col ? Number(col) - 1 : undefined,
         });
-        if (!result.shown) return ctx.ui.notify(`Not now: you are busy in Neovim (mode ${result.busy})`, 'warning');
+        if (!result.shown) return ctx.ui.notify('busy' in result ? `Not now: you are busy in Neovim (mode ${result.busy})` : 'Not open in Neovim', 'warning');
         const done = [result.opened && 'opened a window', result.scrolled && 'scrolled'].filter(Boolean);
         const from = relative(ctx.cwd, resolve(ctx.cwd, path));
         const where = `${from.startsWith('..') ? resolve(ctx.cwd, path) : from}:${line}${endLine ? `-${endLine}` : ''}`;

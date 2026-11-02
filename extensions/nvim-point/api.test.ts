@@ -487,6 +487,46 @@ test('with jump: false, unsaved changes and \'hidden\' off still open a split, y
   assert.deepEqual([(await state(yours)).path, await jumps(yours)], [mine, history]);
 });
 
+// --- Only where the file is open --------------------------------------------------------------
+
+test('with open: false, a file shown in a window of the tab is shown there', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  assert.equal(shown(await show({ path, line: 200 }, { open: false })).win, yours);
+  assert.equal((await state(yours)).cursor[0], 200);
+});
+
+test('with open: false, a file not shown is closed: not loaded, no window changed or opened', async () => {
+  const mine = await file();
+  const [yours] = await layout(mine);
+  const before = await state(yours);
+  const fresh = await file();
+  assert.deepEqual(await show({ path: fresh, line: 10 }, { open: false }), { shown: false, closed: true });
+  assert.equal(await bufOf(fresh), -1);
+  // Loaded, and in a float only: closed all the same.
+  const loaded = await file();
+  await lua('vim.fn.bufload(vim.fn.bufadd(...))', loaded);
+  await lua(`vim.api.nvim_open_win(vim.fn.bufadd(...), false, { relative = 'editor', row = 1, col = 1, width = 20, height = 5 })`, loaded);
+  assert.deepEqual(await show({ path: loaded, line: 10 }, { open: false }), { shown: false, closed: true });
+  assert.deepEqual([await state(yours), (await windows()).length], [before, 3]);
+});
+
+test('with open: false, a file shown through a link counts as open', async () => {
+  const path = await file();
+  const link = join(dir, `open-link-${files}.ts`);
+  await symlink(path, link);
+  const [yours] = await layout(link);
+  assert.equal(shown(await show({ path, line: 50 }, { open: false })).win, yours);
+  assert.equal((await state(yours)).cursor[0], 50);
+});
+
+test('with open: false, a file not open is closed at once, whatever the wait', async () => {
+  await layout(await file());
+  const started = performance.now();
+  assert.deepEqual(await show({ path: await file(), line: 10 }, { open: false, wait: 5000 }), { shown: false, closed: true });
+  assert.ok(performance.now() - started < 200);
+});
+
 // --- While you are busy -----------------------------------------------------------------------
 
 test('while you are inserting, replacing, selecting, mid-command or typing a command, nothing changes', async () => {

@@ -133,6 +133,18 @@ local function find(buf, match, near)
 	return best
 end
 
+-- Whether a window of this tab shows the file at `path`, links followed.
+local function open_here(path)
+	local want = vim.uv.fs_realpath(path) or vim.fs.normalize(path)
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+		if shows_file(win) and name ~= "" and (vim.uv.fs_realpath(name) or vim.fs.normalize(name)) == want then
+			return true
+		end
+	end
+	return false
+end
+
 -- Show `buf` in `win`; with `quiet`, leaving its jumplist and alternate file as they were.
 -- Entering a buffer whose file changed on disk, Neovim asks what to do at a
 -- prompt, which would hold this call until the user answers: unless they handle it themselves
@@ -180,6 +192,8 @@ function point.show(spec)
 		return { shown = false, busy = mode }
 	elseif vim.fn.getcmdwintype() ~= "" then
 		return { shown = false, busy = "cmdwin" } -- In q:, no other window can change.
+	elseif spec.open == false and not open_here(spec.path) then
+		return { shown = false, closed = true } -- Neither loaded nor any window changed for it.
 	end
 	local buf, done = buffer(spec.path)
 	-- Not left loaded (a swap file and all) for a file the user did not open.

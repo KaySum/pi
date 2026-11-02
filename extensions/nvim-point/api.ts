@@ -40,9 +40,9 @@ export type Place = At | Of;
  * `shown` in `win`: `opened` if a window was opened for it (none showed a file, or the user's
  * has unsaved changes it could not hide), `scrolled` if the window scrolled. Or not shown: the
  * user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in the command-line
- * window.
+ * window; or, with `open: false`, the file is `closed`: no window of the tab shows it.
  */
-export type Pointed = Shown | { shown: false; busy: string; superseded?: true };
+export type Pointed = Shown | { shown: false; busy: string; superseded?: true } | { shown: false; closed: true };
 export type Shown = { shown: true; win: number; buf: number; opened: boolean; scrolled: boolean };
 
 export type ShowOptions = CallOptions & {
@@ -63,6 +63,12 @@ export type ShowOptions = CallOptions & {
    * window, from their start whatever this is.
    */
   scroll?: 'center' | 'top' | 'minimal';
+  /**
+   * `false`: only where a window of the tab shows the file already, as one following Pi only
+   * through files the user has open should; else nothing is loaded or changed, and it is
+   * `closed`. Default true: the file is opened in the user's window.
+   */
+  open?: boolean;
 };
 
 export type Point = {
@@ -109,9 +115,10 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
   }
   let latest = 0;
   return {
-    async show(place, { wait = 0, jump, scroll, ...options } = {}) {
+    async show(place, { wait = 0, jump, scroll, open, ...options } = {}) {
       const spec = check(place, cwd);
       if (jump === false) spec.jump = false;
+      if (open === false) spec.open = false;
       if (scroll !== undefined) {
         if (!['center', 'top', 'minimal'].includes(scroll)) throw new Error(`scroll is center, top or minimal: ${scroll}`);
         spec.scroll = scroll;
@@ -120,7 +127,8 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
       const ticket = ++latest, until = Date.now() + wait;
       for (;;) {
         const result = await once(spec, options);
-        if (result.shown || Date.now() >= until) return result;
+        // Only being busy passes: a file not open stays so, whatever the wait.
+        if (result.shown || !('busy' in result) || Date.now() >= until) return result;
         await delay(RETRY_MS, undefined, { signal: options.signal });
         if (ticket !== latest) return { ...result, superseded: true };
       }

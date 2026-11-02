@@ -64,9 +64,11 @@ for it, `scrolled` if the window scrolled. While you are busy (inserting, select
 command, in the command-line window, at a prompt), it changes nothing and resolves to
 `{ shown: false, busy }`, the mode you are in (`i`, `v`, `c`…): with `{ wait: ms }`, it tries
 again until you are free, for up to that long (`Infinity`: as long as it takes), and a later
-`show` ends the wait (`superseded`): only the newest place is shown. A path that is not a file
-(missing, unreadable, a directory or device, a buffer of another kind), lines past its end, or
-a `match` not there, reject.
+`show` ends the wait (`superseded`): only the newest place is shown. With `{ open: false }`,
+as for following Pi only through files you have open, it shows the place only where a window
+of the tab shows the file already; else it loads and changes nothing, and resolves to
+`{ shown: false, closed: true }`. A path that is not a file (missing, unreadable, a directory
+or device, a buffer of another kind), lines past its end, or a `match` not there, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is

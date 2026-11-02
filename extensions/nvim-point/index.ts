@@ -17,6 +17,7 @@ export default function (pi: ExtensionAPI) {
       // Columns from 1, as compilers and grep give them.
       const [, path, line, endLine, col] = args.trim().match(/^(.+?):(\d+)(?:-(\d+))?(?::(\d+))?$/) ?? [];
       if (!path) return ctx.ui.notify(USAGE, 'warning');
+      if (col === '0') return ctx.ui.notify('Columns count from 1: 0', 'warning');
       const show = point()?.show;
       if (!show) return ctx.ui.notify('Pi is not attached to Neovim', 'warning');
       try {
@@ -28,7 +29,8 @@ export default function (pi: ExtensionAPI) {
         });
         if ('busy' in result) return ctx.ui.notify(`Not now: you are busy in Neovim (mode ${result.busy})`, 'warning');
         const done = [result.opened && 'opened a window', result.scrolled && 'scrolled'].filter(Boolean);
-        const where = `${relative(ctx.cwd, resolve(ctx.cwd, path))}:${line}${endLine ? `-${endLine}` : ''}`;
+        const from = relative(ctx.cwd, resolve(ctx.cwd, path));
+        const where = `${from.startsWith('..') ? resolve(ctx.cwd, path) : from}:${line}${endLine ? `-${endLine}` : ''}`;
         ctx.ui.notify(`Showed ${where} in window ${result.win}${done.length ? ` (${done.join(', ')})` : ''}`, 'info');
       } catch (error) { ctx.ui.notify(errorText(error), 'warning'); }
     },

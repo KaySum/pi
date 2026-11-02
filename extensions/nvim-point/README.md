@@ -36,15 +36,15 @@ export default function (pi) {
 | --- | --- |
 | `path` | The file, absolute. |
 | `line`, `endLine` | 1-based; the lines to bring on screen together (`endLine` defaults to `line`). |
-| `col` | Where the cursor goes on `line`, in 0-based bytes; else its first non-blank. |
+| `col` | Where the cursor goes on `line`, in 0-based bytes, kept within the line and on a character's first byte; else its first non-blank, as `^` goes. |
 | `context` | Lines kept around them when it has to scroll. Default 3. |
 
 ### Where
 
 In a window of the current tab showing the file already, else yours: the one you are in unless
 it is Pi's terminal (or another like it), else the one you came from, else any showing a file.
-With none, one opens beside Pi's terminal. If yours has unsaved changes Neovim cannot hide
-(`'hidden'` off), the file opens in a split above it rather than lose them.
+With none, one opens beside Pi's terminal, its jumplist empty. If yours has unsaved changes
+Neovim cannot hide (`'hidden'` off), the file opens in a split above it rather than lose them.
 
 ### How
 
@@ -56,8 +56,8 @@ goes in your jumplist, as does leaving another file for it.
 It resolves to `{ win, buf, opened, scrolled }`: `opened` if a window was opened for it,
 `scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command, at
 a prompt), it changes nothing and resolves to `{ busy }`, the mode you are in (`i`, `v`, `c`…):
-whether to try again is for the extension to decide. A path that is not a file, or lines past
-its end, reject.
+whether to try again is for the extension to decide. A path that is not a file (missing, or a
+directory), or lines past its end, reject.
 
 ## Development
 

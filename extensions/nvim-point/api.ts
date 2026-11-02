@@ -13,7 +13,7 @@ export type Place = {
   path: string;
   /** 1-based; `endLine` (default `line`) ends the lines to bring on screen together. */
   line: number; endLine?: number;
-  /** Where the cursor goes on `line`, in 0-based bytes; else its first non-blank. */
+  /** Where the cursor goes on `line`, in 0-based bytes, within the line, on a character's first byte; else its first non-blank. */
   col?: number;
   /** Lines kept around them when it has to scroll. Default 3. */
   context?: number;
@@ -54,10 +54,16 @@ export function point(remote: Lua): Point {
   return {
     async show(place, options) {
       const spec = check(place);
-      const result = await remote.lua(SHOW, [spec], options);
-      if (result !== 'not installed') return result;
-      await remote.lua(MODULE, [], options);
-      return remote.lua(SHOW, [spec], options);
+      try {
+        const result = await remote.lua(SHOW, [spec], options);
+        if (result !== 'not installed') return result;
+        await remote.lua(MODULE, [], options);
+        return await remote.lua(SHOW, [spec], options);
+      } catch (error) {
+        // At a prompt, nvim-remote fails every call at once: the user is busy.
+        if ((error as { blocking?: boolean }).blocking) return { busy: (error as { mode: string }).mode };
+        throw error;
+      }
     },
   };
 }

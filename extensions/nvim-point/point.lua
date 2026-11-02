@@ -10,8 +10,11 @@ remote.nvim_point = point
 
 -- The buffer of the file at `path`: loaded, as the user's own would be.
 local function buffer(path)
-	if vim.fn.bufexists(path) == 0 and not vim.uv.fs_stat(path) then
+	local stat = vim.uv.fs_stat(path)
+	if vim.fn.bufexists(path) == 0 and not stat then
 		error(("no such file: %s"):format(path), 0)
+	elseif stat and stat.type ~= "file" then
+		error(("not a file: %s"):format(path), 0)
 	end
 	local buf = vim.fn.bufadd(path)
 	if not vim.api.nvim_buf_is_loaded(buf) then
@@ -77,12 +80,12 @@ local function reveal(win, first, last, context)
 end
 
 --- Show `spec.path` at `spec.line` (to `spec.endLine`), the cursor at `spec.col` (0-based bytes;
---- else the line's first non-blank). Not while the user is busy: then `{ busy = mode }`.
+--- else the line's first non-blank). Not while the user is busy: then `{ busy = mode }`. (At a
+--- prompt this does not run: nvim-remote fails the call first.)
 function point.show(spec)
-	local mode = vim.api.nvim_get_mode()
-	local typing = not (mode.mode == "n" or mode.mode == "nt" or mode.mode == "t")
-	if mode.blocking or typing then
-		return { busy = mode.mode }
+	local mode = vim.api.nvim_get_mode().mode
+	if not (mode == "n" or mode == "nt" or mode == "t") then
+		return { busy = mode }
 	end
 	local buf = buffer(spec.path)
 	local count = vim.api.nvim_buf_line_count(buf)
@@ -106,6 +109,10 @@ function point.show(spec)
 		end
 	elseif not win then
 		win, opened = vim.api.nvim_open_win(buf, false, { split = "left", win = vim.api.nvim_get_current_win() }), true
+		-- Not the jumps of the window it split, Pi's terminal or another like it.
+		vim.api.nvim_win_call(win, function()
+			vim.cmd("clearjumps")
+		end)
 	elseif vim.api.nvim_win_get_cursor(win)[1] ~= spec.line then
 		jump()
 	end
@@ -116,9 +123,13 @@ function point.show(spec)
 		vim.cmd(("silent! %d,%dfoldopen!"):format(spec.line, last))
 		-- On screen already, it is left where it is: the user knows where to look.
 		local visible = vim.fn.line("w0") <= spec.line and last <= vim.fn.line("w$")
+		-- As `^` would: the first non-blank, or the last character of a line of blanks.
 		local text = vim.api.nvim_buf_get_lines(buf, spec.line - 1, spec.line, true)[1]
-		local col = spec.col or (text:find("%S") or 1) - 1
-		vim.api.nvim_win_set_cursor(win, { spec.line, math.min(col, #text) })
+		local col = math.max(math.min(spec.col or (text:find("%S") or #text) - 1, #text - 1), 0)
+		if col > 0 then
+			col = col + vim.str_utf_start(text, col + 1) -- A character's first byte.
+		end
+		vim.api.nvim_win_set_cursor(win, { spec.line, col })
 		if not visible then
 			reveal(win, spec.line, last, spec.context or 3)
 		end

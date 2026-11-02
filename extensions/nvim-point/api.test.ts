@@ -60,7 +60,7 @@ const bufOf = (path: string): Promise<number> => lua('return vim.fn.bufnr(...)',
 // Answered even at a prompt, unlike Lua.
 const mode = async (): Promise<string> => (await editor.request('nvim_get_mode', []) as { mode: string }).mode;
 const shown = (result: Pointed) => {
-  assert.ok('win' in result, `busy: ${JSON.stringify(result)}`);
+  assert.ok(result.shown, `busy: ${JSON.stringify(result)}`);
   return result as Shown;
 };
 /** In `win`, run Ex `command`. */
@@ -425,7 +425,7 @@ test('while you are inserting, replacing, selecting, mid-command or typing a com
   for (const [keys, expected] of [['i', 'i'], ['R', 'R'], ['v', 'v'], ['V', 'V'], ['<C-v>', '\x16'], ['d', 'no'], [':', 'c']]) {
     await editor.request('nvim_input', [keys]);
     assert.equal(await mode(), expected, keys);
-    assert.deepEqual(await show({ path, line: 100 }), { busy: expected }, keys);
+    assert.deepEqual(await show({ path, line: 100 }), { shown: false, busy: expected }, keys);
     assert.deepEqual([(await state(yours)).path, (await windows()).length], [mine, 1], keys);
     await editor.request('nvim_input', ['<Esc><Esc>']);
     assert.equal(await mode(), 'n');
@@ -444,7 +444,7 @@ test('at a prompt (press Enter, or a choice), nothing changes', async () => {
       await editor.request('nvim_input', [keys]);
       // Input is taken in its own time.
       for (let i = 0; i < 50 && await mode() !== expected; i++) await delay(10);
-      assert.deepEqual(await show({ path, line: 100 }), { busy: expected }, keys);
+      assert.deepEqual(await show({ path, line: 100 }), { shown: false, busy: expected }, keys);
       await editor.request('nvim_input', ['<Esc>']);
       for (let i = 0; i < 50 && await mode() !== 'n'; i++) await delay(10);
       assert.equal((await state(yours)).path, mine);
@@ -470,8 +470,8 @@ test('it resolves to the window, the buffer, and whether it opened a window or s
   const path = await file();
   const [yours] = await layout(path);
   const buf = await bufOf(path);
-  assert.deepEqual(await show({ path, line: 5 }), { win: yours, buf, opened: false, scrolled: false });
-  assert.deepEqual(await show({ path, line: 250 }), { win: yours, buf, opened: false, scrolled: true });
+  assert.deepEqual(await show({ path, line: 5 }), { shown: true, win: yours, buf, opened: false, scrolled: false });
+  assert.deepEqual(await show({ path, line: 250 }), { shown: true, win: yours, buf, opened: false, scrolled: true });
 });
 
 // --- Attachments ------------------------------------------------------------------------------
@@ -680,7 +680,7 @@ test('in the command-line window (q:), it waits: no other window can change then
   const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', mine);
   await editor.request('nvim_input', ['q:']);
   for (let i = 0; i < 50 && await lua('return vim.fn.getcmdwintype()') === ''; i++) await delay(10);
-  assert.deepEqual(await show({ path: await file(), line: 10 }), { busy: 'cmdwin' });
+  assert.deepEqual(await show({ path: await file(), line: 10 }), { shown: false, busy: 'cmdwin' });
   await editor.request('nvim_input', [':quit<CR>']);
   for (let i = 0; i < 50 && await lua('return vim.fn.getcmdwintype()') !== ''; i++) await delay(10);
   assert.equal((await state(yours)).path, mine);

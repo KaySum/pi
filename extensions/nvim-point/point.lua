@@ -119,14 +119,14 @@ local function enter(win, buf)
 end
 
 --- Show `spec.path` at `spec.line` (to `spec.endLine`), the cursor at `spec.col` (0-based bytes;
---- else the line's first non-blank). Not while the user is busy: then `{ busy = mode }`. (At a
+--- else the line's first non-blank). Not while the user is busy: then `{ shown = false, busy = mode }`. (At a
 --- prompt this does not run: nvim-remote fails the call first.)
 function point.show(spec)
 	local mode = vim.api.nvim_get_mode().mode
 	if not (mode == "n" or mode == "nt" or mode == "t") then
-		return { busy = mode }
+		return { shown = false, busy = mode }
 	elseif vim.fn.getcmdwintype() ~= "" then
-		return { busy = "cmdwin" } -- In q:, no other window can change.
+		return { shown = false, busy = "cmdwin" } -- In q:, no other window can change.
 	end
 	local buf, done = buffer(spec.path)
 	local count = vim.api.nvim_buf_line_count(buf)
@@ -188,6 +188,7 @@ function point.show(spec)
 		end
 		local after = vim.fn.winsaveview()
 		return {
+			shown = true,
 			win = win,
 			buf = buf,
 			opened = opened,

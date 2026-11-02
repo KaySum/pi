@@ -25,7 +25,7 @@ export default function (pi) {
   const point = usePoint(pi);
   pi.on('tool_result', async () => {
     const shown = await point()?.show({ path: '/abs/src/app.ts', line: 120, endLine: 140 });
-    if (shown && 'busy' in shown) { /* You were typing: not now. */ }
+    if (shown && !shown.shown) { /* You were typing (shown.busy): not now. */ }
   });
 }
 ```
@@ -54,12 +54,12 @@ already, the window does not scroll: you know where to look. Else they are broug
 whole, centered if they fit with their context, else from their start. A move within the file
 goes in your jumplist, as does leaving another file for it.
 
-It resolves to `{ win, buf, opened, scrolled }`: `opened` if a window was opened for it,
-`scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command,
-in the command-line window, at a prompt), it changes nothing and resolves to `{ busy }`, the
-mode you are in (`i`, `v`, `c`…): whether to try again is for the extension to decide. A path
-that is not a file (missing, unreadable, a directory or device, a buffer of another kind), or
-lines past its end, reject.
+It resolves to `{ shown: true, win, buf, opened, scrolled }`: `opened` if a window was opened
+for it, `scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a
+command, in the command-line window, at a prompt), it changes nothing and resolves to `{
+shown: false, busy }`, the mode you are in (`i`, `v`, `c`…): whether to try again is for the
+extension to decide. A path that is not a file (missing, unreadable, a directory or device, a
+buffer of another kind), or lines past its end, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is

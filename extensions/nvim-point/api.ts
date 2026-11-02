@@ -20,13 +20,13 @@ export type Place = {
 };
 
 /**
- * Shown in `win`: `opened` if a window was opened for it (none showed a file, or the user's
+ * `shown` in `win`: `opened` if a window was opened for it (none showed a file, or the user's
  * has unsaved changes it could not hide), `scrolled` if the window scrolled. Or not shown: the
  * user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in the command-line
  * window.
  */
-export type Pointed = Shown | { busy: string };
-export type Shown = { win: number; buf: number; opened: boolean; scrolled: boolean };
+export type Pointed = Shown | { shown: false; busy: string };
+export type Shown = { shown: true; win: number; buf: number; opened: boolean; scrolled: boolean };
 
 export type Point = {
   /**
@@ -62,7 +62,7 @@ export function point(remote: Lua): Point {
         return await remote.lua(SHOW, [spec], options);
       } catch (error) {
         // At a prompt, nvim-remote fails every call at once: the user is busy.
-        if ((error as { blocking?: boolean }).blocking) return { busy: (error as { mode: string }).mode };
+        if ((error as { blocking?: boolean }).blocking) return { shown: false, busy: (error as { mode: string }).mode };
         throw error;
       }
     },

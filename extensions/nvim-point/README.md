@@ -54,7 +54,8 @@ it rather than lose them.
 The cursor goes on the place, and folds over its lines open. If the lines were on screen
 already, the window does not scroll: you know where to look. Else they are brought on screen
 whole, centered if they fit with their context, else from their start. A move within the file
-goes in your jumplist, as does leaving another file for it.
+goes in your jumplist, as does leaving another file for it; with `{ jump: false }`, as for
+following Pi around, neither your jumplist nor your alternate file (`<C-^>`) changes.
 
 It resolves to `{ shown: true, win, buf, opened, scrolled }`: `opened` if a window was opened
 for it, `scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a

@@ -416,6 +416,42 @@ test('a window opened for the file starts with no jumps', async () => {
   assert.deepEqual((await jumps(result.win)).list, []);
 });
 
+/** The alternate file of `win`, as <C-^> would go to. */
+const alternate = (win: number): Promise<string> => lua('return vim.api.nvim_win_call(..., function() return vim.fn.bufname("#") end)', win);
+
+test('with jump: false, switching files leaves your jumplist and alternate file as they were', async () => {
+  const mine = await file(), before = await file();
+  const [yours] = await layout(mine);
+  // A history of your own: the other file, then back to yours.
+  await inWin(yours, `edit ${before} | normal! 50G`);
+  await inWin(yours, `edit ${mine} | normal! 20G`);
+  const history = await jumps(yours), alt = await alternate(yours);
+  assert.equal(alt, before);
+  const path = await file();
+  for (const line of [100, 200]) shown(await show({ path, line }, { jump: false }));
+  assert.deepEqual([(await state(yours)).path, (await state(yours)).cursor[0]], [path, 200]);
+  assert.deepEqual([await jumps(yours), await alternate(yours)], [history, alt]);
+});
+
+test('with jump: false, moving within the file adds no jump', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  const history = await jumps(yours);
+  for (const line of [250, 10, 150]) shown(await show({ path, line }, { jump: false }));
+  assert.equal((await state(yours)).cursor[0], 150);
+  assert.deepEqual(await jumps(yours), history);
+});
+
+test('with jump: false, unsaved changes and \'hidden\' off still open a split, yours untouched', async () => {
+  const mine = await file();
+  const [yours] = await layout(mine);
+  await lua('vim.o.hidden = false vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 1, true, { "changed" })', mine);
+  const history = await jumps(yours);
+  const result = shown(await show({ path: await file(), line: 10 }, { jump: false }));
+  assert.equal(result.opened, true);
+  assert.deepEqual([(await state(yours)).path, await jumps(yours)], [mine, history]);
+});
+
 // --- While you are busy -----------------------------------------------------------------------
 
 test('while you are inserting, replacing, selecting, mid-command or typing a command, nothing changes', async () => {

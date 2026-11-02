@@ -125,10 +125,11 @@ local function find(buf, match, near)
 	return best
 end
 
--- Show `buf` in `win`. Entering a buffer whose file changed on disk, Neovim asks what to do at a
+-- Show `buf` in `win`; with `quiet`, leaving its jumplist and alternate file as they were.
+-- Entering a buffer whose file changed on disk, Neovim asks what to do at a
 -- prompt, which would hold this call until the user answers: unless they handle it themselves
 -- (FileChangedShell), it is reloaded as 'autoread' would, else left, and they are told after.
-local function enter(win, buf)
+local function enter(win, buf, quiet)
 	local guard = #vim.api.nvim_get_autocmds({ event = "FileChangedShell" }) == 0
 		and vim.api.nvim_create_autocmd("FileChangedShell", {
 			buffer = buf,
@@ -145,7 +146,14 @@ local function enter(win, buf)
 				end
 			end,
 		})
-	local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+	local ok, err = pcall(function()
+		if not quiet then
+			return vim.api.nvim_win_set_buf(win, buf)
+		end
+		vim.api.nvim_win_call(win, function()
+			vim.cmd(("keepalt keepjumps buffer %d"):format(buf))
+		end)
+	end)
 	if guard then
 		vim.api.nvim_del_autocmd(guard)
 	end
@@ -187,17 +195,21 @@ function point.show(spec)
 	end
 
 	local win, opened = window(buf), false
-	-- Where the user was goes in the window's jumplist, so <C-o> takes them back.
+	-- Where the user was goes in the window's jumplist, so <C-o> takes them back; unless asked
+	-- not to, as by one following Pi around.
+	local quiet = spec.jump == false
 	local function jump()
-		vim.api.nvim_win_call(win, function()
-			vim.cmd("normal! m'")
-		end)
+		if not quiet then
+			vim.api.nvim_win_call(win, function()
+				vim.cmd("normal! m'")
+			end)
+		end
 	end
 	if win and vim.api.nvim_win_get_buf(win) ~= buf then
 		jump()
 		-- Unsaved changes there with 'hidden' off, or 'winfixbuf': rather than lose them, a split.
 		-- An error from the user's autocommands once it shows the file is no failure.
-		if not pcall(enter, win, buf) and vim.api.nvim_win_get_buf(win) ~= buf then
+		if not pcall(enter, win, buf, quiet) and vim.api.nvim_win_get_buf(win) ~= buf then
 			win, opened = vim.api.nvim_open_win(buf, false, { split = "above", win = win }), true
 		end
 	elseif not win then

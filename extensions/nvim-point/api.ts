@@ -52,6 +52,11 @@ export type ShowOptions = CallOptions & {
    * resolves `superseded`. Default 0: at once, busy or not.
    */
   wait?: number;
+  /**
+   * `false`: leave the window's jumplist and alternate file (`<C-^>`) as they were, as one
+   * following Pi around should, not filling them with Pi's places. Default true: <C-o> goes back.
+   */
+  jump?: boolean;
 };
 
 export type Point = {
@@ -98,8 +103,9 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
   }
   let latest = 0;
   return {
-    async show(place, { wait = 0, ...options } = {}) {
+    async show(place, { wait = 0, jump, ...options } = {}) {
       const spec = check(place, cwd);
+      if (jump === false) spec.jump = false;
       if (!(wait >= 0)) throw new Error(`wait must be milliseconds from 0: ${wait}`);
       const ticket = ++latest, until = Date.now() + wait;
       for (;;) {

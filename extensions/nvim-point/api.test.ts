@@ -1414,6 +1414,216 @@ test('a relative path is from the directory given, else the process\'s', async (
   } finally { process.chdir(cwd); }
 });
 
+// --- The new options, in combination -----------------------------------------------------------
+
+test('match: in a closed fold, the fold opens and the code is on screen', async () => {
+  const path = await file([...Array.from({ length: 100 }, (_, i) => `line ${i + 1}`), 'hidden()', ...Array.from({ length: 100 }, (_, i) => `rest ${i}`)]);
+  const [yours] = await layout(path);
+  await inWin(yours, '50,150fold');
+  shown(await show({ path, match: 'hidden()' }));
+  assert.equal(await lua('return vim.api.nvim_win_call(..., function() return vim.fn.foldclosed(101) end)', yours), -1);
+  assert.equal((await state(yours)).cursor[0], 101);
+  assert.notEqual(await drawn(yours), 0);
+});
+
+test('match: pattern characters are plain text, a blank line in it any line, CRLF ends no part of it', async () => {
+  const path = await file(['x = a[1] % b.c(', 'before', 'anything at all', 'after', 'end']);
+  const [yours] = await layout(await file());
+  shown(await show({ path, match: 'a[1] % b.c(' }));
+  assert.deepEqual((await state(yours)).cursor, [1, 4]);
+  shown(await show({ path, match: 'before\n\nafter' }));
+  assert.deepEqual((await state(yours)).cursor, [2, 0]);
+  const dos = join(dir, 'match-dos.ts');
+  await writeFile(dos, 'one\r\n  two();\r\nthree\r\n');
+  shown(await show({ path: dos, match: 'two();\nthree' }));
+  assert.deepEqual((await state(yours)).cursor, [2, 2]);
+});
+
+test('match: a file not loaded is loaded, listed and shown at the code', async () => {
+  const path = await file(['a', 'b', 'target()']);
+  const [yours] = await layout(await file());
+  assert.equal(await bufOf(path), -1);
+  const result = shown(await show({ path, match: 'target()' }));
+  assert.deepEqual([await lua('return vim.bo[...].buflisted', result.buf), (await state(yours)).cursor[0]], [true, 3]);
+});
+
+test('wait: through a press-Enter prompt and the command-line window, shown once they are gone', async () => {
+  const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', await file());
+  const ui = await connect(socket);
+  await ui.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]);
+  try {
+    const path = await file();
+    await editor.request('nvim_input', [':echo "one\\ntwo\\nthree"<CR>']);
+    for (let i = 0; i < 50 && await mode() !== 'r'; i++) await delay(10);
+    const pending = show({ path, line: 77 }, { wait: 5000 });
+    await delay(250);
+    await editor.request('nvim_input', ['<CR>']);
+    assert.equal(shown(await pending).win, yours);
+    assert.equal((await state(yours)).cursor[0], 77);
+  } finally {
+    await ui.request('nvim_ui_detach', []);
+    ui.close();
+  }
+  await editor.request('nvim_input', ['q:']);
+  for (let i = 0; i < 50 && await lua('return vim.fn.getcmdwintype()') === ''; i++) await delay(10);
+  const pending = show({ path: await file(), line: 88 }, { wait: 5000 });
+  await delay(250);
+  await editor.request('nvim_input', [':quit<CR>']);
+  shown(await pending);
+  assert.equal((await state(yours)).cursor[0], 88);
+});
+
+test('wait: a file deleted while waiting is an error once you are free', async () => {
+  await typing();
+  const path = await file();
+  const pending = show({ path, line: 10 }, { wait: 5000 });
+  await delay(150);
+  await rm(path);
+  await editor.request('nvim_input', ['<Esc>']);
+  await assert.rejects(pending, /no such file/);
+});
+
+test('wait: the newest wins within a pointer; another pointer\'s wait is its own', async () => {
+  const yours = await typing();
+  const path = await file();
+  const other = point(remote, dir);
+  const mine = show({ path, line: 40 }, { wait: 5000 });
+  await delay(150);
+  const theirs = other.show({ path, line: 160 }, { wait: 5000 });
+  await delay(150);
+  await editor.request('nvim_input', ['<Esc>']);
+  // Both shown, in turn: neither ends the other's wait.
+  assert.deepEqual([shown(await mine).win, shown(await theirs).win], [yours, yours]);
+});
+
+test('jump: false, with a file changed on disk and here: no prompt, your changes and jumps kept', async () => {
+  const ui = await connect(socket);
+  await ui.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]);
+  try {
+    await lua('vim.cmd("messages clear")');
+    const { path, yours } = await changed({ edit: true });
+    const history = await jumps(yours);
+    shown(await show({ path, line: 2 }, { jump: false }));
+    await delay(50);
+    assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path), 'yours');
+    assert.deepEqual([(await state(yours)).cursor[0], await jumps(yours)], [2, history]);
+    assert.match(await messages(), /changed on disk and here/);
+  } finally {
+    await editor.request('nvim_input', ['<Esc>']);
+    await ui.request('nvim_ui_detach', []);
+    ui.close();
+  }
+});
+
+test('jump: false, past an error in your autocommands, the file is still shown in your window', async () => {
+  const [yours] = await layout(await file());
+  const path = await file();
+  await lua(`vim.api.nvim_create_augroup('broken', {})
+    vim.api.nvim_create_autocmd('BufWinEnter', { group = 'broken', callback = function() error('broken config') end })`);
+  try {
+    const result = shown(await show({ path, line: 30 }, { jump: false }));
+    assert.deepEqual([result.win, result.opened, (await state(yours)).path, (await state(yours)).cursor[0]], [yours, false, path, 30]);
+  } finally { await lua('vim.api.nvim_del_augroup_by_name("broken")'); }
+});
+
+test('jump: false with focus: true: focused, and still no jump', async () => {
+  const [yours] = await layout(await file());
+  const history = await jumps(yours);
+  shown(await show({ path: await file(), line: 60 }, { jump: false, focus: true }));
+  assert.deepEqual([await current(), await jumps(yours)], [yours, history]);
+});
+
+test('scroll: minimal counts wrapped rows, and closed folds above as one', async () => {
+  const path = await file(Array.from({ length: 300 }, (_, i) => `${i + 1} ${'w'.repeat(i % 2 ? 120 : 5)}`));
+  const [yours] = await layout(path);
+  shown(await show({ path, line: 150, endLine: 151 }, { scroll: 'minimal' }));
+  const bottom = (await state(yours)).bottom;
+  // The last line's rows, then its context, at the bottom: three lines after it on screen.
+  assert.ok(bottom >= 151 && bottom <= 154, `${bottom}`);
+  await inWin(yours, 'normal! gg');
+  await inWin(yours, '200,280fold');
+  shown(await show({ path, line: 285 }, { scroll: 'minimal' }));
+  assert.ok((await state(yours)).top <= 285);
+  assert.notEqual(await drawn(yours), 0);
+});
+
+test('scroll: top after switching files, and in a window too small for its context', async () => {
+  const [yours] = await layout(await file());
+  const path = await file();
+  shown(await show({ path, line: 150 }, { scroll: 'top' }));
+  assert.equal((await state(yours)).top, 147);
+  await lua('vim.api.nvim_win_set_height(..., 3)', yours);
+  shown(await show({ path, line: 250 }, { scroll: 'top' }));
+  const now = await state(yours);
+  assert.ok(now.top <= 250 && 250 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+test('open: false, with a match, in a split not yours: shown there', async () => {
+  const mine = await file(), path = await file([...Array.from({ length: 100 }, (_, i) => `line ${i + 1}`), 'found()']);
+  const [yours, term] = await layout(mine);
+  const there = await lua(`local yours, path, term = ...
+    vim.api.nvim_set_current_win(yours)
+    vim.cmd('split ' .. vim.fn.fnameescape(path))
+    local there = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(term)
+    return there`, yours, path, term);
+  assert.equal(shown(await show({ path, match: 'found()' }, { open: false })).win, there);
+  assert.equal(await lua('return vim.api.nvim_win_get_cursor(...)[1]', there), 101);
+  assert.equal((await state(yours)).path, mine);
+});
+
+test('buf: a help buffer can be shown; a listed buffer stays listed', async () => {
+  const [yours] = await layout(await file());
+  const help = await lua(`local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, vim.split(string.rep('help\\n', 50), '\\n'))
+    vim.bo[buf].buftype = 'help'
+    return buf`);
+  shown(await show({ buf: help, line: 30 }));
+  assert.deepEqual([await lua('return vim.api.nvim_win_get_buf(...)', yours), await lua('return vim.bo[...].buflisted', help)], [help, true]);
+});
+
+test('buf: a buffer wiped while waiting is an error once you are free', async () => {
+  await typing();
+  const buf = await lua('local buf = vim.api.nvim_create_buf(false, true) vim.api.nvim_buf_set_lines(buf, 0, -1, true, { "a", "b" }) return buf');
+  const pending = show({ buf, line: 2 }, { wait: 5000 });
+  await delay(150);
+  await lua('vim.api.nvim_buf_delete(..., { force = true })', buf);
+  await editor.request('nvim_input', ['<Esc>']);
+  await assert.rejects(pending, new RegExp(`no buffer ${buf}`));
+});
+
+test('200 calls with every option mixed: each keeps its promise', async () => {
+  const seed = 0x0b7105, next = random(seed);
+  const paths = [await file(300), await file(Array.from({ length: 200 }, (_, i) => `${i + 1} ${'w'.repeat(i % 6 === 0 ? 130 : 3)} mark${i % 25}`))];
+  const [yours, term] = await layout(paths[0]);
+  const scrolls = [undefined, 'center', 'top', 'minimal'] as const;
+  for (let step = 0; step < 200; step++) {
+    const path = paths[next(2)];
+    const count = path === paths[0] ? 300 : 200;
+    const byMatch = path === paths[1] && next(3) === 0;
+    const line = 1 + next(count);
+    const place = byMatch ? { path, match: `mark${next(25)}`, line } : { path, line, endLine: Math.min(count, line + next(5)) };
+    const options = { jump: next(2) === 0 ? false : undefined, scroll: scrolls[next(4)], open: next(4) === 0 ? false : undefined, focus: next(5) === 0 ? true : undefined, context: next(5) };
+    const where = `step ${step} (seed ${seed}): ${JSON.stringify(place).slice(-60)} ${JSON.stringify(options)}`;
+    const before = await state(yours), history = await jumps(yours);
+    const result = await show({ ...place, context: options.context } as never, { jump: options.jump, scroll: options.scroll, open: options.open, focus: options.focus });
+    if (options.open === false && before.path !== path) {
+      assert.deepEqual(result, { shown: false, closed: true }, where);
+      assert.deepEqual(await state(yours), before, where);
+    } else {
+      assert.equal(shown(result).win, yours, where);
+      const now = await state(yours);
+      assert.ok(now.top <= now.cursor[0] && now.cursor[0] <= now.bottom, `${where}: ${now.top}–${now.bottom} cursor ${now.cursor[0]}`);
+      assert.equal(now.path, path, where);
+      if (options.jump === false) assert.deepEqual(await jumps(yours), history, where);
+    }
+    assert.equal(await current(), options.focus && result.shown ? yours : term, where);
+    assert.equal((await windows()).length, 2, where);
+    if (await current() !== term) await lua('vim.api.nvim_set_current_win(...)', term);
+  }
+});
+
 // --- Errors -----------------------------------------------------------------------------------
 
 test('what cannot be shown is an error, and nothing moves', async () => {

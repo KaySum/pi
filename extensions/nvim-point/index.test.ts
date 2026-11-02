@@ -238,3 +238,33 @@ test('after the place, option names complete, and the values some take', async (
   assert.equal((await complete('a.ts:3 '))!.length, 8);
   assert.equal(await complete('a.ts:3 wait='), null); // A number: nothing to offer.
 });
+
+test('a quoted value takes JSON escapes; one never closed says what is wrong with it', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  await writeFile(join(dir, 'quotes.ts'), 'a\nsay("hi", \'x\') = 1\n');
+  assert.deepEqual(await run('quotes.ts match="say(\\"hi\\", \'x\') = 1"'), [`Showed quotes.ts at "say(\\"hi\\", 'x') = 1" in window ${yours}`, 'info']);
+  assert.deepEqual(await cursor(yours), [2, 0]);
+  assert.deepEqual(await run('quotes.ts match="say(\\"hi'), ['match="say(\\"hi is not a value match takes: Code to find instead of a line; the line given, the nearest', 'warning']);
+});
+
+test('wait= while you are busy: shown once you are free, or not now', async () => {
+  const { run } = await attached();
+  const mine = await file('mine.ts');
+  const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', mine);
+  await file('there.ts');
+  await editor.request('nvim_input', ['i']);
+  assert.deepEqual(await run('there.ts:10 wait=200'), ['Not now: you are busy in Neovim (mode i)', 'warning']);
+  const pending = run('there.ts:20 wait=5000');
+  await new Promise(resolve => setTimeout(resolve, 150));
+  await editor.request('nvim_input', ['<Esc>']);
+  assert.deepEqual(await pending, [`Showed there.ts:20 in window ${yours}`, 'info']); // On screen as it opens.
+});
+
+test('an option given twice: the last says', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  await file('there.ts');
+  await run('there.ts:200 scroll=center scroll=top');
+  assert.equal(await lua('return vim.api.nvim_win_call(..., function() return vim.fn.line("w0") end)', yours), 197);
+});

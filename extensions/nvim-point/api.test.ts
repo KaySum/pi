@@ -464,6 +464,83 @@ test('typing to Pi in its terminal is not busy: your window is shown the place',
   assert.deepEqual([await mode(), await current()], ['t', term]);
 });
 
+// --- Waiting until you are free ---------------------------------------------------------------
+
+/** You, typing in your file: your window. */
+async function typing() {
+  const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', await file());
+  await editor.request('nvim_input', ['i']);
+  for (let i = 0; i < 50 && await mode() !== 'i'; i++) await delay(10);
+  return yours;
+}
+
+test('waiting, it shows the place as soon as you stop typing', async () => {
+  const yours = await typing();
+  const path = await file();
+  const started = performance.now();
+  const pending = show({ path, line: 120 }, { wait: 5000 });
+  await delay(300);
+  assert.equal((await state(yours)).cursor[0], 1); // Not while you type.
+  await editor.request('nvim_input', ['<Esc>']);
+  const result = shown(await pending);
+  assert.equal(result.win, yours);
+  assert.deepEqual([(await state(yours)).path, (await state(yours)).cursor[0]], [path, 120]);
+  assert.ok(performance.now() - started < 1000, `${performance.now() - started} ms`);
+});
+
+test('waiting no longer than it may, it says you are busy, and nothing moves', async () => {
+  const yours = await typing();
+  const started = performance.now();
+  assert.deepEqual(await show({ path: await file(), line: 120 }, { wait: 300 }), { shown: false, busy: 'i' });
+  assert.ok(performance.now() - started >= 300);
+  await editor.request('nvim_input', ['<Esc>']);
+  await delay(250);
+  assert.equal((await state(yours)).cursor[0], 1);
+});
+
+test('a later show ends an earlier one\'s wait: only the newest place is shown', async () => {
+  const yours = await typing();
+  const path = await file();
+  const first = show({ path, line: 50 }, { wait: Infinity });
+  await delay(150);
+  const second = show({ path, line: 150 }, { wait: Infinity });
+  assert.deepEqual(await first, { shown: false, busy: 'i', superseded: true });
+  await editor.request('nvim_input', ['<Esc>']);
+  shown(await second);
+  assert.equal((await state(yours)).cursor[0], 150);
+});
+
+test('even a show that does not wait ends an earlier one\'s', async () => {
+  await typing();
+  const path = await file();
+  const first = show({ path, line: 50 }, { wait: Infinity });
+  await delay(150);
+  assert.deepEqual(await show({ path, line: 150 }), { shown: false, busy: 'i' });
+  assert.equal((await first as { superseded?: true }).superseded, true);
+});
+
+test('an abort ends the wait: it rejects, and nothing is shown after', async () => {
+  const yours = await typing();
+  const controller = new AbortController();
+  const pending = show({ path: await file(), line: 120 }, { wait: Infinity, signal: controller.signal });
+  await delay(150);
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  await editor.request('nvim_input', ['<Esc>']);
+  await delay(250);
+  assert.equal((await state(yours)).cursor[0], 1);
+});
+
+test('when you are free already, waiting changes nothing: shown at once', async () => {
+  const [yours] = await layout(await file());
+  const started = performance.now();
+  shown(await show({ path: await file(), line: 70 }, { wait: Infinity }));
+  assert.ok(performance.now() - started < 100);
+  assert.equal((await state(yours)).cursor[0], 70);
+  await assert.rejects(show({ path: await file(), line: 1 }, { wait: -1 }), /wait must be milliseconds/);
+  await assert.rejects(show({ path: await file(), line: 1 }, { wait: Number.NaN }), /wait must be milliseconds/);
+});
+
 // --- What it resolves to ----------------------------------------------------------------------
 
 test('it resolves to the window, the buffer, and whether it opened a window or scrolled', async () => {

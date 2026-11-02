@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { useRemote, type CallOptions, type Remote } from '../nvim-remote/api.ts';
 
@@ -41,8 +42,17 @@ export type Place = At | Of;
  * user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in the command-line
  * window.
  */
-export type Pointed = Shown | { shown: false; busy: string };
+export type Pointed = Shown | { shown: false; busy: string; superseded?: true };
 export type Shown = { shown: true; win: number; buf: number; opened: boolean; scrolled: boolean };
+
+export type ShowOptions = CallOptions & {
+  /**
+   * While the user is busy, try again until they are not, for up to this many milliseconds
+   * (`Infinity`: as long as it takes); a later `show` of the same pointer ends the wait, which
+   * resolves `superseded`. Default 0: at once, busy or not.
+   */
+  wait?: number;
+};
 
 export type Point = {
   /**
@@ -50,8 +60,11 @@ export type Point = {
    * Pi's terminal), opening the file there; its cursor on it, folds over it open, scrolled to it
    * if it is not on screen. Focus stays where it is, and <C-o> there goes back.
    */
-  show(place: Place, options?: CallOptions): Promise<Pointed>;
+  show(place: Place, options?: ShowOptions): Promise<Pointed>;
 };
+
+/** How often a waiting `show` tries again: unnoticed by the user, a few calls a second. */
+const RETRY_MS = 100;
 
 type Lua = Pick<Remote, 'lua'>;
 
@@ -71,18 +84,29 @@ function check(place: Place, cwd: string) {
 
 /** Pointing in the editor of `remote`, relative paths from `cwd`. */
 export function point(remote: Lua, cwd = process.cwd()): Point {
+  async function once(spec: Record<string, unknown>, options?: CallOptions): Promise<Pointed> {
+    try {
+      const result = await remote.lua(SHOW, [spec], options);
+      if (result !== 'not installed') return result;
+      await remote.lua(MODULE, [], options);
+      return await remote.lua(SHOW, [spec], options);
+    } catch (error) {
+      // At a prompt, nvim-remote fails every call at once: the user is busy.
+      if ((error as { blocking?: boolean }).blocking) return { shown: false, busy: (error as { mode: string }).mode };
+      throw error;
+    }
+  }
+  let latest = 0;
   return {
-    async show(place, options) {
+    async show(place, { wait = 0, ...options } = {}) {
       const spec = check(place, cwd);
-      try {
-        const result = await remote.lua(SHOW, [spec], options);
-        if (result !== 'not installed') return result;
-        await remote.lua(MODULE, [], options);
-        return await remote.lua(SHOW, [spec], options);
-      } catch (error) {
-        // At a prompt, nvim-remote fails every call at once: the user is busy.
-        if ((error as { blocking?: boolean }).blocking) return { shown: false, busy: (error as { mode: string }).mode };
-        throw error;
+      if (!(wait >= 0)) throw new Error(`wait must be milliseconds from 0: ${wait}`);
+      const ticket = ++latest, until = Date.now() + wait;
+      for (;;) {
+        const result = await once(spec, options);
+        if (result.shown || Date.now() >= until) return result;
+        await delay(RETRY_MS, undefined, { signal: options.signal });
+        if (ticket !== latest) return { ...result, superseded: true };
       }
     },
   };

@@ -24,8 +24,8 @@ import { usePoint } from '../nvim-point/api.ts';
 export default function (pi) {
   const point = usePoint(pi);
   pi.on('tool_result', async () => {
-    const shown = await point()?.show({ path: 'src/app.ts', match: 'async function retry(' });
-    if (shown && !shown.shown) { /* You were typing (shown.busy): not now. */ }
+    const shown = await point()?.show({ path: 'src/app.ts', match: 'async function retry(' }, { wait: 5000 });
+    if (shown && !shown.shown) { /* Still typing after 5 s (shown.busy), or a later show came. */ }
   });
 }
 ```
@@ -57,10 +57,12 @@ goes in your jumplist, as does leaving another file for it.
 
 It resolves to `{ shown: true, win, buf, opened, scrolled }`: `opened` if a window was opened
 for it, `scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a
-command, in the command-line window, at a prompt), it changes nothing and resolves to `{
-shown: false, busy }`, the mode you are in (`i`, `v`, `c`…): whether to try again is for the
-extension to decide. A path that is not a file (missing, unreadable, a directory or device, a
-buffer of another kind), lines past its end, or a `match` not there, reject.
+command, in the command-line window, at a prompt), it changes nothing and resolves to
+`{ shown: false, busy }`, the mode you are in (`i`, `v`, `c`…): with `{ wait: ms }`, it tries
+again until you are free, for up to that long (`Infinity`: as long as it takes), and a later
+`show` ends the wait (`superseded`): only the newest place is shown. A path that is not a file
+(missing, unreadable, a directory or device, a buffer of another kind), lines past its end, or
+a `match` not there, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is

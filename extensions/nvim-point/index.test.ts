@@ -6,10 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
-import { attach, connect } from '../nvim-remote/remote.ts';
+import { connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
 import registerPoint from './index.ts';
-import { point, type Shown } from './api.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -17,136 +16,10 @@ after(() => service.stop());
 const editor = await connect(socket); // The user.
 after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
-const remote = await attach(socket, { onError: () => {} });
-after(() => remote.close());
-const { show } = point(remote);
-
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-point-')));
 after(() => rm(dir, { recursive: true, force: true }));
-afterEach(() => lua('vim.o.hidden = true vim.cmd("silent! tabonly | silent! only | enew! | silent! %bwipeout!")'));
-await lua('vim.cmd("filetype on")'); // As the user's config would.
 
-/** A file of `n` numbered lines. */
-async function file(name: string, n = 300) {
-  const path = join(dir, name);
-  await writeFile(path, Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n');
-  return path;
-}
-
-/** Your file on the left, a terminal beside it focused, as Pi's would be: [your window, the terminal's]. */
-async function layout(path: string): Promise<[number, number]> {
-  return lua(`vim.cmd.edit(vim.fn.fnameescape(...))
-    local yours = vim.api.nvim_get_current_win()
-    vim.cmd('rightbelow vsplit | terminal')
-    return { yours, vim.api.nvim_get_current_win() }`, path);
-}
-
-/** What `win` shows: its buffer's file, cursor, first and last lines on screen. */
-const state = (win: number) => lua(`local win = ...
-  return vim.api.nvim_win_call(win, function()
-    return { path = vim.api.nvim_buf_get_name(0), cursor = vim.api.nvim_win_get_cursor(0), top = vim.fn.line('w0'), bottom = vim.fn.line('w$') }
-  end)`, win);
-const current = () => lua('return vim.api.nvim_get_current_win()');
-
-test('the place is shown in your window, not Pi\'s terminal, and focus stays in the terminal', async () => {
-  const [yours, term] = await layout(await file('mine.ts'));
-  const path = await file('there.ts');
-  const shown = await show({ path, line: 150, col: 2 }) as Shown;
-  assert.deepEqual(shown, { win: yours, buf: shown.buf, opened: false, scrolled: true });
-  const now = await state(yours);
-  assert.deepEqual([now.path, now.cursor], [path, [150, 2]]);
-  assert.ok(now.top <= 150 && 150 <= now.bottom, `${now.top}–${now.bottom}`);
-  assert.equal(await current(), term);
-  // As the user would have it: listed, its type known.
-  assert.deepEqual(await lua('local buf = ... return { vim.bo[buf].buflisted, vim.bo[buf].filetype }', shown.buf), [true, 'typescript']);
-});
-
-test('lines on screen already are not scrolled to; others are brought on whole, centered if they fit', async () => {
-  const path = await file('code.ts');
-  const [yours] = await layout(path);
-  assert.deepEqual(await show({ path, line: 5, endLine: 8 }), { win: yours, buf: await lua('return vim.fn.bufnr(...)', path), opened: false, scrolled: false });
-  assert.deepEqual((await state(yours)).cursor, [5, 0]);
-
-  assert.equal((await show({ path, line: 200, endLine: 210 }) as Shown).scrolled, true);
-  const centered = await state(yours);
-  assert.ok(centered.top <= 200 && 210 <= centered.bottom, `${centered.top}–${centered.bottom}`);
-  assert.ok(Math.abs((200 - centered.top) - (centered.bottom - 210)) <= 1, `${centered.top}–${centered.bottom}`);
-
-  // Taller than the window: from its start, with 3 lines of context above.
-  await show({ path, line: 100, endLine: 160 });
-  assert.equal((await state(yours)).top, 97);
-});
-
-test('<C-o> in your window goes back to where you were', async () => {
-  const mine = await file('mine.ts');
-  const [yours] = await layout(mine);
-  await lua('vim.api.nvim_win_set_cursor(..., { 40, 0 })', yours);
-  await show({ path: await file('there.ts'), line: 100 });
-  await lua('vim.api.nvim_win_call(..., function() vim.cmd([[execute "normal! \\<C-o>"]]) end)', yours);
-  const back = await state(yours);
-  assert.deepEqual([back.path, back.cursor[0]], [mine, 40]);
-});
-
-test('while you are typing in your window it waits, and changes nothing', async () => {
-  const mine = await file('mine.ts');
-  await lua('vim.cmd.edit(vim.fn.fnameescape(...))', mine);
-  await editor.request('nvim_input', ['i']);
-  assert.deepEqual(await show({ path: await file('there.ts'), line: 100 }), { busy: 'i' });
-  assert.equal((await state(await current())).path, mine);
-  await editor.request('nvim_input', ['<Esc>']);
-});
-
-test('your unsaved changes are kept: with \'hidden\' off, the file opens in a split', async () => {
-  const mine = await file('mine.ts');
-  const [yours, term] = await layout(mine);
-  await lua('vim.o.hidden = false vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 1, true, { "changed" })', mine);
-  const path = await file('there.ts');
-  const shown = await show({ path, line: 10 });
-  assert.ok('win' in shown && shown.opened && shown.win !== yours);
-  assert.equal((await state(yours)).path, mine);
-  assert.equal((await state(shown.win)).path, path);
-  assert.equal(await current(), term);
-});
-
-test('with no window showing a file, one opens beside Pi\'s terminal, focus staying there', async () => {
-  const term = await lua('vim.cmd("terminal") return vim.api.nvim_get_current_win()');
-  const path = await file('there.ts');
-  const shown = await show({ path, line: 20 });
-  assert.ok('win' in shown && shown.opened);
-  assert.deepEqual([(await state(shown.win)).path, await current()], [path, term]);
-  assert.equal(await lua('return #vim.api.nvim_tabpage_list_wins(0)'), 2);
-});
-
-test('a window showing the file already is the one used, and folds over the place open', async () => {
-  const mine = await file('mine.ts'), path = await file('there.ts');
-  const [yours] = await layout(mine);
-  const there = await lua(`local yours, path = ...
-    vim.api.nvim_set_current_win(yours)
-    vim.cmd('split ' .. vim.fn.fnameescape(path) .. ' | 40,60fold | wincmd p')
-    return vim.fn.win_getid(vim.fn.winnr('#'))`, yours, path);
-  // In the window that showed it, not yours, which still shows your file.
-  const shown = await show({ path, line: 50, endLine: 55 });
-  assert.equal('win' in shown && shown.win, there);
-  assert.equal((await state(yours)).path, mine);
-  assert.equal(await lua('local win = ... return vim.api.nvim_win_call(win, function() return vim.fn.foldclosed(50) end)', there), -1);
-
-  // Within a closed fold on screen: not on screen once the fold opens, so brought on, taller
-  // than the window, from its start.
-  await lua(`vim.api.nvim_win_call(..., function() vim.cmd('normal! zE') vim.cmd('5,250fold') vim.fn.winrestview({ topline = 1 }) end)`, there);
-  await show({ path, line: 240, endLine: 249 });
-  assert.equal((await state(there)).top, 237);
-});
-
-test('a place that is not there is an error, and nothing moves', async () => {
-  const path = await file('short.ts', 10);
-  await assert.rejects(show({ path: 'short.ts', line: 1 }), /absolute/);
-  await assert.rejects(show({ path, line: 0 }), /from 1/);
-  await assert.rejects(show({ path, line: 5, endLine: 4 }), /from line/);
-  await assert.rejects(show({ path, line: 11 }), /past the end/);
-  await assert.rejects(show({ path: join(dir, 'missing.ts'), line: 1 }), /no such file/);
-});
-
-type Command = { handler(args: string, ctx: object): Promise<void> };
+type Command = { description: string; handler(args: string, ctx: object): Promise<void> };
 
 /** Pi with nvim-remote (unless `!remote`) and nvim-point loaded, its session started. */
 async function pi({ remote = true } = {}) {
@@ -168,19 +41,116 @@ async function pi({ remote = true } = {}) {
   await fire('session_start');
   if (remote) await ready;
   const run = async (args: string) => { await commands['nvim-point'].handler(args, ctx); return notes.at(-1)!; };
-  return { run, shutdown: () => fire('session_shutdown') };
+  return { run, commands, shutdown: () => fire('session_shutdown') };
 }
 
-test('/nvim-point shows a place as path:line[-end][:column], columns from 1', async () => {
-  const { run, shutdown } = await pi();
+const running = new Set<{ shutdown(): Promise<unknown> }>();
+afterEach(async () => {
+  for (const p of running) await p.shutdown();
+  running.clear();
+  await editor.request('nvim_input', ['<Esc>']);
+  await lua('vim.cmd("silent! tabonly | silent! only | enew! | silent! %bwipeout!")');
+});
+/** Pi attached to the test's Neovim, shut down after the test. */
+async function attached() {
+  const p = await pi();
+  running.add(p);
+  return p;
+}
+
+/** A file of 300 numbered lines, each indented by two spaces. */
+async function file(name: string) {
+  const path = join(dir, name);
+  await writeFile(path, Array.from({ length: 300 }, (_, i) => `  line ${i + 1}`).join('\n') + '\n');
+  return path;
+}
+
+/** Your file on the left, a terminal beside it focused: your window. */
+const layout = (path: string): Promise<number> => lua(`vim.cmd.edit(vim.fn.fnameescape(...))
+  local yours = vim.api.nvim_get_current_win()
+  vim.cmd('rightbelow vsplit | terminal')
+  return yours`, path);
+const cursor = (win: number): Promise<[number, number]> => lua('return vim.api.nvim_win_get_cursor(...)', win);
+const nameIn = (win: number): Promise<string> => lua('return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(...))', win);
+const USAGE = ['Usage: /nvim-point <path>:<line>[-<end line>][:<column>]', 'warning'];
+
+test('there is one command; without Neovim it says so, and what is wrong with the usage first', async () => {
+  const p = await pi({ remote: false });
+  assert.deepEqual(Object.keys(p.commands), ['nvim-point']);
+  assert.match(p.commands['nvim-point'].description, /<path>:<line>/);
+  assert.deepEqual(await p.run('a.ts:1'), ['Pi is not attached to Neovim', 'warning']);
+  assert.deepEqual(await p.run(''), USAGE);
+});
+
+test('path:line shows the line, the cursor on its first non-blank', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  const path = await file('there.ts');
+  assert.deepEqual(await run('there.ts:150'), [`Showed there.ts:150 in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual([await nameIn(yours), await cursor(yours)], [path, [150, 2]]);
+});
+
+test('path:line-end shows the lines; path:line:column puts the cursor at the column, from 1', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  await file('there.ts');
+  assert.deepEqual(await run('there.ts:120-125'), [`Showed there.ts:120-125 in window ${yours} (scrolled)`, 'info']);
+  assert.deepEqual(await cursor(yours), [120, 2]);
+  assert.deepEqual(await run('there.ts:122:5'), [`Showed there.ts:122 in window ${yours}`, 'info']);
+  assert.deepEqual(await cursor(yours), [122, 4]);
+  assert.deepEqual(await run('there.ts:121-124:1'), [`Showed there.ts:121-124 in window ${yours}`, 'info']);
+  assert.deepEqual(await cursor(yours), [121, 0]);
+});
+
+test('paths are from Pi\'s working directory, or absolute; spaces around them are ignored', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  const path = await file('there.ts');
+  assert.deepEqual(await run(`  ${path}:10  `), [`Showed there.ts:10 in window ${yours}`, 'info']);
+  assert.equal(await nameIn(yours), path);
+  // Outside the working directory, it is named as it is.
+  const outside = join(await realpath(await mkdtemp(join(tmpdir(), 'nvim-point-outside-'))), 'far.ts');
+  await writeFile(outside, 'far\n');
   try {
-    const [yours] = await layout(await file('mine.ts'));
-    await file('there.ts');
-    assert.deepEqual(await run('there.ts:120-125:3'), [`Showed there.ts:120-125 in window ${yours} (scrolled)`, 'info']);
-    assert.deepEqual((await state(yours)).cursor, [120, 2]);
-    assert.deepEqual(await run('there.ts'), ['Usage: /nvim-point <path>:<line>[-<end line>][:<column>]', 'warning']);
-    assert.deepEqual(await run('there.ts:999'), [`line 999 is past the end of ${join(dir, 'there.ts')}, at 300`, 'warning']);
-  } finally { await shutdown(); }
-  const detached = await pi({ remote: false });
-  assert.deepEqual(await detached.run('there.ts:1'), ['Pi is not attached to Neovim', 'warning']);
+    assert.deepEqual(await run(`${outside}:1`), [`Showed ${outside}:1 in window ${yours}`, 'info']);
+  } finally { await rm(outside, { force: true }); }
+});
+
+test('a path with a colon or spaces in it is found: the line is what follows its last colon', async () => {
+  const { run } = await attached();
+  const yours = await layout(await file('mine.ts'));
+  const path = await file('a:b c.ts');
+  assert.deepEqual(await run('a:b c.ts:7'), [`Showed a:b c.ts:7 in window ${yours}`, 'info']);
+  assert.equal(await nameIn(yours), path);
+});
+
+test('opening a window for it, it says so', async () => {
+  const { run } = await attached();
+  await lua('vim.cmd("terminal")');
+  await file('there.ts');
+  const [text, type] = await run('there.ts:200');
+  assert.match(text, /^Showed there\.ts:200 in window \d+ \(opened a window, scrolled\)$/);
+  assert.equal(type, 'info');
+});
+
+test('while you are typing in Neovim, it says not now', async () => {
+  const { run } = await attached();
+  await lua('vim.cmd.edit(vim.fn.fnameescape(...))', await file('mine.ts'));
+  await file('there.ts');
+  await editor.request('nvim_input', ['i']);
+  assert.deepEqual(await run('there.ts:10'), ['Not now: you are busy in Neovim (mode i)', 'warning']);
+});
+
+test('what is not a line of a file says why', async () => {
+  const { run } = await attached();
+  await layout(await file('mine.ts'));
+  await file('there.ts');
+  for (const args of ['', 'there.ts', 'there.ts:', 'there.ts:x', 'there.ts:-3', 'there.ts:3-', 'there.ts:3:', ':3']) {
+    assert.deepEqual(await run(args), USAGE, JSON.stringify(args));
+  }
+  assert.deepEqual(await run('there.ts:0'), ['line must be a whole number from 1: 0', 'warning']);
+  assert.deepEqual(await run('there.ts:5-4'), ['endLine must be a whole number from line: 4', 'warning']);
+  assert.deepEqual(await run('there.ts:5:0'), ['Columns count from 1: 0', 'warning']);
+  assert.deepEqual(await run('there.ts:301'), [`line 301 is past the end of ${join(dir, 'there.ts')}, at 300`, 'warning']);
+  assert.deepEqual(await run('missing.ts:1'), [`no such file: ${join(dir, 'missing.ts')}`, 'warning']);
 });

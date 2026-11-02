@@ -739,6 +739,147 @@ test('a buffer named like a path that is not a file (scratch, acwrite) is not sh
   for (const path of [scratch, written]) await assert.rejects(show({ path, line: 1 }), /not a file/, path);
 });
 
+// --- Files changed on disk ---------------------------------------------------------------------
+
+/** A file loaded in Neovim, then changed on disk, after `layout`; with `edit`, changed in Neovim too. */
+async function changed({ edit = false, remove = false } = {}) {
+  const path = await file(['old', 'two']);
+  const [yours] = await layout(await file());
+  await lua(`local path, edit = ...
+    local buf = vim.fn.bufadd(path) vim.fn.bufload(buf)
+    if edit then vim.api.nvim_buf_set_lines(buf, 0, 1, true, { 'yours' }) end`, path, edit);
+  if (remove) await rm(path);
+  else {
+    await writeFile(path, 'theirs\ntwo\n');
+    await utimes(path, new Date(), new Date(Date.now() + 5000));
+  }
+  return { path, yours };
+}
+const messages = (): Promise<string> => lua('return vim.api.nvim_exec2("messages", { output = true }).output');
+const handlers = (): Promise<number> => lua('return #vim.api.nvim_get_autocmds({ event = "FileChangedShell" })');
+
+test('a file changed on disk, with \'autoread\' off: left as it was, and you are told', async () => {
+  await lua('vim.o.autoread = false vim.cmd("messages clear")');
+  try {
+    const { path } = await changed();
+    shown(await show({ path, line: 1 }));
+    await delay(50);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path), 'old');
+    assert.match(await messages(), /changed on disk \(changed\): :e! loads it/);
+  } finally { await lua('vim.o.autoread = true'); }
+});
+
+test('a file deleted on disk with your changes: kept, and you are told', async () => {
+  await lua('vim.cmd("messages clear")');
+  const { path, yours } = await changed({ edit: true, remove: true });
+  shown(await show({ path, line: 2 }));
+  await delay(50);
+  assert.deepEqual([(await state(yours)).path, await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path)], [path, 'yours']);
+  assert.match(await messages(), /changed on disk \(deleted\)/);
+});
+
+test('your own FileChangedShell handler is used, not one of ours', async () => {
+  await lua(`vim.g.handled = nil
+    vim.api.nvim_create_augroup('mine', {})
+    vim.api.nvim_create_autocmd('FileChangedShell', { group = 'mine', callback = function() vim.g.handled = vim.v.fcs_reason vim.v.fcs_choice = '' end })`);
+  try {
+    const { path } = await changed({ edit: true });
+    shown(await show({ path, line: 1 }));
+    assert.equal(await lua('return vim.g.handled'), 'conflict');
+    assert.equal(await handlers(), 1);
+  } finally { await lua('vim.api.nvim_del_augroup_by_name("mine")'); }
+});
+
+test('nothing of ours is left handling files changed on disk, after or on failure', async () => {
+  const { path } = await changed({ edit: true });
+  shown(await show({ path, line: 1 }));
+  await assert.rejects(show({ path, line: 99 }));
+  assert.equal(await handlers(), 0);
+});
+
+// --- No traces --------------------------------------------------------------------------------
+
+test('your options, registers, search, histories and buffers are as they were', async () => {
+  const mine = await file();
+  const [yours] = await layout(mine);
+  const snapshot = () => lua(`local mine = ...
+    return { shortmess = vim.o.shortmess, unnamed = vim.fn.getreg('"'), search = vim.fn.getreg('/'), cmd = vim.fn.histget(':', -1),
+      searches = vim.fn.histget('/', -1), tick = vim.api.nvim_buf_get_changedtick(vim.fn.bufnr(mine)), modified = vim.bo[vim.fn.bufnr(mine)].modified,
+      eventignore = vim.o.eventignore, winid = vim.api.nvim_get_current_win() }`, mine);
+  await lua('vim.fn.setreg(\'"\', "kept") vim.fn.setreg("/", "pattern") vim.fn.histadd(":", "echo 1") vim.fn.histadd("/", "pattern")');
+  const before = await snapshot();
+  const path = await file();
+  shown(await show({ path, line: 100, endLine: 104 }));
+  shown(await show({ path, line: 10 }));
+  shown(await show({ path: mine, line: 250 }));
+  assert.deepEqual(await snapshot(), { ...before, tick: before.tick });
+  assert.equal(await lua('return vim.api.nvim_buf_get_changedtick(vim.fn.bufnr(...))', path), await lua('return vim.api.nvim_buf_get_changedtick(vim.fn.bufnr(...))', path));
+  assert.equal(await lua('return vim.bo[vim.fn.bufnr(...)].modified', path), false);
+  assert.equal((await state(yours)).cursor[0], 250);
+});
+
+test('a file loaded only to find the lines past its end is not left loaded', async () => {
+  const path = await file(10);
+  await layout(await file());
+  await assert.rejects(show({ path, line: 20 }), /past the end/);
+  assert.equal(await lua('local buf = vim.fn.bufnr(...) return buf == -1 or not vim.api.nvim_buf_is_loaded(buf)', path), true);
+  // One you had loaded stays.
+  await lua('vim.fn.bufload(vim.fn.bufadd(...))', path);
+  await assert.rejects(show({ path, line: 20 }), /past the end/);
+  assert.equal(await lua('return vim.api.nvim_buf_is_loaded(vim.fn.bufnr(...))', path), true);
+});
+
+test('an unnamed buffer of yours with unsaved text is kept, and <C-o> goes back to it', async () => {
+  const [yours] = await layout(await file());
+  const scratch = await lua(`local win = ...
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, { 'notes' })
+    vim.api.nvim_win_set_buf(win, buf)
+    return buf`, yours);
+  shown(await show({ path: await file(), line: 10 }));
+  await inWin(yours, 'execute "normal! \\<C-o>"');
+  assert.equal(await lua('return vim.api.nvim_win_get_buf(...)', yours), scratch);
+  assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)', scratch), ['notes']);
+});
+
+// --- Files that cannot be shown ---------------------------------------------------------------
+
+test('a file that cannot be read is an error, not an empty buffer', async () => {
+  const path = await file(10);
+  await chmod(path, 0o000);
+  try {
+    await layout(await file());
+    await assert.rejects(show({ path, line: 1 }), /cannot read/);
+  } finally { await chmod(path, 0o644); }
+});
+
+test('a device or a pipe is not a file', async () => {
+  await layout(await file());
+  await assert.rejects(show({ path: '/dev/null', line: 1 }), /not a file/);
+});
+
+// --- More shapes ------------------------------------------------------------------------------
+
+test('folds by indent, nested, open over the lines; the rest stay closed', async () => {
+  const lines = ['top', ...Array.from({ length: 50 }, (_, i) => `  outer ${i}`), ...Array.from({ length: 50 }, (_, i) => `    inner ${i}`), 'bottom', '  other', '  other'];
+  const path = await file(lines);
+  const [yours] = await layout(path);
+  // Levels counted in shiftwidths: two spaces each here.
+  await lua('vim.api.nvim_win_call(..., function() vim.bo.shiftwidth = 2 vim.wo.foldmethod = "indent" vim.wo.foldlevel = 0 end)', yours);
+  shown(await show({ path, line: 80 }));
+  const closed = (line: number) => lua('local win, line = ... return vim.api.nvim_win_call(win, function() return vim.fn.foldclosed(line) end)', yours, line);
+  assert.deepEqual([await closed(80), await closed(20), await closed(lines.length)], [-1, -1, lines.length - 1]);
+  assert.notEqual(await drawn(yours), 0);
+});
+
+test('a context larger than the window is kept within it: the lines are on screen', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  shown(await show({ path, line: 150, endLine: 152, context: 1000 }));
+  const now = await state(yours);
+  assert.ok(now.top <= 150 && 152 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
 // --- Details ----------------------------------------------------------------------------------
 
 test('moving up and down from the place keeps its column', async () => {

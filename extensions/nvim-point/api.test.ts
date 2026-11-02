@@ -19,7 +19,7 @@ after(() => editor.close());
 const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('nvim_exec_lua', [code, args]);
 const remote = await attach(socket, { onError: () => {} });
 after(() => remote.close());
-const { show } = point(remote);
+const { show } = point(remote, '/nowhere');
 
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-point-')));
 after(() => rm(dir, { recursive: true, force: true }));
@@ -1016,7 +1016,7 @@ test('usePoint gives a pointer while Pi is attached, none before or after, a new
   const first = pointer();
   assert.ok(first);
   assert.equal(pointer(), first); // The same, while attached.
-  assert.equal(shown(await first.show({ path, line: 30 })).win, yours);
+  assert.equal(shown(await first.show({ path: path.slice(dir.length + 1), line: 30 })).win, yours); // From Pi's directory.
 
   // Another attachment: another pointer, its own module installed there.
   ready = new Promise(resolve => bus.once('nvim-remote:ready', resolve));
@@ -1058,6 +1058,27 @@ test('pointing again and again at the same place adds no windows, jumps or scrol
   assert.deepEqual([await jumps(yours), await state(yours), (await windows()).length], [jumpsBefore, stateBefore, 2]);
 });
 
+// --- Relative paths ---------------------------------------------------------------------------
+
+test('a relative path is from the directory given, else the process\'s', async () => {
+  const path = await file();
+  const [yours] = await layout(await file());
+  const name = path.slice(dir.length + 1);
+  shown(await point(remote, dir).show({ path: name, line: 7 }));
+  assert.equal((await state(yours)).path, path);
+  shown(await point(remote, join(dir, 'sub')).show({ path: `../${name}`, line: 8 }));
+  assert.deepEqual([(await state(yours)).path, (await state(yours)).cursor[0]], [path, 8]);
+  // Absolute paths are as they are, whatever the directory.
+  shown(await show({ path, line: 9 }));
+  assert.equal((await state(yours)).cursor[0], 9);
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    shown(await point(remote).show({ path: name, line: 10 }));
+    assert.equal((await state(yours)).cursor[0], 10);
+  } finally { process.chdir(cwd); }
+});
+
 // --- Errors -----------------------------------------------------------------------------------
 
 test('what cannot be shown is an error, and nothing moves', async () => {
@@ -1067,7 +1088,6 @@ test('what cannot be shown is an error, and nothing moves', async () => {
   const [yours, term] = await layout(await file());
   const before = await state(yours);
   for (const [place, message] of [
-    [{ path: 'relative.ts', line: 1 }, /absolute/],
     [{ path, line: 0 }, /line must be a whole number from 1/],
     [{ path, line: 1.5 }, /line must be a whole number from 1/],
     [{ path, line: 5, endLine: 4 }, /endLine must be a whole number from line/],

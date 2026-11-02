@@ -22,7 +22,7 @@ export default function (pi: ExtensionAPI) {
       if (!show) return ctx.ui.notify('Pi is not attached to Neovim', 'warning');
       try {
         const result = await show({
-          path: resolve(ctx.cwd, path),
+          path,
           line: Number(line),
           endLine: endLine ? Number(endLine) : undefined,
           col: col ? Number(col) - 1 : undefined,

@@ -24,7 +24,7 @@ import { usePoint } from '../nvim-point/api.ts';
 export default function (pi) {
   const point = usePoint(pi);
   pi.on('tool_result', async () => {
-    const shown = await point()?.show({ path: '/abs/src/app.ts', line: 120, endLine: 140 });
+    const shown = await point()?.show({ path: 'src/app.ts', line: 120, endLine: 140 });
     if (shown && !shown.shown) { /* You were typing (shown.busy): not now. */ }
   });
 }
@@ -34,7 +34,7 @@ export default function (pi) {
 
 | Place | |
 | --- | --- |
-| `path` | The file, absolute. |
+| `path` | The file: absolute, or relative to Pi's working directory, as Pi's tools give paths. |
 | `line`, `endLine` | 1-based; the lines to bring on screen together (`endLine` defaults to `line`). |
 | `col` | Where the cursor goes on `line`, in 0-based bytes, kept within the line and on a character's first byte; else its first non-blank, as `^` goes. |
 | `context` | Lines kept around them when it has to scroll. Default 3. |

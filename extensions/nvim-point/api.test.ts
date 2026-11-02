@@ -3,10 +3,13 @@ import { after, afterEach, test } from 'node:test';
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import registerRemote from '../nvim-remote/index.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launch } from '../nvim-service/service.mjs';
 import { attach, connect } from '../nvim-remote/remote.ts';
-import { point, type Pointed, type Shown } from './api.ts';
+import { point, usePoint, type Pointed, type Shown } from './api.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -927,6 +930,132 @@ test('with only Pi\'s terminal in this tab, a window opens here, not in the tab 
   const result = shown(await show({ path, line: 10 }));
   assert.equal(result.opened, true);
   assert.deepEqual([await lua('return vim.api.nvim_win_get_tabpage(...)', result.win), await lua('return vim.api.nvim_get_current_tabpage()')], [tab, tab]);
+});
+
+// --- Many calls -------------------------------------------------------------------------------
+
+/** Numbers from a seed, the same each run: xorshift32. */
+function random(seed: number) {
+  let x = seed;
+  return (n: number) => {
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    return (x >>> 0) % n;
+  };
+}
+
+test('200 calls over files, wraps and folds: each place on screen, nothing else moved', async () => {
+  const seed = 0x5eed1234, next = random(seed);
+  const paths = [
+    await file(400),
+    await file(Array.from({ length: 300 }, (_, i) => `${i + 1} ${'w'.repeat(i % 7 === 0 ? 150 : i % 5)}`)),
+    await file(Array.from({ length: 200 }, (_, i) => `${i % 9 === 0 ? '' : '  '.repeat(i % 4)}line ${i + 1}`)),
+  ];
+  const [yours, term] = await layout(paths[0]);
+  // Closed folds here and there, in the third file.
+  await lua(`local yours, path = ...
+    vim.api.nvim_win_call(yours, function() vim.cmd.edit(vim.fn.fnameescape(path)) vim.cmd('20,40fold | 100,150fold | 160,170fold') end)`, yours, paths[2]);
+  for (let step = 0; step < 200; step++) {
+    const path = paths[next(3)];
+    const count = await lua('local buf = vim.fn.bufnr(...) return buf ~= -1 and vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_line_count(buf) or 0', path)
+      || (path === paths[0] ? 400 : path === paths[1] ? 300 : 200);
+    const line = 1 + next(count), endLine = Math.min(count, line + next(4) * next(8)), context = next(6);
+    const where = `step ${step} (seed ${seed}): ${path.slice(dir.length + 1)}:${line}-${endLine} context ${context}`;
+    const before = await state(yours);
+    const wasOnScreen = before.path === path && before.top <= line && endLine <= before.bottom
+      && await lua('local win, a, b = ... return vim.api.nvim_win_call(win, function() for l = a, b do if vim.fn.foldclosed(l) ~= -1 then return false end end return true end)', yours, line, endLine);
+    const result = shown(await show({ path, line, endLine, context }));
+    const now = await state(yours);
+    assert.equal(result.win, yours, where);
+    assert.deepEqual([now.path, now.cursor[0]], [path, line], where);
+    assert.ok(now.top <= line && line <= now.bottom, `${where}: ${now.top}–${now.bottom}`);
+    if (wasOnScreen) assert.equal(result.scrolled, false, where);
+    assert.deepEqual([await current(), (await windows()).length, await mode()], [term, 2, 'nt'], where);
+  }
+});
+
+test('calls on a fresh attachment at once all install it, and all resolve', async () => {
+  const fresh = await attach(socket, { onError: () => {} });
+  try {
+    const [yours] = await layout(await file());
+    const path = await file();
+    const results = await Promise.all([10, 20, 30, 40, 50].map(line => point(fresh).show({ path, line })));
+    assert.deepEqual(results.map(r => shown(r).win), [yours, yours, yours, yours, yours]);
+    assert.equal((await state(yours)).cursor[0], 50);
+  } finally { fresh.close(); }
+});
+
+test('an aborted call rejects, and nothing moves', async () => {
+  const [yours] = await layout(await file());
+  const before = await state(yours);
+  const signal = AbortSignal.abort();
+  await assert.rejects(show({ path: await file(), line: 100 }, { signal }));
+  assert.deepEqual(await state(yours), before);
+});
+
+test('usePoint gives a pointer while Pi is attached, none before or after, a new one on reconnecting', async () => {
+  process.env.NVIM = socket;
+  delete process.env.PI_NVIM_REMOTE;
+  const bus = new EventEmitter(), hooks = new EventEmitter();
+  const commands: Record<string, { handler(args: string, ctx: object): Promise<void> }> = {};
+  const api = {
+    events: { on: (channel: string, handler: (data: unknown) => void) => bus.on(channel, handler), emit: (channel: string, data: unknown) => bus.emit(channel, data) },
+    on: (event: string, handler: () => void) => hooks.on(event, handler),
+    registerCommand: (name: string, command: { handler(args: string, ctx: object): Promise<void> }) => { commands[name] = command; },
+  } as unknown as ExtensionAPI;
+  const ctx = { cwd: dir, hasUI: false, ui: { setStatus() {}, notify() {} } };
+  const fire = (event: string) => Promise.all(hooks.listeners(event).map(handler => handler({}, ctx)));
+  const pointer = usePoint(api);
+  assert.equal(pointer(), undefined);
+  registerRemote(api);
+  const [yours] = await layout(await file());
+  const path = await file();
+
+  let ready = new Promise(resolve => bus.once('nvim-remote:ready', resolve));
+  await fire('session_start');
+  await ready;
+  const first = pointer();
+  assert.ok(first);
+  assert.equal(pointer(), first); // The same, while attached.
+  assert.equal(shown(await first.show({ path, line: 30 })).win, yours);
+
+  // Another attachment: another pointer, its own module installed there.
+  ready = new Promise(resolve => bus.once('nvim-remote:ready', resolve));
+  await commands['nvim-remote'].handler('reconnect', ctx);
+  await ready;
+  const second = pointer();
+  assert.ok(second && second !== first);
+  assert.equal(shown(await second.show({ path, line: 60 })).win, yours);
+  assert.equal((await state(yours)).cursor[0], 60);
+
+  await fire('session_shutdown');
+  assert.equal(pointer(), undefined);
+});
+
+// --- Odd names and buffers --------------------------------------------------------------------
+
+test('a file named with a newline is shown, or refused, but never mistaken for another', async () => {
+  const path = await file(20, 'two\nlines.ts');
+  const [yours] = await layout(await file());
+  const result = await show({ path, line: 3 }).catch((error: Error) => error);
+  if (result instanceof Error) assert.doesNotMatch(result.message, /past the end/);
+  else assert.equal((await state(yours)).path, path);
+});
+
+test('a buffer you added but did not load stays in your list, unloaded, if its lines are past the end', async () => {
+  const path = await file(10);
+  await layout(await file());
+  const buf = await lua('vim.cmd.badd(vim.fn.fnameescape(...)) return vim.fn.bufnr(...)', path);
+  await assert.rejects(show({ path, line: 20 }), /past the end/);
+  assert.deepEqual(await lua('local buf = ... return { vim.api.nvim_buf_is_valid(buf), vim.api.nvim_buf_is_loaded(buf), vim.bo[buf].buflisted }', buf), [true, false, true]);
+});
+
+test('pointing again and again at the same place adds no windows, jumps or scrolling', async () => {
+  const path = await file();
+  const [yours] = await layout(await file());
+  shown(await show({ path, line: 150, endLine: 155 }));
+  const jumpsBefore = await jumps(yours), stateBefore = await state(yours);
+  for (let i = 0; i < 10; i++) assert.equal(shown(await show({ path, line: 150, endLine: 155 })).scrolled, false);
+  assert.deepEqual([await jumps(yours), await state(yours), (await windows()).length], [jumpsBefore, stateBefore, 2]);
 });
 
 // --- Errors -----------------------------------------------------------------------------------

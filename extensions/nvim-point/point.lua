@@ -8,30 +8,35 @@ end
 local point = {}
 remote.nvim_point = point
 
--- The buffer of the file at `path`: loaded, as the user's own would be.
+-- The buffer of the file at `path`: loaded, as the user's own would be. And what was done for
+-- it, to undo if it is not shown after all: "added", "loaded", or nothing.
 local function buffer(path)
 	local stat = vim.uv.fs_stat(path)
-	if vim.fn.bufexists(path) == 0 and not stat then
+	local existed = vim.fn.bufexists(path) == 1
+	if not existed and not stat then
 		error(("no such file: %s"):format(path), 0)
 	elseif stat and stat.type ~= "file" then
 		error(("not a file: %s"):format(path), 0)
+	elseif stat and not vim.uv.fs_access(path, "R") then
+		error(("cannot read: %s"):format(path), 0)
 	end
 	local buf = vim.fn.bufadd(path)
 	if vim.bo[buf].buftype ~= "" then
 		error(("not a file: %s"):format(path), 0)
 	end
-	if not vim.api.nvim_buf_is_loaded(buf) then
-		-- An existing swap file would otherwise stop the editor at a prompt.
-		local shortmess = vim.o.shortmess
-		vim.opt.shortmess:append("A")
-		local ok, err = pcall(vim.fn.bufload, buf)
-		vim.o.shortmess = shortmess
-		-- An error from the user's autocommands once it is loaded is no failure.
-		if not ok and not vim.api.nvim_buf_is_loaded(buf) then
-			error(err, 0)
-		end
+	if vim.api.nvim_buf_is_loaded(buf) then
+		return buf
 	end
-	return buf
+	-- An existing swap file would otherwise stop the editor at a prompt.
+	local shortmess = vim.o.shortmess
+	vim.opt.shortmess:append("A")
+	local ok, err = pcall(vim.fn.bufload, buf)
+	vim.o.shortmess = shortmess
+	-- An error from the user's autocommands once it is loaded is no failure.
+	if not ok and not vim.api.nvim_buf_is_loaded(buf) then
+		error(err, 0)
+	end
+	return buf, existed and "loaded" or "added"
 end
 
 local function shows_file(win)
@@ -123,10 +128,14 @@ function point.show(spec)
 	elseif vim.fn.getcmdwintype() ~= "" then
 		return { busy = "cmdwin" } -- In q:, no other window can change.
 	end
-	local buf = buffer(spec.path)
+	local buf, done = buffer(spec.path)
 	local count = vim.api.nvim_buf_line_count(buf)
 	local last = spec.endLine or spec.line
 	if last > count then
+		-- Not left loaded (a swap file and all) for a file the user did not open.
+		if done then
+			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
+		end
 		error(("line %d is past the end of %s, at %d"):format(last, spec.path, count), 0)
 	end
 

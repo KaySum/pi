@@ -58,8 +58,8 @@ It resolves to `{ win, buf, opened, scrolled }`: `opened` if a window was opened
 `scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command,
 in the command-line window, at a prompt), it changes nothing and resolves to `{ busy }`, the
 mode you are in (`i`, `v`, `c`…): whether to try again is for the extension to decide. A path
-that is not a file (missing, a directory, a buffer of another kind), or lines past its end,
-reject.
+that is not a file (missing, unreadable, a directory or device, a buffer of another kind), or
+lines past its end, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is

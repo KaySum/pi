@@ -304,6 +304,41 @@ test('lines too tall for the window start from the top, after their context', as
   assert.equal((await state(yours)).top, 22);
 });
 
+test('scroll: top brings the lines to the top, after their context', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  shown(await show({ path, line: 200, endLine: 202 }, { scroll: 'top' }));
+  assert.equal((await state(yours)).top, 197);
+  shown(await show({ path, line: 50 }, { scroll: 'top' }));
+  assert.equal((await state(yours)).top, 47);
+});
+
+test('scroll: minimal moves the screen least: just past the edge the lines were off', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  const { bottom, height } = await state(yours);
+  // Below: their last line and its context at the bottom.
+  assert.equal(shown(await show({ path, line: 100, endLine: 102 }, { scroll: 'minimal' })).scrolled, true);
+  assert.equal((await state(yours)).bottom, 105);
+  // Above: their first line after its context at the top.
+  shown(await show({ path, line: 60 }, { scroll: 'minimal' }));
+  assert.equal((await state(yours)).top, 57);
+  // Partly on screen, below: as far as needed.
+  const now = await state(yours);
+  shown(await show({ path, line: now.bottom - 1, endLine: now.bottom + 1 }, { scroll: 'minimal' }));
+  assert.equal((await state(yours)).bottom, now.bottom + 4);
+  // On screen: still, as ever.
+  assert.equal(shown(await show({ path, line: now.bottom }, { scroll: 'minimal' })).scrolled, false);
+  // Too tall for the window: from their start.
+  shown(await show({ path, line: 200, endLine: 200 + height + 5 }, { scroll: 'minimal' }));
+  assert.equal((await state(yours)).top, 197);
+  assert.ok(bottom < 100);
+});
+
+test('scroll is center, top or minimal', async () => {
+  await assert.rejects(show({ path: await file(), line: 1 }, { scroll: 'middle' as never }), /scroll is center, top or minimal/);
+});
+
 test('context counts in centering: more context, lines that no longer fit start from the top', async () => {
   const path = await file();
   const [yours] = await layout(path);

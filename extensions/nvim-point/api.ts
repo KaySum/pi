@@ -57,6 +57,12 @@ export type ShowOptions = CallOptions & {
    * following Pi around should, not filling them with Pi's places. Default true: <C-o> goes back.
    */
   jump?: boolean;
+  /**
+   * When the lines are not on screen, where to bring them: `center` (the default), at the `top`,
+   * or `minimal`ly, just past the edge they were off, moving the screen least. Too tall for the
+   * window, from their start whatever this is.
+   */
+  scroll?: 'center' | 'top' | 'minimal';
 };
 
 export type Point = {
@@ -103,9 +109,13 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
   }
   let latest = 0;
   return {
-    async show(place, { wait = 0, jump, ...options } = {}) {
+    async show(place, { wait = 0, jump, scroll, ...options } = {}) {
       const spec = check(place, cwd);
       if (jump === false) spec.jump = false;
+      if (scroll !== undefined) {
+        if (!['center', 'top', 'minimal'].includes(scroll)) throw new Error(`scroll is center, top or minimal: ${scroll}`);
+        spec.scroll = scroll;
+      }
       if (!(wait >= 0)) throw new Error(`wait must be milliseconds from 0: ${wait}`);
       const ticket = ++latest, until = Date.now() + wait;
       for (;;) {

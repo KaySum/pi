@@ -80,12 +80,20 @@ local function top_for(win, line, rows)
 end
 
 -- Scroll, in the current window, so that `first`–`last` are on screen with `context` lines
--- around them: centered if they fit, else from the top.
-local function reveal(win, first, last, context)
+-- around them: as `how` says, "center", "top", or "minimal": just past the edge they were off,
+-- the bottom one if `below` it. Too tall for the window, from their start.
+local function reveal(win, first, last, context, how, below)
 	local height = vim.api.nvim_win_get_height(win)
 	context = math.min(context, math.floor((height - 1) / 2)) -- Leaving room for the lines.
 	local rows = vim.api.nvim_win_text_height(win, { start_row = first - 1, end_row = last - 1 }).all
-	local above = rows + 2 * context <= height and math.floor((height - rows) / 2) or context
+	local above = context
+	if rows + 2 * context <= height then
+		if how == "center" then
+			above = math.floor((height - rows) / 2)
+		elseif how == "minimal" and below then
+			above = height - rows - context
+		end
+	end
 	vim.fn.winrestview({ topline = top_for(win, first, above), topfill = 0, skipcol = 0 })
 end
 
@@ -234,7 +242,8 @@ function point.show(spec)
 		local before = vim.fn.winsaveview()
 		vim.cmd(("silent! %d,%dfoldopen!"):format(line, last))
 		-- On screen already, it is left where it is: the user knows where to look.
-		local visible = vim.fn.line("w0") <= line and last <= vim.fn.line("w$")
+		local top, bottom = vim.fn.line("w0"), vim.fn.line("w$")
+		local visible = top <= line and last <= bottom
 		-- As `^` would: the first non-blank, or the last character of a line of blanks.
 		local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
 		local at = math.max(math.min(col or (text:find("%S") or #text) - 1, #text - 1), 0)
@@ -243,7 +252,7 @@ function point.show(spec)
 		end
 		vim.api.nvim_win_set_cursor(win, { line, at })
 		if not visible then
-			reveal(win, line, last, spec.context or 3)
+			reveal(win, line, last, spec.context or 3, spec.scroll or "center", last > bottom)
 		end
 		local after = vim.fn.winsaveview()
 		return {

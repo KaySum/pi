@@ -89,6 +89,42 @@ local function reveal(win, first, last, context)
 	vim.fn.winrestview({ topline = top_for(win, first, above), topfill = 0, skipcol = 0 })
 end
 
+-- Where `match` is in `buf`: its lines, the space around them aside, each within one of the
+-- buffer's, in order; the occurrence nearest `near`, the earlier on a tie. Its first line, its
+-- last, and the byte column its text starts at; nil and why if it is not there.
+local function find(buf, match, near)
+	local needles = vim.tbl_map(vim.trim, vim.split(match, "\n", { plain = true }))
+	while needles[#needles] == "" do
+		table.remove(needles)
+	end
+	while needles[1] == "" do
+		table.remove(needles, 1)
+	end
+	if #needles == 0 then
+		return nil, "match is only space"
+	end
+	local lines, best = vim.api.nvim_buf_get_lines(buf, 0, -1, true), nil
+	for i = 1, #lines - #needles + 1 do
+		local start = lines[i]:find(needles[1], 1, true)
+		local whole = start ~= nil
+		for j = 2, whole and #needles or 0 do
+			whole = lines[i + j - 1]:find(needles[j], 1, true) ~= nil
+			if not whole then
+				break
+			end
+		end
+		if whole then
+			if not best or math.abs(i - near) < math.abs(best[1] - near) then
+				best = { i, i + #needles - 1, start - 1 }
+			end
+			if i >= near then
+				break -- Any later is further.
+			end
+		end
+	end
+	return best
+end
+
 -- Show `buf` in `win`. Entering a buffer whose file changed on disk, Neovim asks what to do at a
 -- prompt, which would hold this call until the user answers: unless they handle it themselves
 -- (FileChangedShell), it is reloaded as 'autoread' would, else left, and they are told after.
@@ -119,8 +155,9 @@ local function enter(win, buf)
 end
 
 --- Show `spec.path` at `spec.line` (to `spec.endLine`), the cursor at `spec.col` (0-based bytes;
---- else the line's first non-blank). Not while the user is busy: then `{ shown = false, busy = mode }`. (At a
---- prompt this does not run: nvim-remote fails the call first.)
+--- else the line's first non-blank); or where `spec.match` is, nearest `spec.line`. Not while
+--- the user is busy: then `{ shown = false, busy = mode }`. (At a prompt this does not run:
+--- nvim-remote fails the call first.)
 function point.show(spec)
 	local mode = vim.api.nvim_get_mode().mode
 	if not (mode == "n" or mode == "nt" or mode == "t") then
@@ -129,14 +166,24 @@ function point.show(spec)
 		return { shown = false, busy = "cmdwin" } -- In q:, no other window can change.
 	end
 	local buf, done = buffer(spec.path)
-	local count = vim.api.nvim_buf_line_count(buf)
-	local last = spec.endLine or spec.line
-	if last > count then
-		-- Not left loaded (a swap file and all) for a file the user did not open.
+	-- Not left loaded (a swap file and all) for a file the user did not open.
+	local function fail(message)
 		if done then
 			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
 		end
-		error(("line %d is past the end of %s, at %d"):format(last, spec.path, count), 0)
+		error(message, 0)
+	end
+	local line, last, col = spec.line, spec.endLine or spec.line, spec.col
+	if spec.match then
+		local found, err = find(buf, spec.match, spec.line or 1)
+		if not found then
+			fail(err or ("not found in %s: %s"):format(spec.path, spec.match))
+		end
+		line, last, col = unpack(found)
+	end
+	local count = vim.api.nvim_buf_line_count(buf)
+	if last > count then
+		fail(("line %d is past the end of %s, at %d"):format(last, spec.path, count))
 	end
 
 	local win, opened = window(buf), false
@@ -166,25 +213,25 @@ function point.show(spec)
 		vim.api.nvim_win_call(win, function()
 			vim.cmd("clearjumps")
 		end)
-	elseif vim.api.nvim_win_get_cursor(win)[1] ~= spec.line then
+	elseif vim.api.nvim_win_get_cursor(win)[1] ~= line then
 		jump()
 	end
 	vim.bo[buf].buflisted = true
 
 	return vim.api.nvim_win_call(win, function()
 		local before = vim.fn.winsaveview()
-		vim.cmd(("silent! %d,%dfoldopen!"):format(spec.line, last))
+		vim.cmd(("silent! %d,%dfoldopen!"):format(line, last))
 		-- On screen already, it is left where it is: the user knows where to look.
-		local visible = vim.fn.line("w0") <= spec.line and last <= vim.fn.line("w$")
+		local visible = vim.fn.line("w0") <= line and last <= vim.fn.line("w$")
 		-- As `^` would: the first non-blank, or the last character of a line of blanks.
-		local text = vim.api.nvim_buf_get_lines(buf, spec.line - 1, spec.line, true)[1]
-		local col = math.max(math.min(spec.col or (text:find("%S") or #text) - 1, #text - 1), 0)
-		if col > 0 then
-			col = col + vim.str_utf_start(text, col + 1) -- A character's first byte.
+		local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
+		local at = math.max(math.min(col or (text:find("%S") or #text) - 1, #text - 1), 0)
+		if at > 0 then
+			at = at + vim.str_utf_start(text, at + 1) -- A character's first byte.
 		end
-		vim.api.nvim_win_set_cursor(win, { spec.line, col })
+		vim.api.nvim_win_set_cursor(win, { line, at })
 		if not visible then
-			reveal(win, spec.line, last, spec.context or 3)
+			reveal(win, line, last, spec.context or 3)
 		end
 		local after = vim.fn.winsaveview()
 		return {

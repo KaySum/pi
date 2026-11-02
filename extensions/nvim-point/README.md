@@ -24,7 +24,7 @@ import { usePoint } from '../nvim-point/api.ts';
 export default function (pi) {
   const point = usePoint(pi);
   pi.on('tool_result', async () => {
-    const shown = await point()?.show({ path: 'src/app.ts', line: 120, endLine: 140 });
+    const shown = await point()?.show({ path: 'src/app.ts', match: 'async function retry(' });
     if (shown && !shown.shown) { /* You were typing (shown.busy): not now. */ }
   });
 }
@@ -36,6 +36,7 @@ export default function (pi) {
 | --- | --- |
 | `path` | The file: absolute, or relative to Pi's working directory, as Pi's tools give paths. |
 | `line`, `endLine` | 1-based; the lines to bring on screen together (`endLine` defaults to `line`). |
+| `match` | Or the code, rather than its lines, which move as the file changes: each of its lines within one of the file's, in order, the space around them aside. Its lines are brought on screen, the cursor where it starts. Of several, the one nearest `line` wins, the earlier on a tie; else the first. Not with `endLine` or `col`, which it gives. |
 | `col` | Where the cursor goes on `line`, in 0-based bytes, kept within the line and on a character's first byte; else its first non-blank, as `^` goes. |
 | `context` | Lines kept around them when it has to scroll. Default 3. |
 
@@ -59,7 +60,7 @@ for it, `scrolled` if the window scrolled. While you are busy (inserting, select
 command, in the command-line window, at a prompt), it changes nothing and resolves to `{
 shown: false, busy }`, the mode you are in (`i`, `v`, `c`…): whether to try again is for the
 extension to decide. A path that is not a file (missing, unreadable, a directory or device, a
-buffer of another kind), or lines past its end, reject.
+buffer of another kind), lines past its end, or a `match` not there, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is

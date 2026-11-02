@@ -8,16 +8,32 @@ const MODULE = readFileSync(new URL('./point.lua', import.meta.url), 'utf8');
 const SHOW = `if not remote.nvim_point then return 'not installed' end
 return remote.nvim_point.show(...)`;
 
-export type Place = {
+type Where = {
   /** The file: absolute, or from Pi's working directory, as Pi's tools give them. */
   path: string;
+  /** Lines kept around them when it has to scroll. Default 3. */
+  context?: number;
+};
+/** A place by its lines. */
+type At = Where & {
   /** 1-based; `endLine` (default `line`) ends the lines to bring on screen together. */
   line: number; endLine?: number;
   /** Where the cursor goes on `line`, in 0-based bytes, within the line, on a character's first byte; else its first non-blank. */
   col?: number;
-  /** Lines kept around them when it has to scroll. Default 3. */
-  context?: number;
+  match?: never;
 };
+/** A place by its code, which moves as the file changes, where line numbers do not. */
+type Of = Where & {
+  /**
+   * The code: each of its lines within one of the file's, in order, the space around them
+   * aside. Its lines are brought on screen, the cursor where it starts.
+   */
+  match: string;
+  /** The occurrence nearest this line wins, the earlier on a tie; else the first. */
+  line?: number;
+  endLine?: never; col?: never;
+};
+export type Place = At | Of;
 
 /**
  * `shown` in `win`: `opened` if a window was opened for it (none showed a file, or the user's
@@ -40,7 +56,11 @@ export type Point = {
 type Lua = Pick<Remote, 'lua'>;
 
 function check(place: Place, cwd: string) {
-  const { line, endLine = line, col = 0, context = 0 } = place;
+  const { match, line = 1, endLine = line, col = 0, context = 0 } = place;
+  if (match !== undefined) {
+    if (typeof match !== 'string' || !match.trim()) throw new Error('match must be some code to find');
+    if (place.endLine !== undefined || place.col !== undefined) throw new Error('With match, its lines and column are where it is: no endLine or col');
+  } else if (place.line === undefined) throw new Error('A place needs a line or a match');
   if (!Number.isInteger(line) || line < 1) throw new Error(`line must be a whole number from 1: ${line}`);
   if (!Number.isInteger(endLine) || endLine < line) throw new Error(`endLine must be a whole number from line: ${endLine}`);
   if (!Number.isInteger(col) || col < 0) throw new Error(`col must be a whole number from 0: ${col}`);

@@ -1058,6 +1058,66 @@ test('pointing again and again at the same place adds no windows, jumps or scrol
   assert.deepEqual([await jumps(yours), await state(yours), (await windows()).length], [jumpsBefore, stateBefore, 2]);
 });
 
+// --- By its code ------------------------------------------------------------------------------
+
+test('a match is found: the cursor where its code starts, its lines on screen', async () => {
+  const path = await file([...Array.from({ length: 150 }, (_, i) => `line ${i + 1}`), '  async function retry(times) {', '    return times;', '  }', ...Array.from({ length: 100 }, (_, i) => `after ${i}`)]);
+  const [yours] = await layout(await file());
+  shown(await show({ path, match: 'function retry(' }));
+  assert.deepEqual((await state(yours)).cursor, [151, 8]);
+  // Several lines, the space around each aside: all of them brought on, from where the first starts.
+  shown(await show({ path, match: 'async function retry(times) {\n      return times;\n}' }));
+  const now = await state(yours);
+  assert.deepEqual(now.cursor, [151, 2]);
+  assert.ok(now.top <= 151 && 153 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+test('of several, the one nearest the line given wins, the earlier on a tie; else the first', async () => {
+  const path = await file(Array.from({ length: 100 }, (_, i) => (i + 1) % 20 === 0 ? 'target();' : `line ${i + 1}`));
+  const [yours] = await layout(await file());
+  const at = async (place: { line?: number }) => {
+    shown(await show({ path, match: 'target()', ...place }));
+    return (await state(yours)).cursor[0];
+  };
+  assert.deepEqual([await at({}), await at({ line: 1 }), await at({ line: 58 }), await at({ line: 62 }), await at({ line: 50 }), await at({ line: 99 })], [20, 20, 60, 60, 40, 100]);
+});
+
+test('a match spanning lines must have them in order, one after another', async () => {
+  const path = await file(['a();', 'x();', 'b();', 'a();', 'b();']);
+  const [yours] = await layout(await file());
+  shown(await show({ path, match: 'a();\nb();' }));
+  assert.equal((await state(yours)).cursor[0], 4);
+});
+
+test('a match in other scripts puts the cursor on its first byte', async () => {
+  const path = await file(['const s = "café ☕";', '// über naïve']);
+  const [yours] = await layout(await file());
+  shown(await show({ path, match: '☕' }));
+  assert.deepEqual((await state(yours)).cursor, [1, 17]); // After é's two bytes.
+  shown(await show({ path, match: 'naïve' }));
+  assert.deepEqual((await state(yours)).cursor, [2, 9]);
+});
+
+test('a match not there, or only space, is an error; a file loaded for it is not left loaded', async () => {
+  const path = await file(20);
+  await layout(await file());
+  await assert.rejects(show({ path, match: 'nowhere()' }), /not found in .*: nowhere\(\)/);
+  assert.equal(await lua('local buf = vim.fn.bufnr(...) return buf == -1 or not vim.api.nvim_buf_is_loaded(buf)', path), true);
+  await assert.rejects(show({ path, match: '  \n  ' }), /match must be some code/);
+  await assert.rejects(show({ path, match: 'line 3', col: 2 } as never), /no endLine or col/);
+  await assert.rejects(show({ path, match: 'line 3', endLine: 5 } as never), /no endLine or col/);
+  await assert.rejects(show({ path } as never), /needs a line or a match/);
+});
+
+test('a match in a file of 100,000 lines is found promptly', async () => {
+  const path = await file([...Array.from({ length: 99_990 }, (_, i) => `line ${i + 1}`), 'needle()', ...Array.from({ length: 9 }, () => 'x')]);
+  const [yours] = await layout(path);
+  const start = performance.now();
+  shown(await show({ path, match: 'needle()' }));
+  assert.ok(performance.now() - start < 200, `${performance.now() - start} ms`);
+  assert.equal((await state(yours)).cursor[0], 99_991);
+});
+
 // --- Relative paths ---------------------------------------------------------------------------
 
 test('a relative path is from the directory given, else the process\'s', async () => {

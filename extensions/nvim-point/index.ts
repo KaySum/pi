@@ -28,8 +28,10 @@ const OPTION = /\s+(\w+)=("(?:[^"\\]|\\.)*"|\S*)/y;
 const OPTIONS_START = /(?:^|\s)\w+=/;
 
 function value(key: string, raw: string): unknown {
-  const text = raw.startsWith('"') ? JSON.parse(raw) as string : raw;
-  const result = key === 'match' ? text
+  let text: string | undefined = raw;
+  if (raw.startsWith('"')) try { text = JSON.parse(raw) as string; } catch { text = undefined; }
+  const result = text === undefined ? undefined
+    : key === 'match' ? text
     : CHOICES[key]?.includes(text) ? (key === 'scroll' ? text : text === 'true')
     : NUMBERS.includes(key) && text !== '' && !Number.isNaN(Number(text)) ? Number(text)
     : undefined;

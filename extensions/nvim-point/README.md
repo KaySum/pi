@@ -43,8 +43,9 @@ export default function (pi) {
 
 In a window of the current tab showing the file already, else yours: the one you are in unless
 it is Pi's terminal (or another like it), else the one you came from, else any showing a file.
-With none, one opens beside Pi's terminal, its jumplist empty. If yours has unsaved changes
-Neovim cannot hide (`'hidden'` off), the file opens in a split above it rather than lose them.
+With none, one opens beside Pi's terminal (beneath it, if it floats), its jumplist empty. If
+yours has unsaved changes Neovim cannot hide (`'hidden'` off), the file opens in a split above
+it rather than lose them.
 
 ### How
 

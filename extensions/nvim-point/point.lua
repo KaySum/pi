@@ -108,7 +108,14 @@ function point.show(spec)
 			win, opened = vim.api.nvim_open_win(buf, false, { split = "above", win = win }), true
 		end
 	elseif not win then
-		win, opened = vim.api.nvim_open_win(buf, false, { split = "left", win = vim.api.nvim_get_current_win() }), true
+		-- Beside the window you are in, or if it floats (as some put Pi's terminal), one beneath.
+		local beside = vim.api.nvim_get_current_win()
+		if vim.api.nvim_win_get_config(beside).relative ~= "" then
+			beside = vim.iter(vim.api.nvim_tabpage_list_wins(0)):find(function(other)
+				return vim.api.nvim_win_get_config(other).relative == ""
+			end)
+		end
+		win, opened = vim.api.nvim_open_win(buf, false, { split = "left", win = beside }), true
 		-- Not the jumps of the window it split, Pi's terminal or another like it.
 		vim.api.nvim_win_call(win, function()
 			vim.cmd("clearjumps")

@@ -42,7 +42,11 @@ export type Window = {
    * start, and the first only its end, past `skipcol`. How far it is scrolled sideways.
    */
   topline: number; botline: number; leftcol: number; skipcol: number;
-  /** How many rows are taken: by text, virtual lines, or `@` where a line does not fit; the rest are empty. */
+  /**
+   * How many rows are taken: by text, virtual lines, or `@` where a line does not fit; the rest
+   * are empty. With 'cpoptions' n, a 'statuscolumn' beside sign or fold columns, and the top line
+   * smooth-scrolled partway, its rows can be miscounted, as Neovim measures them: so can `shown`.
+   */
   rows: number;
   /** The lines on screen, top to bottom; a closed fold is one, its first line. */
   shown: ShownLine[];

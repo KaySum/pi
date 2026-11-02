@@ -20,7 +20,7 @@ const ORDER: Record<string, string[]> = Object.fromEntries(Object.entries({
   pi: 'buf windows',
   tab: 'id number focused',
   layout: 'split children win',
-  window: 'id number buf kind focused previous pi row col width height textWidth textOff topline botline leftcol skipcol rows shown cursor screenCursor cwd float options',
+  window: 'id number buf kind focused previous pi row col width height winbar textWidth textOff topline botline leftcol skipcol rows shown cursor screenCursor cwd float options',
   line: 'line row rows fold',
   float: 'relative zindex focusable border',
   buffer: 'id name filetype buftype listed loaded modified readonly modifiable lines bytes changedtick windows lsp pi',

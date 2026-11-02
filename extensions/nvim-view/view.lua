@@ -67,8 +67,10 @@ local function shown(win, info, buf, view)
 	if botline < count and vim.o.display ~= "" and vim.fn.screenpos(win, botline + 1, 1).row ~= 0 then
 		botline = botline + 1
 	end
-	-- Filler above the top line is measured apart: only the part scrolled into view shows.
-	local lines, line, top, bottom = {}, info.topline, info.winrow + view.topfill, info.winrow + info.height
+	-- Text starts below the winbar, if there is one. Filler above the top line is measured apart:
+	-- only the part scrolled into view shows.
+	local origin = info.winrow + info.winbar
+	local lines, line, top, bottom = {}, info.topline, origin + view.topfill, origin + info.height
 	vim.api.nvim_win_call(win, function()
 		while line <= botline and top < bottom do
 			local fold = vim.fn.foldclosedend(line)
@@ -127,6 +129,7 @@ end
 local function screen_cursor(win, info, cursor, view, lines)
 	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	local inner, off, wrap = info.width, info.textoff, vim.wo[win].wrap
+	local origin = info.winrow + info.winbar -- The first row of text, below any winbar.
 	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - info.wincol < inner or not wrap) then
 		return { screen.row, screen.curscol }
 	end
@@ -178,10 +181,10 @@ local function screen_cursor(win, info, cursor, view, lines)
 		end
 		row = line.row - (line.line == info.topline and wrap and place(view.skipcol) or 0)
 		-- In the part smoothscroll hides, which inserting does not scroll back: drawn on top.
-		rows = math.max(rows, info.winrow - row)
+		rows = math.max(rows, origin - row)
 	end
 	-- Rows after the first start in the number column with 'cpoptions' n.
-	if col < off - (rows > 0 and reclaimed or 0) or col >= inner or rows + row < info.winrow or rows + row >= info.winrow + info.height then
+	if col < off - (rows > 0 and reclaimed or 0) or col >= inner or rows + row < origin or rows + row >= origin + info.height then
 		return nil
 	end
 	return { row + rows, info.wincol + col }
@@ -207,6 +210,7 @@ local function window(win, current, previous, cwd)
 		previous = win == previous or nil,
 		pi = buf == remote.terminal or nil,
 		row = info.winrow,
+		winbar = info.winbar == 1 or nil,
 		col = info.wincol,
 		width = info.width,
 		height = info.height,

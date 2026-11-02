@@ -33,8 +33,12 @@ export type Window = {
   previous?: true;
   /** Shows Pi's own terminal. */
   pi?: true;
-  /** Where its top left is on the screen, 1-based; and its size in cells. */
+  /**
+   * Where its top left is on the screen, 1-based; and its size in cells. With a `winbar`, its
+   * first row is the bar's, and `height` the rows of text below it.
+   */
   row: number; col: number; width: number; height: number;
+  winbar?: true;
   /** The width left for text, and what the number, sign and fold columns take before it. */
   textWidth: number; textOff: number;
   /**
@@ -43,8 +47,8 @@ export type Window = {
    */
   topline: number; botline: number; leftcol: number; skipcol: number;
   /**
-   * How many rows are taken: by text, virtual lines, or `@` where a line does not fit; the rest
-   * are empty. With 'cpoptions' n, a 'statuscolumn' beside sign or fold columns, and the top line
+   * How many of its `height` rows of text are taken, a winbar aside: by text, virtual lines, or
+   * `@` where a line does not fit; the rest are empty. With 'cpoptions' n, a 'statuscolumn' beside sign or fold columns, and the top line
    * smooth-scrolled partway, its rows can be miscounted, as Neovim measures them: so can `shown`.
    */
   rows: number;

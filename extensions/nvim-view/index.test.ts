@@ -423,6 +423,22 @@ test('scrolled sideways past the start of its lines, a line still starts below t
   }
 });
 
+test('with a winbar, text starts below it: in the lines shown, the rows, and the cursor', async () => {
+  const { changes, shutdown } = await pi();
+  try {
+    const win = await lua(`vim.api.nvim_buf_set_lines(0, 0, -1, true, { 'a', 'b', 'c' })
+      vim.wo.winbar = 'bar'
+      return vim.api.nvim_get_current_win()`);
+    const w = await eventually(() => windowOf(changes.at(-1), win)?.winbar && windowOf(changes.at(-1), win)!);
+    assert.deepEqual([w.row, w.shown.map(s => s.row), w.rows, w.screenCursor], [1, [2, 3, 4], 3, [2, 1]]);
+    assert.equal(lineAtRow(w, 1), undefined); // The bar's row.
+    assert.equal(w.height, 21); // 24 lines, less the bar, the status line and the command line.
+  } finally {
+    await lua('vim.wo.winbar = ""');
+    await shutdown();
+  }
+});
+
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
   const { api, view, shutdown } = await pi();
   try {

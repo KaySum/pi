@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -19,7 +19,11 @@ const lua = (code: string, ...args: unknown[]): Promise<any> => editor.request('
 const dir = await realpath(await mkdtemp(join(tmpdir(), 'nvim-point-')));
 after(() => rm(dir, { recursive: true, force: true }));
 
-type Command = { description: string; handler(args: string, ctx: object): Promise<void> };
+type Command = {
+  description: string;
+  handler(args: string, ctx: object): Promise<void>;
+  getArgumentCompletions(prefix: string): Promise<{ value: string; label: string }[] | null>;
+};
 
 /** Pi with nvim-remote (unless `!remote`) and nvim-point loaded, its session started. */
 async function pi({ remote = true } = {}) {
@@ -153,4 +157,22 @@ test('what is not a line of a file says why', async () => {
   assert.deepEqual(await run('there.ts:5:0'), ['Columns count from 1: 0', 'warning']);
   assert.deepEqual(await run('there.ts:301'), [`line 301 is past the end of ${join(dir, 'there.ts')}, at 300`, 'warning']);
   assert.deepEqual(await run('missing.ts:1'), [`no such file: ${join(dir, 'missing.ts')}`, 'warning']);
+});
+
+test('paths complete as you type: directories go on with "/", files take ":" for their line', async () => {
+  const p = await attached();
+  const complete = (prefix: string) => p.commands['nvim-point'].getArgumentCompletions(prefix);
+  await mkdir(join(dir, 'src', 'deep'), { recursive: true });
+  for (const name of ['src/app.ts', 'src/api.ts', 'src/.hidden.ts', 'src/deep/x.ts', 'readme.md']) await writeFile(join(dir, name), 'x\n');
+  const values = async (prefix: string) => (await complete(prefix))?.map(item => item.value) ?? null;
+  assert.deepEqual(await values('sr'), ['src/']);
+  assert.deepEqual(await values('src/'), ['src/deep/', 'src/api.ts:', 'src/app.ts:']); // Directories first.
+  assert.deepEqual(await values('src/ap'), ['src/api.ts:', 'src/app.ts:']);
+  assert.deepEqual((await complete('src/ap'))!.map(item => item.label), ['api.ts', 'app.ts']);
+  assert.deepEqual(await values('src/.'), ['src/.hidden.ts:']); // Hidden once a "." is typed.
+  assert.deepEqual(await values(`${dir}/rea`), [`${dir}/readme.md:`]);
+  assert.deepEqual(await values('  src/deep/'), ['src/deep/x.ts:']);
+  for (const prefix of ['src/app.ts:', 'src/app.ts:12', 'src/app.ts:12-', 'src/app.ts:12-14:3', 'nothing/', 'zzz']) {
+    assert.equal(await values(prefix), null, prefix);
+  }
 });

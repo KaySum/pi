@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { readdir } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { usePoint } from './api.ts';
 
@@ -7,12 +8,38 @@ const USAGE = 'Usage: /nvim-point <path>:<line>[-<end line>][:<column>]';
 const errorText = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
 
+const SHOWN = 50;
+
+/**
+ * Files and directories under what is typed, from `cwd`: a directory goes on with "/", a file
+ * with ":" for its line. Hidden ones once a "." is typed; none once the line is.
+ */
+export async function completePath(prefix: string, cwd: string) {
+  const typed = prefix.trimStart();
+  if (/:\d*(-\d*)?(:\d*)?$/.test(typed)) return null;
+  const folder = typed.slice(0, typed.lastIndexOf('/') + 1), start = typed.slice(folder.length);
+  const entries = await readdir(resolve(cwd, folder || '.'), { withFileTypes: true }).catch(() => []);
+  const items = entries
+    .filter(entry => entry.name.startsWith(start) && (start.startsWith('.') || !entry.name.startsWith('.')))
+    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+    .slice(0, SHOWN)
+    .map(entry => {
+      const name = entry.isDirectory() ? `${entry.name}/` : entry.name;
+      return { value: `${folder}${name}${entry.isDirectory() ? '' : ':'}`, label: name };
+    });
+  return items.length ? items : null;
+}
+
 // A library for other extensions (see api.ts); Pi loads this for its command.
 export default function (pi: ExtensionAPI) {
   const point = usePoint(pi);
+  // Pi's working directory, which paths typed are from.
+  let cwd = process.cwd();
+  pi.on('session_start', (_event, ctx) => { cwd = ctx.cwd; });
 
   pi.registerCommand('nvim-point', {
     description: 'Show a place in your Neovim window, as other extensions would: <path>:<line>[-<end line>][:<column>]',
+    getArgumentCompletions: prefix => completePath(prefix, cwd),
     handler: async (args, ctx) => {
       // Columns from 1, as compilers and grep give them.
       const [, path, line, endLine, col] = args.trim().match(/^(.+?):(\d+)(?:-(\d+))?(?::(\d+))?$/) ?? [];

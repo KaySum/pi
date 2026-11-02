@@ -9,7 +9,8 @@ Built on [nvim-remote](../nvim-remote/README.md), and needs no install.
 ## For you
 
 `/nvim-point <path>:<line>[-<end line>][:<column>]` shows a place as other extensions would,
-the path from Pi's working directory and the column from 1, as compilers and grep give them:
+the path from Pi's working directory and the column from 1, as compilers and grep give them.
+Paths complete as you type:
 
 ```
 /nvim-point src/app.ts:120-140

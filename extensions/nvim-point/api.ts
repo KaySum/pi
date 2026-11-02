@@ -9,9 +9,13 @@ const MODULE = readFileSync(new URL('./point.lua', import.meta.url), 'utf8');
 const SHOW = `if not remote.nvim_point then return 'not installed' end
 return remote.nvim_point.show(...)`;
 
-type Where = {
+type Where = ({
   /** The file: absolute, or from Pi's working directory, as Pi's tools give them. */
-  path: string;
+  path: string; buf?: never;
+} | {
+  /** Or a buffer, by number: one without a file too, any but a terminal. */
+  buf: number; path?: never;
+}) & {
   /** Lines kept around them when it has to scroll. Default 3. */
   context?: number;
 };
@@ -90,8 +94,10 @@ const RETRY_MS = 100;
 
 type Lua = Pick<Remote, 'lua'>;
 
-function check(place: Place, cwd: string) {
+function check(place: Place, cwd: string): Record<string, unknown> {
   const { match, line = 1, endLine = line, col = 0, context = 0 } = place;
+  if ((place.path === undefined) === (place.buf === undefined)) throw new Error('A place needs a path or a buf, not both');
+  if (place.buf !== undefined && (!Number.isInteger(place.buf) || place.buf < 1)) throw new Error(`buf must be a buffer number: ${place.buf}`);
   if (match !== undefined) {
     if (typeof match !== 'string' || !match.trim()) throw new Error('match must be some code to find');
     if (place.endLine !== undefined || place.col !== undefined) throw new Error('With match, its lines and column are where it is: no endLine or col');
@@ -101,7 +107,8 @@ function check(place: Place, cwd: string) {
   if (!Number.isInteger(col) || col < 0) throw new Error(`col must be a whole number from 0: ${col}`);
   if (!Number.isInteger(context) || context < 0) throw new Error(`context must be a whole number from 0: ${context}`);
   // Without what is undefined, which would reach Lua as `vim.NIL`.
-  return Object.fromEntries(Object.entries({ ...place, path: resolve(cwd, place.path) }).filter(([, v]) => v !== undefined));
+  const path = place.path === undefined ? undefined : resolve(cwd, place.path);
+  return Object.fromEntries(Object.entries({ ...place, path }).filter(([, v]) => v !== undefined));
 }
 
 /** Pointing in the editor of `remote`, relative paths from `cwd`. */

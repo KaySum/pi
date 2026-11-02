@@ -8,9 +8,36 @@ end
 local point = {}
 remote.nvim_point = point
 
--- The buffer of the file at `path`: loaded, as the user's own would be. And what was done for
--- it, to undo if it is not shown after all: "added", "loaded", or nothing.
-local function buffer(path)
+-- Load `buf`, as the user's own would be; `existed`: it was in the buffer list before. What was
+-- done for it, to undo if it is not shown after all: "added", "loaded", or nothing.
+local function load(buf, existed)
+	if vim.api.nvim_buf_is_loaded(buf) then
+		return nil
+	end
+	-- An existing swap file would otherwise stop the editor at a prompt.
+	local shortmess = vim.o.shortmess
+	vim.opt.shortmess:append("A")
+	local ok, err = pcall(vim.fn.bufload, buf)
+	vim.o.shortmess = shortmess
+	-- An error from the user's autocommands once it is loaded is no failure.
+	if not ok and not vim.api.nvim_buf_is_loaded(buf) then
+		error(err, 0)
+	end
+	return existed and "loaded" or "added"
+end
+
+-- The buffer of `spec`: `spec.buf`, any but a terminal, or the file at `spec.path`. Loaded,
+-- and what was done for it (see `load`).
+local function buffer(spec)
+	if spec.buf then
+		if not vim.api.nvim_buf_is_valid(spec.buf) then
+			error(("no buffer %d"):format(spec.buf), 0)
+		elseif vim.bo[spec.buf].buftype == "terminal" then
+			error(("buffer %d is a terminal"):format(spec.buf), 0)
+		end
+		return spec.buf, load(spec.buf, true)
+	end
+	local path = spec.path
 	local stat = vim.uv.fs_stat(path)
 	local existed = vim.fn.bufexists(path) == 1
 	if not existed and not stat then
@@ -24,19 +51,7 @@ local function buffer(path)
 	if vim.bo[buf].buftype ~= "" then
 		error(("not a file: %s"):format(path), 0)
 	end
-	if vim.api.nvim_buf_is_loaded(buf) then
-		return buf
-	end
-	-- An existing swap file would otherwise stop the editor at a prompt.
-	local shortmess = vim.o.shortmess
-	vim.opt.shortmess:append("A")
-	local ok, err = pcall(vim.fn.bufload, buf)
-	vim.o.shortmess = shortmess
-	-- An error from the user's autocommands once it is loaded is no failure.
-	if not ok and not vim.api.nvim_buf_is_loaded(buf) then
-		error(err, 0)
-	end
-	return buf, existed and "loaded" or "added"
+	return buf, load(buf, existed)
 end
 
 local function shows_file(win)
@@ -53,7 +68,8 @@ local function window(buf)
 	local wins = { vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr("#")) }
 	vim.list_extend(wins, vim.api.nvim_tabpage_list_wins(0))
 	for _, win in ipairs(wins) do
-		if shows_file(win) and vim.api.nvim_win_get_buf(win) == buf then
+		local here = win ~= 0 and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative == ""
+		if here and vim.api.nvim_win_get_buf(win) == buf then
 			return win
 		end
 	end
@@ -133,13 +149,16 @@ local function find(buf, match, near)
 	return best
 end
 
--- Whether a window of this tab shows the file at `path`, links followed.
-local function open_here(path)
-	local want = vim.uv.fs_realpath(path) or vim.fs.normalize(path)
+-- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`, links followed.
+local function open_here(spec)
+	local want = spec.path and (vim.uv.fs_realpath(spec.path) or vim.fs.normalize(spec.path))
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-		local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
-		if shows_file(win) and name ~= "" and (vim.uv.fs_realpath(name) or vim.fs.normalize(name)) == want then
-			return true
+		local buf = vim.api.nvim_win_get_buf(win)
+		local name = vim.api.nvim_buf_get_name(buf)
+		if vim.api.nvim_win_get_config(win).relative == "" then
+			if spec.buf == buf or (want and name ~= "" and (vim.uv.fs_realpath(name) or vim.fs.normalize(name)) == want) then
+				return true
+			end
 		end
 	end
 	return false
@@ -182,20 +201,21 @@ local function enter(win, buf, quiet)
 	end
 end
 
---- Show `spec.path` at `spec.line` (to `spec.endLine`), the cursor at `spec.col` (0-based bytes;
---- else the line's first non-blank); or where `spec.match` is, nearest `spec.line`. Not while
---- the user is busy: then `{ shown = false, busy = mode }`. (At a prompt this does not run:
---- nvim-remote fails the call first.)
+--- Show `spec.path` (or `spec.buf`) at `spec.line` (to `spec.endLine`), the cursor at `spec.col`
+--- (0-based bytes; else the line's first non-blank); or where `spec.match` is, nearest
+--- `spec.line`. Not while the user is busy: then `{ shown = false, busy = mode }`. (At a prompt
+--- this does not run: nvim-remote fails the call first.)
 function point.show(spec)
 	local mode = vim.api.nvim_get_mode().mode
 	if not (mode == "n" or mode == "nt" or mode == "t") then
 		return { shown = false, busy = mode }
 	elseif vim.fn.getcmdwintype() ~= "" then
 		return { shown = false, busy = "cmdwin" } -- In q:, no other window can change.
-	elseif spec.open == false and not open_here(spec.path) then
+	elseif spec.open == false and not open_here(spec) then
 		return { shown = false, closed = true } -- Neither loaded nor any window changed for it.
 	end
-	local buf, done = buffer(spec.path)
+	local buf, done = buffer(spec)
+	local name = spec.path or ("buffer %d"):format(buf)
 	-- Not left loaded (a swap file and all) for a file the user did not open.
 	local function fail(message)
 		if done then
@@ -207,13 +227,13 @@ function point.show(spec)
 	if spec.match then
 		local found, err = find(buf, spec.match, spec.line or 1)
 		if not found then
-			fail(err or ("not found in %s: %s"):format(spec.path, spec.match))
+			fail(err or ("not found in %s: %s"):format(name, spec.match))
 		end
 		line, last, col = unpack(found)
 	end
 	local count = vim.api.nvim_buf_line_count(buf)
 	if last > count then
-		fail(("line %d is past the end of %s, at %d"):format(last, spec.path, count))
+		fail(("line %d is past the end of %s, at %d"):format(last, name, count))
 	end
 
 	local win, opened = window(buf), false
@@ -250,7 +270,10 @@ function point.show(spec)
 	elseif vim.api.nvim_win_get_cursor(win)[1] ~= line then
 		jump()
 	end
-	vim.bo[buf].buflisted = true
+	-- A file shown is listed, as the user's own would be; a buffer given is left as it was.
+	if spec.path then
+		vim.bo[buf].buflisted = true
+	end
 
 	local shown = vim.api.nvim_win_call(win, function()
 		local before = vim.fn.winsaveview()

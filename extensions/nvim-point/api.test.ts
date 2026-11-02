@@ -1333,6 +1333,66 @@ test('a match in a file of 100,000 lines is found promptly', async () => {
   assert.equal((await state(yours)).cursor[0], 99_991);
 });
 
+// --- By buffer --------------------------------------------------------------------------------
+
+test('a buffer by number is shown as its file would be', async () => {
+  const path = await file();
+  const [yours] = await layout(await file());
+  const buf = await lua('local buf = vim.fn.bufadd(...) vim.fn.bufload(buf) return buf', path);
+  const result = shown(await show({ buf, line: 120 }));
+  assert.deepEqual([result.win, result.buf, (await state(yours)).path, (await state(yours)).cursor[0]], [yours, buf, path, 120]);
+});
+
+test('a buffer without a file is shown, left unlisted, and found by match', async () => {
+  const [yours] = await layout(await file());
+  const buf = await lua(`local buf = vim.api.nvim_create_buf(false, true)
+    local lines = {} for i = 1, 200 do lines[i] = 'scratch ' .. i end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, lines)
+    return buf`);
+  shown(await show({ buf, match: 'scratch 150' }));
+  assert.deepEqual([await lua('return vim.api.nvim_win_get_buf(...)', yours), (await state(yours)).cursor, await lua('return vim.bo[...].buflisted', buf)], [buf, [150, 0], false]);
+});
+
+test('a window showing the buffer is the one used, even one without a file', async () => {
+  const [yours] = await layout(await file());
+  const [buf, there] = await lua(`local yours = ...
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, vim.split(string.rep('x\\n', 100), '\\n'))
+    local there = vim.api.nvim_open_win(buf, false, { split = 'below', win = yours })
+    return { buf, there }`, yours);
+  assert.equal(shown(await show({ buf, line: 50 })).win, there);
+  assert.equal(await lua('return vim.api.nvim_win_get_cursor(...)[1]', there), 50);
+});
+
+test('a buffer not loaded is loaded to be shown, and unloaded again if the lines are past its end', async () => {
+  const path = await file(10);
+  const [yours] = await layout(await file());
+  const buf = await lua('vim.cmd.badd(vim.fn.fnameescape(...)) return vim.fn.bufnr(...)', path);
+  await assert.rejects(show({ buf, line: 20 }), new RegExp(`line 20 is past the end of buffer ${buf}`));
+  assert.deepEqual(await lua('local buf = ... return { vim.api.nvim_buf_is_valid(buf), vim.api.nvim_buf_is_loaded(buf) }', buf), [true, false]);
+  shown(await show({ buf, line: 5 }));
+  assert.deepEqual([(await state(yours)).path, (await state(yours)).cursor[0]], [path, 5]);
+});
+
+test('with open: false, a buffer in a window of the tab is shown there; one in none is closed', async () => {
+  const [yours] = await layout(await file());
+  const buf = await lua('return vim.api.nvim_win_get_buf(...)', yours);
+  assert.equal(shown(await show({ buf, line: 30 }, { open: false })).win, yours);
+  const other = await lua('return vim.api.nvim_create_buf(false, true)');
+  assert.deepEqual(await show({ buf: other, line: 1 }, { open: false }), { shown: false, closed: true });
+});
+
+test('a place is a path or a buffer, not both nor neither; a buffer must be there, and not a terminal', async () => {
+  const path = await file();
+  const [, term] = await layout(await file());
+  const terminal = await lua('return vim.api.nvim_win_get_buf(...)', term);
+  await assert.rejects(show({ path, buf: 1, line: 1 } as never), /a path or a buf, not both/);
+  await assert.rejects(show({ line: 1 } as never), /a path or a buf/);
+  await assert.rejects(show({ buf: 0, line: 1 }), /buf must be a buffer number/);
+  await assert.rejects(show({ buf: 99999, line: 1 }), /no buffer 99999/);
+  await assert.rejects(show({ buf: terminal, line: 1 }), new RegExp(`buffer ${terminal} is a terminal`));
+});
+
 // --- Relative paths ---------------------------------------------------------------------------
 
 test('a relative path is from the directory given, else the process\'s', async () => {

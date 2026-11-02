@@ -37,6 +37,7 @@ export default function (pi) {
 | Place | |
 | --- | --- |
 | `path` | The file: absolute, or relative to Pi's working directory, as Pi's tools give paths. |
+| `buf` | Or a buffer, by number, instead: one without a file too, any but a terminal. Left listed or not, as it was. |
 | `line`, `endLine` | 1-based; the lines to bring on screen together (`endLine` defaults to `line`). |
 | `match` | Or the code, rather than its lines, which move as the file changes: each of its lines within one of the file's, in order, the space around them aside. Its lines are brought on screen, the cursor where it starts. Of several, the one nearest `line` wins, the earlier on a tie; else the first. Not with `endLine` or `col`, which it gives. |
 | `col` | Where the cursor goes on `line`, in 0-based bytes, kept within the line and on a character's first byte; else its first non-blank, as `^` goes. |

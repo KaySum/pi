@@ -1,0 +1,69 @@
+# nvim-point
+
+Lets other extensions show you a place in the code, in the Neovim Pi runs inside: the file
+opened in your window, your cursor on the place, folds over it open, and scrolled to it if it
+is not on screen. Your focus stays where it is, in Pi's terminal, and `<C-o>` in your window
+takes you back. It never moves anything while you are typing there. It registers no tools.
+Built on [nvim-remote](../nvim-remote/README.md), and needs no install.
+
+## For you
+
+`/nvim-point <path>:<line>[-<end line>][:<column>]` shows a place as other extensions would,
+the path from Pi's working directory and the column from 1, as compilers and grep give them:
+
+```
+/nvim-point src/app.ts:120-140
+/nvim-point src/app.ts:42:7
+```
+
+## For other extensions
+
+```ts
+import { usePoint } from '../nvim-point/api.ts';
+
+export default function (pi) {
+  const point = usePoint(pi);
+  pi.on('tool_result', async () => {
+    const shown = await point()?.show({ path: '/abs/src/app.ts', line: 120, endLine: 140 });
+    if (shown && 'busy' in shown) { /* You were typing: not now. */ }
+  });
+}
+```
+
+`point()` is undefined while Pi is not attached to Neovim. `show(place)` takes:
+
+| Place | |
+| --- | --- |
+| `path` | The file, absolute. |
+| `line`, `endLine` | 1-based; the lines to bring on screen together (`endLine` defaults to `line`). |
+| `col` | Where the cursor goes on `line`, in 0-based bytes; else its first non-blank. |
+| `context` | Lines kept around them when it has to scroll. Default 3. |
+
+### Where
+
+In a window of the current tab showing the file already, else yours: the one you are in unless
+it is Pi's terminal (or another like it), else the one you came from, else any showing a file.
+With none, one opens beside Pi's terminal. If yours has unsaved changes Neovim cannot hide
+(`'hidden'` off), the file opens in a split above it rather than lose them.
+
+### How
+
+The cursor goes on the place, and folds over its lines open. If the lines were on screen
+already, the window does not scroll: you know where to look. Else they are brought on screen
+whole, centered if they fit with their context, else from their start. A move within the file
+goes in your jumplist, as does leaving another file for it.
+
+It resolves to `{ win, buf, opened, scrolled }`: `opened` if a window was opened for it,
+`scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command, at
+a prompt), it changes nothing and resolves to `{ busy }`, the mode you are in (`i`, `v`, `c`…):
+whether to try again is for the extension to decide. A path that is not a file, or lines past
+its end, reject.
+
+## Development
+
+```sh
+node --test --test-timeout=20000 *.test.ts
+../nvim-service/node_modules/.bin/tsc -p tsconfig.json
+```
+
+The tests run their own headless Neovim, never the one they might be started from.

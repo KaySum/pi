@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -482,6 +482,184 @@ test('each attachment installs its own, and they work side by side', async () =>
     assert.equal(shown(await show({ path, line: 60 })).win, yours);
     assert.equal((await state(yours)).cursor[0], 60);
   } finally { other.close(); }
+});
+
+// --- Other windows, as plugins and configs make them -------------------------------------------
+
+test('with Pi\'s terminal in a float, your window is the one beneath it you came from', async () => {
+  const mine = await file();
+  const yours = await lua('vim.cmd.edit(vim.fn.fnameescape(...)) return vim.api.nvim_get_current_win()', mine);
+  const float = await lua(`local win = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, { relative = 'editor', row = 2, col = 2, width = 40, height = 10 })
+    vim.cmd('terminal')
+    return win`);
+  const result = shown(await show({ path: await file(), line: 10 }));
+  assert.equal(result.win, yours);
+  assert.equal(await current(), float);
+});
+
+test('with Pi\'s terminal in a float over no file, a window opens beside the windows beneath it', async () => {
+  const scratch = await lua('vim.cmd("setlocal buftype=nofile") return vim.api.nvim_get_current_win()');
+  const float = await lua(`local win = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, { relative = 'editor', row = 2, col = 2, width = 40, height = 10 })
+    vim.cmd('terminal')
+    return win`);
+  const path = await file();
+  const result = shown(await show({ path, line: 10 }));
+  assert.equal(result.opened, true);
+  assert.equal(await lua('return vim.api.nvim_win_get_config(...).relative', result.win), '');
+  assert.deepEqual([(await state(result.win)).path, await current()], [path, float]);
+  assert.ok((await windows()).includes(scratch));
+});
+
+test('the window you came from, closed since, is passed over for another showing a file', async () => {
+  const [yours] = await layout(await file());
+  // From the terminal to a split of it, back, and the split closed: '#' is gone.
+  await lua(`vim.cmd('split')
+    local gone = vim.api.nvim_get_current_win()
+    vim.cmd('wincmd p')
+    vim.api.nvim_win_close(gone, true)`);
+  assert.equal(await lua('return vim.fn.win_getid(vim.fn.winnr("#"))'), 0);
+  assert.equal(shown(await show({ path: await file(), line: 10 })).win, yours);
+});
+
+test('of two windows showing the file, the one you came from is used', async () => {
+  const path = await file();
+  const [first, second] = await lua(`vim.cmd.edit(vim.fn.fnameescape(...))
+    local first = vim.api.nvim_get_current_win()
+    vim.cmd('vsplit')
+    local second = vim.api.nvim_get_current_win()
+    vim.cmd('rightbelow vsplit | terminal')
+    return { first, second }`, path);
+  // The second is left of the first in the tab; you came from it.
+  assert.equal(shown(await show({ path, line: 100 })).win, second);
+  assert.deepEqual((await state(first)).cursor, [1, 0]);
+});
+
+test('a window fixed to its buffer (winfixbuf) keeps it: the file opens in a split above', async () => {
+  const mine = await file();
+  const [yours] = await layout(mine);
+  await lua('vim.wo[...].winfixbuf = true', yours);
+  const path = await file();
+  const result = shown(await show({ path, line: 10 }));
+  assert.equal(result.opened, true);
+  assert.deepEqual([(await state(yours)).path, (await state(result.win)).path], [mine, path]);
+});
+
+// --- Paths and buffers ------------------------------------------------------------------------
+
+test('a file you opened through a link is found by its real path, and the other way round: one buffer', async () => {
+  const path = await file();
+  const link = join(dir, `link-${files}.ts`);
+  await symlink(path, link);
+  const [yours] = await layout(link);
+  const buf = await bufOf(link);
+  assert.equal(shown(await show({ path, line: 50 })).buf, buf);
+  assert.equal(await lua('return #vim.tbl_filter(function(b) return vim.api.nvim_buf_get_name(b) ~= "" and vim.bo[b].buftype == "" end, vim.api.nvim_list_bufs())'), 1);
+  assert.equal((await state(yours)).cursor[0], 50);
+});
+
+test('a path with . and .. in it is the file it names', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  const buf = await bufOf(path);
+  await mkdir(join(dir, 'sub'), { recursive: true });
+  assert.equal(shown(await show({ path: `${dir}/sub/.././${path.slice(dir.length + 1)}`, line: 60 })).buf, buf);
+  assert.equal((await state(yours)).cursor[0], 60);
+});
+
+test('<C-^> in your window goes back to your file', async () => {
+  const mine = await file();
+  const [yours] = await layout(mine);
+  shown(await show({ path: await file(), line: 10 }));
+  await inWin(yours, 'execute "normal! \\<C-^>"');
+  assert.equal((await state(yours)).path, mine);
+});
+
+test('your config moving the cursor as a file opens does not move it off the place', async () => {
+  await lua(`vim.api.nvim_create_augroup('restore', {})
+    vim.api.nvim_create_autocmd({ 'BufReadPost', 'BufWinEnter' }, { group = 'restore', command = 'normal! G' })`);
+  try {
+    const [yours] = await layout(await file());
+    shown(await show({ path: await file(), line: 42 }));
+    assert.equal((await state(yours)).cursor[0], 42);
+  } finally { await lua('vim.api.nvim_del_augroup_by_name("restore")'); }
+});
+
+test('a buffer wiped when hidden, with unsaved changes, is kept: the file opens in a split', async () => {
+  const [yours] = await layout(await file());
+  await lua(`local win = ...
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].bufhidden = 'wipe'
+    vim.bo[buf].buftype = ''
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, { 'scratch' })
+    vim.api.nvim_win_set_buf(win, buf)`, yours);
+  const result = shown(await show({ path: await file(), line: 5 }));
+  assert.equal(await lua('return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(...), 0, 1, true)[1]', yours), 'scratch');
+  assert.notEqual(result.win, yours);
+});
+
+// --- Size and options -------------------------------------------------------------------------
+
+test('a file of 100,000 lines is shown at its end promptly', async () => {
+  const path = await file(100_000);
+  const [yours] = await layout(await file());
+  const start = performance.now();
+  shown(await show({ path, line: 99_990, endLine: 99_995 }));
+  assert.ok(performance.now() - start < 500, `${performance.now() - start} ms`);
+  const now = await state(yours);
+  assert.ok(now.top <= 99_990 && 99_995 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+/** Where the cursor of `win` is drawn, once the screen is updated: 0 if not on screen. */
+const drawn = (win: number) => lua(`local win = ... vim.cmd('redraw')
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  return vim.fn.screenpos(win, cursor[1], cursor[2] + 1).row`, win);
+
+test('in a line longer than the window, wrapped or not, the cursor ends on screen', async () => {
+  const path = await file(['short', 'x'.repeat(100_000), 'short']);
+  const [yours] = await layout(await file());
+  shown(await show({ path, line: 2, col: 50_000 }));
+  assert.deepEqual((await state(yours)).cursor, [2, 50_000]);
+  assert.notEqual(await drawn(yours), 0);
+  await lua('vim.wo[...].wrap = false', yours);
+  shown(await show({ path, line: 2, col: 90_000 }));
+  assert.notEqual(await drawn(yours), 0);
+});
+
+test('with scrolloff keeping the cursor centered, the lines are still on screen', async () => {
+  const path = await file();
+  const [yours] = await layout(path);
+  await lua('vim.wo[...].scrolloff = 999', yours);
+  shown(await show({ path, line: 200, endLine: 204 }));
+  await drawn(yours);
+  const now = await state(yours);
+  assert.ok(now.top <= 200 && 204 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+test('in a diff, with filler lines above, the lines are on screen', async () => {
+  const path = await file();
+  const other = await file(Array.from({ length: 300 }, (_, i) => (i % 20 === 0 ? ['extra a', 'extra b'] : []).concat(`line ${i + 1}`)).flat());
+  const [yours] = await layout(path);
+  await lua(`local yours, other = ...
+    vim.api.nvim_win_call(yours, function() vim.cmd('diffthis | vsplit ' .. vim.fn.fnameescape(other) .. ' | diffthis') end)`, yours, other);
+  shown(await show({ path, line: 250, endLine: 254 }));
+  const now = await state(yours);
+  assert.ok(now.top <= 250 && 254 <= now.bottom, `${now.top}–${now.bottom}`);
+});
+
+// --- Calls ------------------------------------------------------------------------------------
+
+test('two calls at once both resolve, the later one where the window ends', async () => {
+  const path = await file();
+  const [yours] = await layout(await file());
+  const [a, b] = await Promise.all([show({ path, line: 50 }), show({ path, line: 250 })]);
+  assert.deepEqual([shown(a).win, shown(b).win], [yours, yours]);
+  assert.equal((await state(yours)).cursor[0], 250);
+});
+
+test('once the editor is gone, it rejects', async () => {
+  const other = await attach(socket, { onError: () => {} });
+  other.close();
+  await assert.rejects(point(other).show({ path: await file(), line: 1 }));
 });
 
 // --- Errors -----------------------------------------------------------------------------------

@@ -22,7 +22,8 @@ export type Place = {
 /**
  * Shown in `win`: `opened` if a window was opened for it (none showed a file, or the user's
  * has unsaved changes it could not hide), `scrolled` if the window scrolled. Or not shown: the
- * user is `busy` in that mode (`i`, `v`, `c`…), or at a prompt.
+ * user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in the command-line
+ * window.
  */
 export type Pointed = Shown | { busy: string };
 export type Shown = { win: number; buf: number; opened: boolean; scrolled: boolean };

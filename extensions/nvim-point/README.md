@@ -55,10 +55,16 @@ whole, centered if they fit with their context, else from their start. A move wi
 goes in your jumplist, as does leaving another file for it.
 
 It resolves to `{ win, buf, opened, scrolled }`: `opened` if a window was opened for it,
-`scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command, at
-a prompt), it changes nothing and resolves to `{ busy }`, the mode you are in (`i`, `v`, `c`…):
-whether to try again is for the extension to decide. A path that is not a file (missing, or a
-directory), or lines past its end, reject.
+`scrolled` if the window scrolled. While you are busy (inserting, selecting, typing a command,
+in the command-line window, at a prompt), it changes nothing and resolves to `{ busy }`, the
+mode you are in (`i`, `v`, `c`…): whether to try again is for the extension to decide. A path
+that is not a file (missing, a directory, a buffer of another kind), or lines past its end,
+reject.
+
+A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
+holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is
+reloaded as `'autoread'` would, if you have not changed it; else left as it is, and you are told
+after, in one line.
 
 ## Development
 

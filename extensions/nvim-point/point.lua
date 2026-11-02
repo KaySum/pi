@@ -17,13 +17,17 @@ local function buffer(path)
 		error(("not a file: %s"):format(path), 0)
 	end
 	local buf = vim.fn.bufadd(path)
+	if vim.bo[buf].buftype ~= "" then
+		error(("not a file: %s"):format(path), 0)
+	end
 	if not vim.api.nvim_buf_is_loaded(buf) then
 		-- An existing swap file would otherwise stop the editor at a prompt.
 		local shortmess = vim.o.shortmess
 		vim.opt.shortmess:append("A")
 		local ok, err = pcall(vim.fn.bufload, buf)
 		vim.o.shortmess = shortmess
-		if not ok then
+		-- An error from the user's autocommands once it is loaded is no failure.
+		if not ok and not vim.api.nvim_buf_is_loaded(buf) then
 			error(err, 0)
 		end
 	end
@@ -74,9 +78,39 @@ end
 -- around them: centered if they fit, else from the top.
 local function reveal(win, first, last, context)
 	local height = vim.api.nvim_win_get_height(win)
+	context = math.min(context, math.floor((height - 1) / 2)) -- Leaving room for the lines.
 	local rows = vim.api.nvim_win_text_height(win, { start_row = first - 1, end_row = last - 1 }).all
 	local above = rows + 2 * context <= height and math.floor((height - rows) / 2) or context
 	vim.fn.winrestview({ topline = top_for(win, first, above), topfill = 0, skipcol = 0 })
+end
+
+-- Show `buf` in `win`. Entering a buffer whose file changed on disk, Neovim asks what to do at a
+-- prompt, which would hold this call until the user answers: unless they handle it themselves
+-- (FileChangedShell), it is reloaded as 'autoread' would, else left, and they are told after.
+local function enter(win, buf)
+	local guard = #vim.api.nvim_get_autocmds({ event = "FileChangedShell" }) == 0
+		and vim.api.nvim_create_autocmd("FileChangedShell", {
+			buffer = buf,
+			callback = function()
+				local reason = vim.v.fcs_reason
+				vim.v.fcs_choice = reason == "changed" and vim.o.autoread and "reload" or ""
+				if vim.v.fcs_choice == "" then
+					-- One line, which a longer message would not be, stopping at "Press ENTER".
+					local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+					local how = reason == "conflict" and " and here" or (" (%s)"):format(reason)
+					vim.schedule(function()
+						vim.notify(("%s changed on disk%s: :e! loads it"):format(name, how), vim.log.levels.WARN)
+					end)
+				end
+			end,
+		})
+	local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+	if guard then
+		vim.api.nvim_del_autocmd(guard)
+	end
+	if not ok then
+		error(err, 0)
+	end
 end
 
 --- Show `spec.path` at `spec.line` (to `spec.endLine`), the cursor at `spec.col` (0-based bytes;
@@ -86,6 +120,8 @@ function point.show(spec)
 	local mode = vim.api.nvim_get_mode().mode
 	if not (mode == "n" or mode == "nt" or mode == "t") then
 		return { busy = mode }
+	elseif vim.fn.getcmdwintype() ~= "" then
+		return { busy = "cmdwin" } -- In q:, no other window can change.
 	end
 	local buf = buffer(spec.path)
 	local count = vim.api.nvim_buf_line_count(buf)
@@ -103,8 +139,9 @@ function point.show(spec)
 	end
 	if win and vim.api.nvim_win_get_buf(win) ~= buf then
 		jump()
-		-- Unsaved changes there, and 'hidden' off: rather than lose them, a split.
-		if not pcall(vim.api.nvim_win_set_buf, win, buf) then
+		-- Unsaved changes there with 'hidden' off, or 'winfixbuf': rather than lose them, a split.
+		-- An error from the user's autocommands once it shows the file is no failure.
+		if not pcall(enter, win, buf) and vim.api.nvim_win_get_buf(win) ~= buf then
 			win, opened = vim.api.nvim_open_win(buf, false, { split = "above", win = win }), true
 		end
 	elseif not win then

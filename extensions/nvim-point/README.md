@@ -80,9 +80,9 @@ not there, reject.
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (a `FileChangedShell` of
-yours for that buffer, or whose pattern matches its file), it is reloaded as `'autoread'`
-would, if you have not changed it, before the place is found, so a `match` or line is looked
-for in what is shown; else left as it is, and you are told after, in one line.
+yours for that buffer, or whose pattern Neovim matches to its file), it is reloaded as
+`'autoread'` would, if you have not changed it, before the place is found, so a `match` or
+line is looked for in what is shown; else left as it is, and you are told after, in one line.
 
 Your autocommands may act as the file is entered, or its window focused (`focus: true`). If
 they change it, the place is found again, in what is shown; if the code is gone, it rejects.

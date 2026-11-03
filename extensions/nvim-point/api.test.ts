@@ -1195,6 +1195,46 @@ test('a FileChangedShell of yours whose pattern matches the file is yours to han
   } finally { await lua('vim.api.nvim_del_augroup_by_name("mine")'); }
 });
 
+test('which FileChangedShell of yours applies is as Neovim matches it: relative patterns, file name case', async () => {
+  const ui = await connect(socket);
+  await ui.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]);
+  const cwd = await lua('return vim.fn.getcwd()');
+  await mkdir(join(dir, 'src'), { recursive: true });
+  try {
+    for (const [n, pattern, fileignorecase, ignorecase, applies] of [
+      [1, 'src/*.txt', false, false, true],
+      [2, '*.TXT', true, false, true],
+      [3, '*.TXT', false, true, false],
+    ] as const) {
+      const where = `${pattern} fileignorecase=${fileignorecase} ignorecase=${ignorecase}`;
+      const path = join(dir, 'src', `case-${n}.txt`);
+      await writeFile(path, 'OLD\nTARGET\ntail\n');
+      // Opened by a relative name, then hidden; your handler asking for a reload.
+      await lua(`local dir, name, fic, ic, pattern = ...
+        vim.cmd.cd(dir) vim.cmd.edit(name) vim.cmd('enew')
+        vim.o.autoread, vim.o.fileignorecase, vim.o.ignorecase = false, fic, ic
+        vim.g.calls = 0
+        vim.api.nvim_create_augroup('mine', {})
+        vim.api.nvim_create_autocmd('FileChangedShell', { group = 'mine', pattern = pattern, callback = function() vim.g.calls = vim.g.calls + 1 vim.v.fcs_choice = 'reload' end })`,
+        dir, `src/case-${n}.txt`, fileignorecase, ignorecase, pattern);
+      await layout(await file());
+      await writeFile(path, 'NEW\ninserted\ninserted again\nTARGET\ntail\n');
+      await utimes(path, new Date(), new Date(Date.now() + 5000));
+      shown(await show({ path, match: 'TARGET' }, { jump: false, timeout: 2000 }));
+      await delay(50);
+      // Yours applying, your reload is done; else ours: no prompt, and your text as it was.
+      assert.equal(await mode(), 'nt', where);
+      assert.deepEqual([await lua('return vim.g.calls'), await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path)], [applies ? 1 : 0, applies ? 'NEW' : 'OLD'], where);
+      await lua('vim.api.nvim_del_augroup_by_name("mine")');
+    }
+  } finally {
+    await editor.request('nvim_input', ['<Esc>']);
+    await lua('local cwd = ... vim.cmd.cd(cwd) vim.o.autoread, vim.o.fileignorecase, vim.o.ignorecase = true, vim.fn.has("mac") == 1, false', cwd);
+    await ui.request('nvim_ui_detach', []);
+    ui.close();
+  }
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

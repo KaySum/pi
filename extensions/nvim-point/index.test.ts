@@ -340,3 +340,11 @@ test('completion: a first option\'s value; paths with spaces in them, before any
   // No file by that name: the word is an option's.
   assert.deepEqual(await values('there.ts m'), ['there.ts match=']);
 });
+
+test('completion: a quote in a path is the path\'s own, until options begin', async () => {
+  await writeFile(join(dir, 'say"hello.txt'), '');
+  const values = async (prefix: string) => (await completePoint(prefix, dir))?.map(item => item.value) ?? null;
+  assert.deepEqual(await values('say"h'), ['say"hello.txt:']);
+  assert.deepEqual(await values('say"hello.txt:1 sc'), ['say"hello.txt:1 scroll=']);
+  assert.equal(await values('a.ts:1 match="open sc'), null); // A quoted value still being typed.
+});

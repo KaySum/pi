@@ -1062,6 +1062,39 @@ test('a file changed on disk is reloaded before its lines are checked: shorter, 
   assert.deepEqual([(await state(longer.yours)).path, (await state(longer.yours)).cursor[0]], [longer.path, 3]);
 });
 
+/** A file loaded in no window, its BufEnter running `hook` (Lua, given the buffer), after `layout`. */
+async function hooked(lines: string[], hook: string, once = true) {
+  const path = await file(lines);
+  const [yours] = await layout(await file());
+  const buf = await lua('local buf = vim.fn.bufadd(...) vim.fn.bufload(buf) return buf', path);
+  await lua(`local buf, once = ...
+    vim.api.nvim_create_augroup('hook', {})
+    vim.api.nvim_create_autocmd('BufEnter', { group = 'hook', buffer = buf, once = once, callback = function() ${hook} end })`, buf, once);
+  return { path, yours, buf };
+}
+afterEach(() => lua('pcall(vim.api.nvim_del_augroup_by_name, "hook")'));
+
+test('your BufEnter changing the buffer as it is entered: the place is found again, in what is shown', async () => {
+  for (const jump of [true, false]) {
+    const { path, yours } = await hooked(['header', 'TARGET', 'tail'], "vim.api.nvim_buf_set_lines(0, 1, 1, true, { 'new 1', 'new 2' })");
+    shown(await show({ path, match: 'TARGET' }, { jump }));
+    assert.equal((await state(yours)).cursor[0], 4, `jump ${jump}`);
+  }
+  const gone = await hooked(['header', 'TARGET', 'tail'], "vim.api.nvim_buf_set_lines(0, 1, 2, true, { 'removed' })");
+  await assert.rejects(show({ path: gone.path, match: 'TARGET' }), /not found in .*: TARGET/);
+});
+
+test('your BufEnter showing another buffer instead: entered once more, then refused, never a false success', async () => {
+  const other = await lua('local buf = vim.api.nvim_create_buf(true, false) vim.api.nvim_buf_set_lines(buf, 0, -1, true, { "other", "wrong" }) return buf');
+  // Once: entered again, and shown.
+  const once = await hooked(['one', 'TARGET'], `vim.api.nvim_win_set_buf(0, ${other})`);
+  const result = shown(await show({ path: once.path, match: 'TARGET' }));
+  assert.deepEqual([await lua('return vim.api.nvim_win_get_buf(...)', result.win), (await state(once.yours)).cursor[0]], [once.buf, 2]);
+  // Every time: refused, saying why.
+  const always = await hooked(['one', 'TARGET'], `vim.api.nvim_win_set_buf(0, ${other})`, false);
+  await assert.rejects(show({ path: always.path, match: 'TARGET' }), /autocommands showed another buffer in window \d+ instead of /);
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

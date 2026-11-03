@@ -234,18 +234,27 @@ function point.show(spec)
 			vim.cmd(("checktime %d"):format(buf))
 		end)
 	end
-	local line, last, col = spec.line, spec.endLine or spec.line, spec.col
-	if spec.match then
-		local found, err = find(buf, spec.match, spec.line or 1)
-		if not found then
-			fail(err or ("not found in %s: %s"):format(name, spec.match))
+	-- Where the place is in the buffer as it is now: its line, last line and column; or nil and why.
+	local function locate()
+		local line, last, col = spec.line, spec.endLine or spec.line, spec.col
+		if spec.match then
+			local found, err = find(buf, spec.match, spec.line or 1)
+			if not found then
+				return nil, err or ("not found in %s: %s"):format(name, spec.match)
+			end
+			line, last, col = unpack(found)
 		end
-		line, last, col = unpack(found)
+		local count = vim.api.nvim_buf_line_count(buf)
+		if last > count then
+			return nil, ("line %d is past the end of %s, at %d"):format(last, name, count)
+		end
+		return line, last, col
 	end
-	local count = vim.api.nvim_buf_line_count(buf)
-	if last > count then
-		fail(("line %d is past the end of %s, at %d"):format(last, name, count))
+	local line, last, col = locate()
+	if not line then
+		fail(last)
 	end
+	local tick = vim.api.nvim_buf_get_changedtick(buf)
 
 	local win, opened = window(buf), false
 	-- Where the user was goes in the window's jumplist, so <C-o> takes them back; unless asked
@@ -281,17 +290,27 @@ function point.show(spec)
 	elseif vim.api.nvim_win_get_cursor(win)[1] ~= line then
 		jump()
 	end
+	-- The user's autocommands, as it was entered, may have put another buffer in the window: it is
+	-- entered once more, then refused rather than fought over. Or they may have changed this one:
+	-- then the place is found again, in what is shown.
+	if vim.api.nvim_win_get_buf(win) ~= buf then
+		pcall(enter, win, buf, quiet)
+		if vim.api.nvim_win_get_buf(win) ~= buf then
+			error(("autocommands showed another buffer in window %d instead of %s"):format(win, name), 0)
+		end
+	end
+	if vim.api.nvim_buf_get_changedtick(buf) ~= tick then
+		line, last, col = locate()
+		if not line then
+			error(last, 0)
+		end
+	end
 	-- A file shown is listed, as the user's own would be; a buffer given is left as it was.
 	if spec.path then
 		vim.bo[buf].buflisted = true
 	end
 
 	local shown = vim.api.nvim_win_call(win, function()
-		-- Changed again by the user's autocommands as it was entered: still no line past the end.
-		count = vim.api.nvim_buf_line_count(buf)
-		if last > count then
-			error(("line %d is past the end of %s, at %d"):format(last, name, count), 0)
-		end
 		local before = vim.fn.winsaveview()
 		vim.cmd(("silent! %d,%dfoldopen!"):format(line, last))
 		-- On screen already, it is left where it is: the user knows where to look.

@@ -347,4 +347,5 @@ test('completion: a quote in a path is the path\'s own, until options begin', as
   assert.deepEqual(await values('say"h'), ['say"hello.txt:']);
   assert.deepEqual(await values('say"hello.txt:1 sc'), ['say"hello.txt:1 scroll=']);
   assert.equal(await values('a.ts:1 match="open sc'), null); // A quoted value still being typed.
+  assert.deepEqual(await values('say"hello.txt:1 focus=t'), ['say"hello.txt:1 focus=true ']);
 });

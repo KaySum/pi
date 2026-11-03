@@ -1095,6 +1095,34 @@ test('your BufEnter showing another buffer instead: entered once more, then refu
   await assert.rejects(show({ path: always.path, match: 'TARGET' }), /autocommands showed another buffer in window \d+ instead of /);
 });
 
+/** Your file shown, a terminal focused, and a WinEnter of its buffer running `hook`. */
+async function focusHooked(lines: string[], hook: string, once = true) {
+  const path = await file(lines);
+  const [yours] = await layout(path);
+  const buf = await bufOf(path);
+  await lua(`local buf, once = ...
+    vim.api.nvim_create_augroup('hook', {})
+    vim.api.nvim_create_autocmd('WinEnter', { group = 'hook', buffer = buf, once = once, callback = function() ${hook} end })`, buf, once);
+  return { path, yours, buf };
+}
+
+test('focusing, your WinEnter removing the code: not found, never a false success', async () => {
+  const { path } = await focusHooked(['header', 'TARGET', 'tail'], "vim.api.nvim_buf_set_lines(0, 1, 2, true, { 'REMOVED' })");
+  await assert.rejects(show({ path, match: 'TARGET' }, { focus: true, jump: false }), /not found in .*: TARGET/);
+});
+
+test('focusing, your WinEnter showing another buffer: entered once more, truthfully shown', async () => {
+  const other = await lua('local buf = vim.api.nvim_create_buf(true, false) vim.api.nvim_buf_set_lines(buf, 0, -1, true, { "other", "wrong" }) return buf');
+  const once = await focusHooked(['one', 'TARGET'], `vim.api.nvim_win_set_buf(0, ${other})`);
+  const result = shown(await show({ path: once.path, match: 'TARGET' }, { focus: true }));
+  assert.deepEqual([await lua('return vim.api.nvim_win_get_buf(...)', result.win), result.buf, (await state(once.yours)).cursor[0]], [once.buf, once.buf, 2]);
+  // Even one that always would: entering the buffer again in the window focused enters no window.
+  await lua('pcall(vim.api.nvim_del_augroup_by_name, "hook")');
+  const always = await focusHooked(['one', 'TARGET'], `vim.api.nvim_win_set_buf(0, ${other})`, false);
+  const again = shown(await show({ path: always.path, match: 'TARGET' }, { focus: true }));
+  assert.equal(await lua('return vim.api.nvim_win_get_buf(...)', again.win), always.buf);
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

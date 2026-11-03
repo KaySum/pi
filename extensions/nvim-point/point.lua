@@ -290,20 +290,30 @@ function point.show(spec)
 	elseif vim.api.nvim_win_get_cursor(win)[1] ~= line then
 		jump()
 	end
-	-- The user's autocommands, as it was entered, may have put another buffer in the window: it is
-	-- entered once more, then refused rather than fought over. Or they may have changed this one:
-	-- then the place is found again, in what is shown.
-	if vim.api.nvim_win_get_buf(win) ~= buf then
-		pcall(enter, win, buf, quiet)
+	-- The user's autocommands, as it was entered or focused, may have put another buffer in the
+	-- window: it is entered once more, then refused rather than fought over. Or they may have
+	-- changed this one: then the place is found again, in what is shown.
+	local function settle()
 		if vim.api.nvim_win_get_buf(win) ~= buf then
-			error(("autocommands showed another buffer in window %d instead of %s"):format(win, name), 0)
+			pcall(enter, win, buf, quiet)
+			if vim.api.nvim_win_get_buf(win) ~= buf then
+				error(("autocommands showed another buffer in window %d instead of %s"):format(win, name), 0)
+			end
+		end
+		if vim.api.nvim_buf_get_changedtick(buf) ~= tick then
+			line, last, col = locate()
+			if not line then
+				error(last, 0)
+			end
+			tick = vim.api.nvim_buf_get_changedtick(buf)
 		end
 	end
-	if vim.api.nvim_buf_get_changedtick(buf) ~= tick then
-		line, last, col = locate()
-		if not line then
-			error(last, 0)
-		end
+	settle()
+	-- Focus stays where it is, unless asked to follow, as when the user asked to go there; then
+	-- before the cursor is placed, so what focusing sets off is settled first.
+	if spec.focus then
+		vim.api.nvim_set_current_win(win)
+		settle()
 	end
 	-- A file shown is listed, as the user's own would be; a buffer given is left as it was.
 	if spec.path then
@@ -335,9 +345,5 @@ function point.show(spec)
 			scrolled = after.topline ~= before.topline or after.skipcol ~= before.skipcol,
 		}
 	end)
-	-- Focus stays where it is, unless asked to follow, as when the user asked to go there.
-	if spec.focus then
-		vim.api.nvim_set_current_win(win)
-	end
 	return shown
 end

@@ -83,10 +83,10 @@ reloaded as `'autoread'` would, if you have not changed it, before the place is 
 `match` or line is looked for in what is shown; else left as it is, and you are told after, in
 one line.
 
-Your autocommands may act as the file is entered. If they change it, the place is found again,
-in what is shown; if the code is gone, it rejects. If they put another buffer in the window,
-the file is entered once more, and if they do so again it rejects, rather than fight them or
-claim a place it did not show.
+Your autocommands may act as the file is entered, or its window focused (`focus: true`). If
+they change it, the place is found again, in what is shown; if the code is gone, it rejects.
+If they put another buffer in the window, the file is entered once more, and if they do so
+again it rejects, rather than fight them or claim a place it did not show.
 
 ## Development
 

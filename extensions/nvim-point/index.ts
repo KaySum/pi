@@ -97,11 +97,11 @@ export async function completePath(prefix: string, cwd: string) {
  * and the values some take.
  */
 export async function completePoint(prefix: string, cwd: string) {
-  // Once options begin, without their quoted values, whose text is no option; one still open is
-  // being typed. Before, a quote is the path's own.
-  const started = OPTIONS_START.test(prefix.trimStart());
-  const bare = prefix.replace(/"(?:[^"\\]|\\.)*"/g, '');
-  if (started && bare.includes('"')) return null;
+  // The options, once they begin, without their quoted values, whose text is no option; one still
+  // open is being typed. A quote before them is the path's own.
+  const text = prefix.trimStart(), at = text.search(OPTIONS_START), started = at >= 0;
+  const bare = started ? text.slice(at).replace(/"(?:[^"\\]|\\.)*"/g, '') : '';
+  if (bare.includes('"')) return null;
   // The place is still typed until options begin, or a space follows its line.
   const placing = !started && !/:\d+(-\d+)?(:\d+)?\s/.test(prefix);
   const paths = placing ? await completePath(prefix, cwd) : null;

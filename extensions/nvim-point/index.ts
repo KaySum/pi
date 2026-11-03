@@ -101,7 +101,7 @@ export async function completePoint(prefix: string, cwd: string) {
   if (bare.includes('"')) return null;
   const [key, typed] = last.split('=', 2);
   const items = typed === undefined
-    ? Object.keys(OPTIONS).filter(k => k.startsWith(key) && !bare.includes(` ${k}=`))
+    ? Object.keys(OPTIONS).filter(k => k.startsWith(key) && !new RegExp(`(?:^|\\s)${k}=`).test(bare.trimStart()))
       .map(k => ({ value: `${base}${k}=`, label: `${k}=`, description: OPTIONS[k] }))
     : (CHOICES[key] ?? []).filter(v => v.startsWith(typed)).map(v => ({ value: `${base}${key}=${v} `, label: v }));
   return items.length ? items : null;

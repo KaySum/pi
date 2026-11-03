@@ -172,6 +172,28 @@ local function open_here(spec)
 	return false
 end
 
+-- Warn with the first of `texts` that fits where messages go (`v:echospace`, less with 'ruler'
+-- and 'showcmd'), else the last cut to fit: a longer one would stop the editor at "Press ENTER".
+local function warn(texts)
+	local room = vim.v.echospace
+	local text = vim.iter(texts):find(function(text)
+		return vim.fn.strdisplaywidth(text) <= room
+	end)
+	if not text then
+		text = ""
+		for _, char in ipairs(vim.fn.split(texts[#texts], "\\zs")) do
+			if vim.fn.strdisplaywidth(text .. char) > room - 1 then
+				break
+			end
+			text = text .. char
+		end
+		text = room > 1 and text .. "…" or nil
+	end
+	if text then
+		vim.notify(text, vim.log.levels.WARN)
+	end
+end
+
 -- Whether a FileChangedShell autocommand of the user's applies to `buf`: one of its own, or one
 -- whose pattern Neovim matches to its file. Neovim's own matching decides (short and full
 -- names, 'fileignorecase'): each pattern is given to a probe of ours, fired for `buf` alone.
@@ -210,11 +232,10 @@ local function guarded(buf, fn)
 				local reason = vim.v.fcs_reason
 				vim.v.fcs_choice = reason == "changed" and vim.o.autoread and "reload" or ""
 				if vim.v.fcs_choice == "" then
-					-- One line, which a longer message would not be, stopping at "Press ENTER".
 					local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
 					local how = reason == "conflict" and " and here" or (" (%s)"):format(reason)
 					vim.schedule(function()
-						vim.notify(("%s changed on disk%s: :e! loads it"):format(name, how), vim.log.levels.WARN)
+						warn({ ("%s changed on disk%s: :e! loads it"):format(name, how), ("%s changed on disk%s"):format(name, how) })
 					end)
 				end
 			end,

@@ -42,9 +42,10 @@ export type Place = At | Of;
 
 /**
  * `shown` in `win`: `opened` if a window was opened for it (none showed a file, or the user's
- * has unsaved changes it could not hide), `scrolled` if the window scrolled. Or not shown: the
- * user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in the command-line
- * window; or, with `open: false`, the file is `closed`: no window of the tab shows it.
+ * has unsaved changes it could not hide), `scrolled` if the window scrolled, sideways too. Or
+ * not shown: the user is `busy` in that mode (`i`, `v`, `c`…, `r` at a prompt), or `cmdwin` in
+ * the command-line window; or, with `open: false`, the file is `closed`: no window of the tab
+ * shows it.
  */
 export type Pointed = Shown | { shown: false; busy: string; superseded?: true } | { shown: false; closed: true };
 export type Shown = { shown: true; win: number; buf: number; opened: boolean; scrolled: boolean };

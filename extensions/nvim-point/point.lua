@@ -308,6 +308,11 @@ function point.show(spec)
 				error(("autocommands showed another buffer in window %d instead of %s"):format(win, name), 0)
 			end
 		end
+		-- Or made it a buffer of another kind: a path's must stay a file's, and none a terminal.
+		local kind = vim.bo[buf].buftype
+		if (spec.path and kind ~= "") or kind == "terminal" then
+			error(spec.path and ("not a file: %s"):format(name) or ("%s is a terminal"):format(name), 0)
+		end
 		if vim.api.nvim_buf_get_changedtick(buf) ~= tick then
 			line, last, col = locate()
 			if not line then
@@ -350,7 +355,7 @@ function point.show(spec)
 			win = win,
 			buf = buf,
 			opened = opened,
-			scrolled = after.topline ~= before.topline or after.skipcol ~= before.skipcol,
+			scrolled = after.topline ~= before.topline or after.skipcol ~= before.skipcol or after.leftcol ~= before.leftcol,
 		}
 	end)
 	return shown

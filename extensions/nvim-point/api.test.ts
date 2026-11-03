@@ -1137,6 +1137,28 @@ test('a path your BufReadPost makes a buffer of another kind is refused, and not
   }
 });
 
+test('a path your BufEnter or WinEnter makes a buffer of another kind is refused; a buffer given stays allowed', async () => {
+  for (const kind of ['nofile', 'acwrite']) {
+    const entered = await hooked(['TARGET'], `vim.bo.buftype = '${kind}'`);
+    await assert.rejects(show({ path: entered.path, match: 'TARGET' }, { jump: false }), /not a file/, `BufEnter ${kind}`);
+    await lua('pcall(vim.api.nvim_del_augroup_by_name, "hook")');
+    const focused = await focusHooked(['TARGET'], `vim.bo.buftype = '${kind}'`);
+    await assert.rejects(show({ path: focused.path, match: 'TARGET' }, { focus: true }), /not a file/, `WinEnter ${kind}`);
+    await lua('pcall(vim.api.nvim_del_augroup_by_name, "hook")');
+  }
+  const given = await hooked(['TARGET'], "vim.bo.buftype = 'nofile'");
+  assert.equal(shown(await show({ buf: given.buf, match: 'TARGET' })).buf, given.buf);
+});
+
+test('scrolling sideways is scrolling too', async () => {
+  const path = await file(['x'.repeat(600) + 'TARGET']);
+  const [yours] = await layout(path);
+  await lua('vim.wo[...].wrap = false', yours);
+  assert.equal(shown(await show({ path, match: 'TARGET' })).scrolled, true);
+  assert.ok(await lua('return vim.api.nvim_win_call(..., vim.fn.winsaveview).leftcol', yours) > 0);
+  assert.equal(shown(await show({ path, match: 'TARGET' })).scrolled, false); // There already.
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

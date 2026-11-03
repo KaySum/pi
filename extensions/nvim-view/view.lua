@@ -56,6 +56,18 @@ local function layout(node)
 	return { split = node[1], children = vim.tbl_map(layout, node[2]) }
 end
 
+-- Where a window's text starts on the screen: inside a float's border (Neovim draws a side when
+-- its edge character is not empty), below a winbar.
+local function text_origin(win, info)
+	local border = vim.api.nvim_win_get_config(win).border
+	local function side(i)
+		local edge = type(border) == "table" and border[i]
+		edge = type(edge) == "table" and edge[1] or edge
+		return edge and edge ~= "" and 1 or 0
+	end
+	return info.winrow + side(2) + info.winbar, info.wincol + side(8)
+end
+
 -- What a window shows: its last line, even if only in part; each line on screen, top to
 -- bottom, with the screen row its text starts on and the rows it takes, a closed fold as one
 -- with the last line it hides; and how many rows are not empty.
@@ -67,9 +79,8 @@ local function shown(win, info, buf, view)
 	if botline < count and vim.o.display ~= "" and vim.fn.screenpos(win, botline + 1, 1).row ~= 0 then
 		botline = botline + 1
 	end
-	-- Text starts below the winbar, if there is one. Filler above the top line is measured apart:
-	-- only the part scrolled into view shows.
-	local origin = info.winrow + info.winbar
+	-- Filler above the top line is measured apart: only the part scrolled into view shows.
+	local origin = text_origin(win, info)
 	local lines, line, top, bottom = {}, info.topline, origin + view.topfill, origin + info.height
 	vim.api.nvim_win_call(win, function()
 		while line <= botline and top < bottom do
@@ -129,8 +140,8 @@ end
 local function screen_cursor(win, info, cursor, view, lines)
 	local screen = vim.fn.screenpos(win, cursor[1], cursor[2] + 1)
 	local inner, off, wrap = info.width, info.textoff, vim.wo[win].wrap
-	local origin = info.winrow + info.winbar -- The first row of text, below any winbar.
-	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - info.wincol < inner or not wrap) then
+	local origin, left = text_origin(win, info)
+	if screen.row ~= 0 and view.coladd == 0 and (screen.curscol - left < inner or not wrap) then
 		return { screen.row, screen.curscol }
 	end
 	local reclaimed = number_column(win, info)
@@ -187,7 +198,7 @@ local function screen_cursor(win, info, cursor, view, lines)
 	if col < off - (rows > 0 and reclaimed or 0) or col >= inner or rows + row < origin or rows + row >= origin + info.height then
 		return nil
 	end
-	return { row + rows, info.wincol + col }
+	return { row + rows, left + col }
 end
 
 local function window(win, current, previous, cwd)
@@ -196,6 +207,7 @@ local function window(win, current, previous, cwd)
 	local info = vim.fn.getwininfo(win)[1]
 	local cursor = vim.api.nvim_win_get_cursor(win)
 	local view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+	local text_row, text_col = text_origin(win, info)
 	local options = {}
 	for _, name in ipairs(OPTIONS) do
 		options[name] = vim.wo[win][name]
@@ -214,6 +226,8 @@ local function window(win, current, previous, cwd)
 		col = info.wincol,
 		width = info.width,
 		height = info.height,
+		textRow = text_row,
+		textCol = text_col + info.textoff,
 		textWidth = info.width - info.textoff,
 		textOff = info.textoff,
 		topline = lines[1] and lines[1].line or info.topline,

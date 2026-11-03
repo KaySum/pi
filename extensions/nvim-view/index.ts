@@ -20,7 +20,7 @@ const ORDER: Record<string, string[]> = Object.fromEntries(Object.entries({
   pi: 'buf windows',
   tab: 'id number focused',
   layout: 'split children win',
-  window: 'id number buf kind focused previous pi row col width height winbar textWidth textOff topline botline leftcol skipcol rows shown cursor screenCursor cwd float options',
+  window: 'id number buf kind focused previous pi row col width height winbar textRow textCol textWidth textOff topline botline leftcol skipcol rows shown cursor screenCursor cwd float options',
   line: 'line row rows fold',
   float: 'relative zindex focusable border',
   buffer: 'id name filetype buftype listed loaded modified readonly modifiable lines bytes changedtick windows lsp pi',
@@ -87,7 +87,7 @@ export function describe(view: View, stats?: Stats) {
     const float = win.float && `, float relative=${win.float.relative} zindex=${win.float.zindex} ${win.float.focusable ? 'focusable' : 'nofocusable'} border=${JSON.stringify(win.float.border)}`;
     lines.push('',
       `Window ${win.id} (#${win.number}), ${win.kind}, buffer ${win.buf}${marks.length ? `  [${marks.join(', ')}]` : ''}`,
-      `  ${win.width}×${win.height} at ${win.row},${win.col}, text ${win.textWidth} wide after a gutter of ${win.textOff}${float || ''}`,
+      `  ${win.width}×${win.height} at ${win.row},${win.col}${win.winbar ? ', below a winbar' : ''}, text ${win.textWidth} wide at ${win.textRow},${win.textCol} after a gutter of ${win.textOff}${float || ''}`,
       `  ${range(win.topline, win.botline)} in ${plural(win.rows, 'row')}: ${shownOf(win)}`
         + (win.leftcol || win.skipcol ? `; scrolled leftcol ${win.leftcol}, skipcol ${win.skipcol}` : ''),
       `  cursor ${win.cursor[0]}:${win.cursor[1]}, ${win.screenCursor ? `at ${win.screenCursor.join(',')} on screen` : 'not on screen'}`

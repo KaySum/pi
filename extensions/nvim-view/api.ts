@@ -35,10 +35,16 @@ export type Window = {
   pi?: true;
   /**
    * Where its top left is on the screen, 1-based; and its size in cells. With a `winbar`, its
-   * first row is the bar's, and `height` the rows of text below it.
+   * first row is the bar's, and `height` the rows of text below it. A float's top left is its
+   * border's, if it has one; `width` and `height` are inside it.
    */
   row: number; col: number; width: number; height: number;
   winbar?: true;
+  /**
+   * Where its text starts on the screen, 1-based: below a winbar, inside a float's border, after
+   * the number, sign and fold columns. With `textWidth` and `height`, the rectangle text is in.
+   */
+  textRow: number; textCol: number;
   /** The width left for text, and what the number, sign and fold columns take before it. */
   textWidth: number; textOff: number;
   /**

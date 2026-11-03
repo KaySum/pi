@@ -10,7 +10,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
 import { attach, connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
-import registerView from './index.ts';
+import registerView, { describe as summary } from './index.ts';
 import { bufferFor, bufferOf, isShown, lineAtRow, shownLine, useView, windowOf, type View } from './api.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
@@ -430,13 +430,38 @@ test('with a winbar, text starts below it: in the lines shown, the rows, and the
       vim.wo.winbar = 'bar'
       return vim.api.nvim_get_current_win()`);
     const w = await eventually(() => windowOf(changes.at(-1), win)?.winbar && windowOf(changes.at(-1), win)!);
-    assert.deepEqual([w.row, w.shown.map(s => s.row), w.rows, w.screenCursor], [1, [2, 3, 4], 3, [2, 1]]);
+    assert.deepEqual([w.row, w.textRow, w.shown.map(s => s.row), w.rows, w.screenCursor], [1, 2, [2, 3, 4], 3, [2, 1]]);
     assert.equal(lineAtRow(w, 1), undefined); // The bar's row.
+    assert.match(summary(changes.at(-1)!), new RegExp(`^Window ${win} .*\\n {2}\\d+×21 at 1,1, below a winbar, text \\d+ wide at 2,1 after`, 'm'));
     assert.equal(w.height, 21); // 24 lines, less the bar, the status line and the command line.
   } finally {
     await lua('vim.wo.winbar = ""');
     await shutdown();
   }
+});
+
+test('in a float with a border, text starts inside it, below a winbar too; a shadow takes no row above', async () => {
+  const { changes, shutdown } = await pi();
+  try {
+    const floats: number[] = await lua(`local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, true, { 'a', 'b', 'c' })
+      local function float(border, col, bar)
+        local win = vim.api.nvim_open_win(buf, false, { relative = 'editor', row = 2, col = col, width = 8, height = 4, border = border })
+        vim.wo[win].winbar = bar and 'bar' or ''
+        return win
+      end
+      return { float('single', 2), float('double', 14, true), float('shadow', 26), float({ '', '', '', '', '', '', '', '|' }, 38) }`);
+    const of = (win: number) => windowOf(changes.at(-1), win);
+    await eventually(() => floats.every(win => of(win)));
+    // Each at row 3 (row 2 from 0), its top left the border's: text a row and a column in where drawn.
+    const [single, double, shadow, left] = floats.map(win => of(win)!);
+    assert.deepEqual([single.row, single.col, single.textRow, single.textCol, single.shown.map(s => s.row)], [3, 3, 4, 4, [4, 5, 6]]);
+    assert.deepEqual([double.winbar, double.textRow, double.shown.map(s => s.row)], [true, 5, [5, 6, 7]]);
+    assert.deepEqual([shadow.textRow, shadow.textCol, shadow.shown.map(s => s.row)], [3, 27, [3, 4, 5]]);
+    assert.deepEqual([left.textRow, left.textCol, left.shown.map(s => s.row)], [3, 40, [3, 4, 5]]);
+    assert.equal(lineAtRow(single, 3), undefined); // The border's row.
+    assert.equal(lineAtRow(single, 4)?.line, 1);
+  } finally { await shutdown(); }
 });
 
 test('a refresh brings every extension the view it made, and one from a Pi gone is none', async () => {
@@ -585,7 +610,7 @@ test('/nvim-view shows the view readably, all of it; /nvim-view-json exactly', a
     assert.match(text, /^Tab 1 of 1; ids \d+$/m);
     assert.match(text, new RegExp(`^Layout: row\\[${win}, ${other}\\]$`, 'm'));
     assert.match(text, new RegExp(`^Window ${win} \\(#1\\), normal, buffer ${v.focus.buf} {2}\\[yours, focused\\]$`, 'm'));
-    assert.match(text, /^ {2}40×22 at 1,1, text 40 wide after a gutter of 0$/m);
+    assert.match(text, /^ {2}40×22 at 1,1, text 40 wide at 1,1 after a gutter of 0$/m);
     assert.match(text, /^ {2}lines 1–24 in 22 rows: 1–2, 3–5 folded, 6–24$/m);
     assert.match(text, /^ {2}cursor 1:0, at 1,1 on screen$/m);
     assert.match(text, /^ {2}colorcolumn= conceallevel=0 .* wrap$/m);

@@ -630,7 +630,8 @@ test('waiting no longer than it may, it says you are busy, and nothing moves', a
   const yours = await typing();
   const started = performance.now();
   assert.deepEqual(await show({ path: await file(), line: 120 }, { wait: 300 }), { shown: false, busy: 'i' });
-  assert.ok(performance.now() - started >= 300);
+  // Timers may wake a little early, and the wait is kept by another clock: within a few ms.
+  assert.ok(performance.now() - started >= 295, `${performance.now() - started} ms`);
   await editor.request('nvim_input', ['<Esc>']);
   await delay(250);
   assert.equal((await state(yours)).cursor[0], 1);
@@ -1121,6 +1122,19 @@ test('focusing, your WinEnter showing another buffer: entered once more, truthfu
   const always = await focusHooked(['one', 'TARGET'], `vim.api.nvim_win_set_buf(0, ${other})`, false);
   const again = shown(await show({ path: always.path, match: 'TARGET' }, { focus: true }));
   assert.equal(await lua('return vim.api.nvim_win_get_buf(...)', again.win), always.buf);
+});
+
+test('a path your BufReadPost makes a buffer of another kind is refused, and not left loaded', async () => {
+  for (const kind of ['nofile', 'acwrite']) {
+    const path = await file(['TARGET']);
+    await layout(await file());
+    await lua(`local path, kind = ...
+      vim.api.nvim_create_augroup('hook', {})
+      vim.api.nvim_create_autocmd('BufReadPost', { group = 'hook', pattern = path, once = true, callback = function() vim.bo.buftype = kind end })`, path, kind);
+    await assert.rejects(show({ path, match: 'TARGET' }), /not a file/, kind);
+    assert.equal(await bufOf(path), -1, kind);
+    await lua('pcall(vim.api.nvim_del_augroup_by_name, "hook")');
+  }
 });
 
 // --- No traces --------------------------------------------------------------------------------

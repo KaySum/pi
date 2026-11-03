@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
@@ -348,4 +348,15 @@ test('completion: a quote in a path is the path\'s own, until options begin', as
   assert.deepEqual(await values('say"hello.txt:1 sc'), ['say"hello.txt:1 scroll=']);
   assert.equal(await values('a.ts:1 match="open sc'), null); // A quoted value still being typed.
   assert.deepEqual(await values('say"hello.txt:1 focus=t'), ['say"hello.txt:1 focus=true ']);
+});
+
+test('completion: a link to a directory goes on with "/", one to a file takes ":"', async () => {
+  await mkdir(join(dir, 'real-dir'), { recursive: true });
+  await writeFile(join(dir, 'real-dir', 'inside.txt'), '');
+  await symlink(join(dir, 'real-dir'), join(dir, 'linked-dir'));
+  await symlink(join(dir, 'real-dir', 'inside.txt'), join(dir, 'linked-file.txt'));
+  await symlink(join(dir, 'nowhere'), join(dir, 'linked-broken'));
+  const values = async (prefix: string) => (await completePoint(prefix, dir))?.map(item => item.value) ?? null;
+  assert.deepEqual(await values('linked-'), ['linked-dir/', 'linked-broken:', 'linked-file.txt:']);
+  assert.deepEqual(await values('linked-dir/ins'), ['linked-dir/inside.txt:']);
 });

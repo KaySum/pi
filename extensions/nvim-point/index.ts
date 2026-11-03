@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { usePoint, type Place, type ShowOptions } from './api.ts';
 
@@ -80,15 +80,19 @@ export async function completePath(prefix: string, cwd: string) {
   const typed = prefix.trimStart();
   if (/:\d*(-\d*)?(:\d*)?$/.test(typed)) return null;
   const folder = typed.slice(0, typed.lastIndexOf('/') + 1), start = typed.slice(folder.length);
-  const entries = await readdir(resolve(cwd, folder || '.'), { withFileTypes: true }).catch(() => []);
-  const items = entries
-    .filter(entry => entry.name.startsWith(start) && (start.startsWith('.') || !entry.name.startsWith('.')))
-    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+  const where = resolve(cwd, folder || '.');
+  const entries = (await readdir(where, { withFileTypes: true }).catch(() => []))
+    .filter(entry => entry.name.startsWith(start) && (start.startsWith('.') || !entry.name.startsWith('.')));
+  // A link is what it links to: a directory goes on with "/" too.
+  const found = await Promise.all(entries.map(async entry => ({
+    name: entry.name,
+    directory: entry.isDirectory()
+      || (entry.isSymbolicLink() && await stat(resolve(where, entry.name)).then(info => info.isDirectory(), () => false)),
+  })));
+  const items = found
+    .sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name))
     .slice(0, SHOWN)
-    .map(entry => {
-      const name = entry.isDirectory() ? `${entry.name}/` : entry.name;
-      return { value: `${folder}${name}${entry.isDirectory() ? '' : ':'}`, label: name };
-    });
+    .map(({ name, directory }) => ({ value: `${folder}${name}${directory ? '/' : ':'}`, label: directory ? `${name}/` : name }));
   return items.length ? items : null;
 }
 

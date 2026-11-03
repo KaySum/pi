@@ -51,7 +51,15 @@ local function buffer(spec)
 	if vim.bo[buf].buftype ~= "" then
 		error(("not a file: %s"):format(path), 0)
 	end
-	return buf, load(buf, existed)
+	local done = load(buf, existed)
+	-- The user's autocommands, as it was read, may have made it a buffer of another kind.
+	if vim.bo[buf].buftype ~= "" then
+		if done then
+			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
+		end
+		error(("not a file: %s"):format(path), 0)
+	end
+	return buf, done
 end
 
 local function shows_file(win)

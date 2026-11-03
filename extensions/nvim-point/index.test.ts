@@ -8,7 +8,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
 import { connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
-import registerPoint from './index.ts';
+import registerPoint, { completePath, parsePoint } from './index.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -157,6 +157,7 @@ test('what is not a line of a file says why', async () => {
   assert.deepEqual(await run('there.ts:5:0'), ['Columns count from 1: 0', 'warning']);
   assert.deepEqual(await run('there.ts:301'), [`line 301 is past the end of ${join(dir, 'there.ts')}, at 300`, 'warning']);
   assert.deepEqual(await run('missing.ts:1'), [`no such file: ${join(dir, 'missing.ts')}`, 'warning']);
+  assert.deepEqual(await run('12'), ['A place needs a path or a buf', 'warning']);
 });
 
 test('paths complete as you type: directories go on with "/", files take ":" for their line', async () => {
@@ -237,6 +238,10 @@ test('after the place, option names complete, and the values some take', async (
   assert.equal((await complete('a.ts:3 scroll=top '))!.includes('a.ts:3 scroll=top scroll='), false);
   assert.equal((await complete('a.ts:3 '))!.length, 8);
   assert.equal(await complete('a.ts:3 wait='), null); // A number: nothing to offer.
+  // Within a quoted value, nothing; one closed is passed over, what it says aside.
+  assert.equal(await complete('a.ts:3 match="foo sc'), null);
+  assert.equal(await complete('a.ts:3 match="a\\" sc'), null);
+  assert.deepEqual(await complete('a.ts:3 match="x scroll=" sc'), ['a.ts:3 match="x scroll=" scroll=']);
 });
 
 test('a quoted value takes JSON escapes; one never closed says what is wrong with it', async () => {
@@ -267,4 +272,58 @@ test('an option given twice: the last says', async () => {
   await file('there.ts');
   await run('there.ts:200 scroll=center scroll=top');
   assert.equal(await lua('return vim.api.nvim_win_call(..., function() return vim.fn.line("w0") end)', yours), 197);
+});
+
+test('the place and options parse as show takes them, whatever the order and spacing', () => {
+  for (const [args, place, options = {}] of [
+    ['a.ts:3', { path: 'a.ts', line: 3 }],
+    ['a.ts:3-9:4', { path: 'a.ts', line: 3, endLine: 9, col: 3 }],
+    ['a.ts:3:1:2', { path: 'a.ts:3', line: 1, col: 1 }], // The line follows the last colon but one.
+    ['my dir/x=1.ts:3', { path: 'my dir/x=1.ts', line: 3 }],
+    ['a=b.ts:3', { path: 'a=b.ts', line: 3 }],
+    ['a=b.ts:3 scroll=top', { path: 'a=b.ts', line: 3 }, { scroll: 'top' }],
+    ['/abs/a.ts:3', { path: '/abs/a.ts', line: 3 }],
+    ['  a.ts:3\tscroll=top  ', { path: 'a.ts', line: 3 }, { scroll: 'top' }],
+    ['a.ts:3 scroll="minimal" focus=true jump=false open=false', { path: 'a.ts', line: 3 }, { scroll: 'minimal', focus: true, jump: false, open: false }],
+    ['a.ts:3 wait=Infinity context=0', { path: 'a.ts', line: 3, context: 0 }, { wait: Infinity }],
+    ['a.ts match="x y"', { path: 'a.ts', match: 'x y' }],
+    ['a.ts:7 match=x', { path: 'a.ts', line: 7, match: 'x' }],
+    ['3-4 buf=2', { buf: 2, line: 3, endLine: 4 }],
+    ['buf=2 match="a\\nb"', { buf: 2, match: 'a\nb' }],
+    ['match=x buf=2', { buf: 2, match: 'x' }],
+  ] as const) {
+    assert.deepEqual(parsePoint(args), { place, options }, args);
+  }
+});
+
+test('what does not parse says why, before anything is shown', () => {
+  for (const [args, message] of [
+    ['a.ts:3 match="a" b', /Usage:/],
+    ['a.ts:3 focus=true focus', /Usage:/],
+    ['a.ts:3 =top', /Usage:/],
+    ['buf=2', /Usage:/],
+    ['a.ts:3 wait=', /wait= is not a value wait takes/],
+    ['a.ts:3 context=x', /context=x is not a value context takes/],
+    ['a.ts:3 buf=0x10', /buf=0x10 is not a value buf takes/],
+    ['a.ts:3 context=1e1', /context=1e1 is not a value context takes/],
+    ['a.ts:3 context=1.5', /context=1.5 is not a value context takes/],
+    ['a.ts:3 context=Infinity', /context=Infinity is not a value context takes/],
+    ['a.ts:3 wait=-5', /wait=-5 is not a value wait takes/],
+    ['a.ts:3 jump=no', /jump=no is not a value jump takes/],
+    ['a.ts:3 scroll="up"', /scroll="up" is not a value scroll takes/],
+    ['a.ts:3 match=""', /match="" is not a value match takes/],
+    ['a.ts:3 Scroll=top', /No option Scroll:/],
+  ] as const) {
+    assert.throws(() => parsePoint(args), message, args);
+  }
+});
+
+test('paths complete no more than 50 at once, and none in a directory that is not there', async () => {
+  const many = join(dir, 'many');
+  await mkdir(many);
+  await Promise.all(Array.from({ length: 60 }, (_, i) => writeFile(join(many, `f${String(i).padStart(2, '0')}.ts`), '')));
+  const items = (await completePath('many/', dir))!;
+  assert.deepEqual([items.length, items[0].value, items.at(-1)!.value], [50, 'many/f00.ts:', 'many/f49.ts:']);
+  assert.equal(await completePath('nowhere/', dir), null);
+  assert.equal(await completePath('many/zz', dir), null);
 });

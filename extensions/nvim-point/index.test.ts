@@ -242,6 +242,9 @@ test('after the place, option names complete, and the values some take', async (
   assert.equal(await complete('a.ts:3 match="foo sc'), null);
   assert.equal(await complete('a.ts:3 match="a\\" sc'), null);
   assert.deepEqual(await complete('a.ts:3 match="x scroll=" sc'), ['a.ts:3 match="x scroll=" scroll=']);
+  // Given first, before any place, an option is given all the same.
+  assert.equal((await complete('buf=2 '))!.some(value => value.endsWith('buf=')), false);
+  assert.equal((await complete('  match="x" '))!.some(value => value.endsWith('match=')), false);
 });
 
 test('a quoted value takes JSON escapes; one never closed says what is wrong with it', async () => {

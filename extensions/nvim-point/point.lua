@@ -164,11 +164,10 @@ local function open_here(spec)
 	return false
 end
 
--- Show `buf` in `win`; with `quiet`, leaving its jumplist and alternate file as they were.
--- Entering a buffer whose file changed on disk, Neovim asks what to do at a
--- prompt, which would hold this call until the user answers: unless they handle it themselves
+-- Run `fn` where Neovim may find `buf`'s file changed on disk and ask what to do at a prompt,
+-- which would hold this call until the user answers: unless they handle it themselves
 -- (FileChangedShell), it is reloaded as 'autoread' would, else left, and they are told after.
-local function enter(win, buf, quiet)
+local function guarded(buf, fn)
 	local guard = #vim.api.nvim_get_autocmds({ event = "FileChangedShell" }) == 0
 		and vim.api.nvim_create_autocmd("FileChangedShell", {
 			buffer = buf,
@@ -185,7 +184,18 @@ local function enter(win, buf, quiet)
 				end
 			end,
 		})
-	local ok, err = pcall(function()
+	local ok, err = pcall(fn)
+	if guard then
+		vim.api.nvim_del_autocmd(guard)
+	end
+	if not ok then
+		error(err, 0)
+	end
+end
+
+-- Show `buf` in `win`; with `quiet`, leaving its jumplist and alternate file as they were.
+local function enter(win, buf, quiet)
+	guarded(buf, function()
 		if not quiet then
 			return vim.api.nvim_win_set_buf(win, buf)
 		end
@@ -193,12 +203,6 @@ local function enter(win, buf, quiet)
 			vim.cmd(("keepalt keepjumps buffer %d"):format(buf))
 		end)
 	end)
-	if guard then
-		vim.api.nvim_del_autocmd(guard)
-	end
-	if not ok then
-		error(err, 0)
-	end
 end
 
 --- Show `spec.path` (or `spec.buf`) at `spec.line` (to `spec.endLine`), the cursor at `spec.col`
@@ -222,6 +226,13 @@ function point.show(spec)
 			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
 		end
 		error(message, 0)
+	end
+	-- A file changed on disk since it was loaded is reloaded now, as entering it would: the place
+	-- is found in what will be shown.
+	if not done and vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+		guarded(buf, function()
+			vim.cmd(("checktime %d"):format(buf))
+		end)
 	end
 	local line, last, col = spec.line, spec.endLine or spec.line, spec.col
 	if spec.match then
@@ -276,6 +287,11 @@ function point.show(spec)
 	end
 
 	local shown = vim.api.nvim_win_call(win, function()
+		-- Changed again by the user's autocommands as it was entered: still no line past the end.
+		count = vim.api.nvim_buf_line_count(buf)
+		if last > count then
+			error(("line %d is past the end of %s, at %d"):format(last, name, count), 0)
+		end
 		local before = vim.fn.winsaveview()
 		vim.cmd(("silent! %d,%dfoldopen!"):format(line, last))
 		-- On screen already, it is left where it is: the user knows where to look.

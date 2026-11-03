@@ -8,7 +8,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { launch } from '../nvim-service/service.mjs';
 import { connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
-import registerPoint, { completePath, parsePoint } from './index.ts';
+import registerPoint, { completePath, completePoint, parsePoint } from './index.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
 const { socket } = await service.ready;
@@ -329,4 +329,14 @@ test('paths complete no more than 50 at once, and none in a directory that is no
   assert.deepEqual([items.length, items[0].value, items.at(-1)!.value], [50, 'many/f00.ts:', 'many/f49.ts:']);
   assert.equal(await completePath('nowhere/', dir), null);
   assert.equal(await completePath('many/zz', dir), null);
+});
+
+test('completion: a first option\'s value; paths with spaces in them, before any option', async () => {
+  await writeFile(join(dir, 'with space.txt'), '');
+  const values = async (prefix: string) => (await completePoint(prefix, dir))?.map(item => item.value) ?? null;
+  assert.deepEqual(await values('focus=t'), ['focus=true ']);
+  assert.deepEqual(await values('scroll='), ['scroll=center ', 'scroll=top ', 'scroll=minimal ']);
+  assert.deepEqual(await values('with sp'), ['with space.txt:']);
+  // No file by that name: the word is an option's.
+  assert.deepEqual(await values('there.ts m'), ['there.ts match=']);
 });

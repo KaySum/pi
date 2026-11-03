@@ -79,8 +79,9 @@ or device, a buffer of another kind), lines past its end, or a `match` not there
 
 A file changed on disk since Neovim loaded it would have Neovim ask what to do at a prompt,
 holding the call until you answer. Unless you handle that yourself (`FileChangedShell`), it is
-reloaded as `'autoread'` would, if you have not changed it; else left as it is, and you are told
-after, in one line.
+reloaded as `'autoread'` would, if you have not changed it, before the place is found, so a
+`match` or line is looked for in what is shown; else left as it is, and you are told after, in
+one line.
 
 ## Development
 

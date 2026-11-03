@@ -143,8 +143,10 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
         const result = await once(spec, options);
         // Only being busy passes: a file not open stays so, whatever the wait.
         if (result.shown || !('busy' in result) || Date.now() >= until) return result;
-        await delay(RETRY_MS, undefined, { signal: options.signal });
+        // No longer than the wait has left: nothing is shown once it is over.
+        await delay(Math.min(RETRY_MS, until - Date.now()), undefined, { signal: options.signal });
         if (ticket !== latest) return { ...result, superseded: true };
+        if (Date.now() >= until) return result;
       }
     },
   };

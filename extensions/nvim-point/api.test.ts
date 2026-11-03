@@ -679,6 +679,20 @@ test('when you are free already, waiting changes nothing: shown at once', async 
   await assert.rejects(show({ path: await file(), line: 1 }, { wait: Number.NaN }), /wait must be milliseconds/);
 });
 
+test('a wait ends when it says: no later try moves the editor', async () => {
+  // Busy once, then free: a try after the wait would show the place.
+  let calls = 0;
+  const fake = { lua: async () => (++calls === 1 ? { shown: false, busy: 'i' } : { shown: true, win: 1, buf: 1, opened: false, scrolled: false }) };
+  const started = performance.now();
+  assert.deepEqual(await point(fake as never, dir).show({ path: 'x.ts', line: 1 }, { wait: 10 }), { shown: false, busy: 'i' });
+  assert.equal(calls, 1);
+  assert.ok(performance.now() - started < 60, `${performance.now() - started} ms`);
+  // A wait longer than a retry does try again, and shows it.
+  calls = 0;
+  assert.equal((await point(fake as never, dir).show({ path: 'x.ts', line: 1 }, { wait: 500 })).shown, true);
+  assert.equal(calls, 2);
+});
+
 // --- What it resolves to ----------------------------------------------------------------------
 
 test('it resolves to the window, the buffer, and whether it opened a window or scrolled', async () => {
@@ -1013,6 +1027,39 @@ test('nothing of ours is left handling files changed on disk, after or on failur
   shown(await show({ path, line: 1 }));
   await assert.rejects(show({ path, line: 99 }));
   assert.equal(await handlers(), 0);
+});
+
+/** A file loaded in Neovim but in no window, then rewritten on disk as `now`, after `layout`. */
+async function rewritten(before: string[], now: string[]) {
+  const path = await file(before);
+  const [yours] = await layout(await file());
+  await lua('vim.fn.bufload(vim.fn.bufadd(...))', path);
+  await writeFile(path, now.join('\n') + '\n');
+  await utimes(path, new Date(), new Date(Date.now() + 5000));
+  return { path, yours };
+}
+
+test('a file changed on disk is reloaded before the place is found: a match where it is now', async () => {
+  for (const jump of [true, false]) {
+    const { path, yours } = await rewritten(['header', 'TARGET', 'tail'], ['header', 'new 1', 'new 2', 'TARGET', 'tail']);
+    shown(await show({ path, match: 'TARGET' }, { jump }));
+    assert.deepEqual([(await state(yours)).cursor[0], await lua('return vim.api.nvim_buf_line_count(vim.fn.bufnr(...))', path)], [4, 5], `jump ${jump}`);
+  }
+});
+
+test('a file changed on disk is reloaded before the place is found: code gone is not found', async () => {
+  const { path, yours } = await rewritten(['header', 'TARGET', 'tail'], ['header', 'tail']);
+  const before = await state(yours);
+  await assert.rejects(show({ path, match: 'TARGET' }), /not found in .*: TARGET/);
+  assert.equal((await state(yours)).path, before.path);
+});
+
+test('a file changed on disk is reloaded before its lines are checked: shorter, or longer', async () => {
+  const shorter = await rewritten(['1', '2', '3', '4', '5'], ['1']);
+  await assert.rejects(show({ path: shorter.path, line: 5 }), /line 5 is past the end of .*, at 1\b/);
+  const longer = await rewritten(['1'], ['1', '2', '3']);
+  shown(await show({ path: longer.path, line: 3 }));
+  assert.deepEqual([(await state(longer.yours)).path, (await state(longer.yours)).cursor[0]], [longer.path, 3]);
 });
 
 // --- No traces --------------------------------------------------------------------------------

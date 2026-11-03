@@ -30,6 +30,8 @@ npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
 Neovim it runs inside, when started from a Neovim terminal.
 [`nvim-virtual-text`](extensions/nvim-virtual-text/README.md) lets other extensions annotate the
 code there with virtual text.
+[`nvim-view`](extensions/nvim-view/README.md) gives them what you see there: the splits and
+windows on screen, the lines in them, the buffers they show, and focus.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

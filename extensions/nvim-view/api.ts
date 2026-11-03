@@ -1,0 +1,193 @@
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+
+/** Tab ids, window ids and buffer ids are Neovim's handles. Lines are 1-based. */
+export type Layout = { win: number } | { split: 'row' | 'col'; children: Layout[] };
+
+/** A tab, as the tabline names it; only the current one's windows are on screen. */
+export type Tab = {
+  id: number;
+  /** As `:tabnext` counts them, from 1. */
+  number: number;
+  focused?: true;
+};
+
+export type ShownLine = {
+  line: number;
+  /** The screen row its text starts on, 1-based, below any virtual lines above it. */
+  row: number;
+  /** The rows its text takes once wrapped, as many as fit. */
+  rows: number;
+  /** For a closed fold, the last line it hides. */
+  fold?: number;
+};
+
+export type Window = {
+  id: number;
+  /** As `<C-w>` counts them in its tab, from 1. */
+  number: number;
+  buf: number;
+  /** `normal` shows a file; else `float`, `terminal`, `help`, `quickfix`, `loclist`, `nofile`, `prompt`… */
+  kind: string;
+  focused?: true;
+  /** The window the user came from to the focused one (`#`). */
+  previous?: true;
+  /** Shows Pi's own terminal. */
+  pi?: true;
+  /**
+   * Where its top left is on the screen, 1-based; and its size in cells. With a `winbar`, its
+   * first row is the bar's, and `height` the rows of text below it. A float's top left is its
+   * border's, if it has one; `width` and `height` are inside it.
+   */
+  row: number; col: number; width: number; height: number;
+  winbar?: true;
+  /**
+   * Where its text starts on the screen, 1-based: below a winbar, inside a float's border, after
+   * the number, sign and fold columns. With `textWidth` and `height`, the rectangle text is in.
+   */
+  textRow: number; textCol: number;
+  /** The width left for text, and what the number, sign and fold columns take before it. */
+  textWidth: number; textOff: number;
+  /**
+   * The first and last buffer lines it shows, even in part: with wrap, the last may show only its
+   * start, and the first only its end, past `skipcol`. How far it is scrolled sideways.
+   */
+  topline: number; botline: number; leftcol: number; skipcol: number;
+  /**
+   * How many of its `height` rows of text are taken, a winbar aside: by text, virtual lines, or
+   * `@` where a line does not fit; the rest are empty. With 'cpoptions' n, a 'statuscolumn' beside sign or fold columns, and the top line
+   * smooth-scrolled partway, its rows can be miscounted, as Neovim measures them: so can `shown`.
+   */
+  rows: number;
+  /** The lines on screen, top to bottom; a closed fold is one, its first line. */
+  shown: ShownLine[];
+  /** 1-based line, 0-based byte column. */
+  cursor: [line: number, col: number];
+  /**
+   * Where the cursor is on the screen, 1-based, as `row` and `col` count. Text concealed before
+   * it on its line is counted as if shown, as Neovim's `screenpos()` counts it: the column is
+   * then too far right. And with 'cpoptions' n, a 'statuscolumn' beside sign or fold columns,
+   * and inline virtual text at the cursor scrolled off by smoothscroll, it can be misplaced.
+   */
+  screenCursor?: [row: number, col: number];
+  cwd: string;
+  float?: { relative: string; zindex?: number; focusable?: boolean; border?: unknown };
+  options: {
+    wrap: boolean; number: boolean; relativenumber: boolean; signcolumn: string; foldcolumn: string;
+    cursorline: boolean; scrolloff: number; sidescrolloff: number; list: boolean; diff: boolean;
+    spell: boolean; conceallevel: number; colorcolumn: string;
+  };
+};
+
+export type Buffer = {
+  id: number;
+  /** Its file, for one that has one: an absolute path. */
+  name: string;
+  filetype: string;
+  /** Empty for a file; else `terminal`, `help`, `nofile`, `quickfix`… */
+  buftype: string;
+  listed: boolean; loaded: boolean; modified: boolean; readonly: boolean; modifiable: boolean;
+  /** How many lines and bytes it holds; only for a loaded buffer. */
+  lines?: number; bytes?: number;
+  /** Goes up with every change to its text. */
+  changedtick: number;
+  /** The windows on screen showing it. */
+  windows: number[];
+  /** Names of the language servers attached. */
+  lsp: string[];
+  pi?: true;
+};
+
+export type View = {
+  editor: {
+    /** Its size in cells. */
+    columns: number; lines: number; cmdheight: number;
+    /** As `mode()` gives it (`n`, `i`, `v`, `t`…); `blocking` while it waits at a prompt. */
+    mode: string; blocking: boolean;
+    cwd: string;
+    /** Whether the terminal it runs in has focus, once it has said (terminals that report it). */
+    focused?: boolean;
+  };
+  focus: { tab: number; win: number; buf: number; previous?: number };
+  /**
+   * The user's window: the focused one unless it is Pi's terminal or another like it, else
+   * the one they came from, else any showing a file.
+   */
+  you?: number;
+  /** Pi's terminal buffer, and the windows showing it, if it is on screen. */
+  pi?: { buf: number; windows: number[] };
+  tabs: Tab[];
+  /** The current tab's splits: a `row` side by side, a `col` stacked, windows its leaves. */
+  layout: Layout;
+  /** What is on screen: the current tab's windows, floats included but those it hides. */
+  windows: Window[];
+  /** The buffers they show. */
+  buffers: Buffer[];
+};
+
+// Lookups in a view, or in none: `windowOf(view(), id)` while not attached is undefined.
+export const windowOf = (view: View | undefined, id: number | undefined) => view?.windows.find(win => win.id === id);
+export const bufferOf = (view: View | undefined, id: number | undefined) => view?.buffers.find(buf => buf.id === id);
+/** The buffer of a file, by its absolute path. */
+export const bufferFor = (view: View | undefined, path: string) => view?.buffers.find(buf => buf.name === path);
+
+/** Where a line is on screen in a window: its own entry, or the closed fold hiding it. */
+export const shownLine = (win: Window | undefined, line: number) =>
+  win?.shown.find(shown => line >= shown.line && line <= (shown.fold ?? shown.line));
+/** Whether a line's text is on screen in a window, not hidden in a closed fold. */
+export const isShown = (win: Window | undefined, line: number) => shownLine(win, line)?.line === line;
+/** The line shown at a screen row in a window, if one is. */
+export const lineAtRow = (win: Window | undefined, row: number) =>
+  win?.shown.find(shown => row >= shown.row && row < shown.row + shown.rows);
+
+export type ViewHandle = {
+  /** The latest view, at once; undefined while Pi is not attached to Neovim. */
+  (): View | undefined;
+  /** A view made now, rather than the latest sent: the latest from then, for every extension. */
+  refresh(): Promise<View | undefined>;
+};
+
+/**
+ * For other extensions: `const view = useView(pi, onChange?)` at load, then `view()` wherever
+ * the editor's state is needed. `onChange` hears every new view: a burst of changes makes one,
+ * and one the same as the last is not sent.
+ */
+export function useView(pi: ExtensionAPI, onChange?: (view: View) => void): ViewHandle {
+  let latest: View | undefined;
+  // How many times the editor has gone, and views have come: a refresh answered across a
+  // stop is no view, and one asked before a view came does not replace it.
+  let stops = 0, received = 0;
+  pi.events.on('nvim-view:changed', view => {
+    received++;
+    latest = view as View;
+    onChange?.(latest);
+  });
+  pi.events.on('nvim-view:stopped', () => {
+    latest = undefined;
+    stops++;
+  });
+  const ask = () => pi.events.emit('nvim-view:get', { reply: (view?: View) => { latest = view; } });
+  pi.on('session_start', ask);
+  return Object.assign(() => {
+    if (!latest) ask();
+    return latest;
+  }, {
+    refresh: () => new Promise<View | undefined>(resolve => {
+      let answered = false;
+      const asked = stops, since = received;
+      // A view that is new reaches every extension's `latest` and `onChange`, as
+      // `nvim-view:changed`; this one's `latest` is the view in any case.
+      pi.events.emit('nvim-view:refresh', {
+        reply: (view: Promise<View | undefined>) => {
+          answered = true;
+          resolve(view.then(fresh => {
+            if (stops !== asked) return undefined;
+            // A new view would have come as `nvim-view:changed`, which this is newer than.
+            if (fresh && received === since) latest = fresh;
+            return fresh;
+          }));
+        },
+      });
+      if (!answered) resolve(undefined); // nvim-view is not loaded.
+    }),
+  });
+}

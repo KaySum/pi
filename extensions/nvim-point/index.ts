@@ -24,8 +24,8 @@ const CHOICES: Record<string, string[]> = {
 };
 const NUMBERS = ['buf', 'context', 'wait'];
 const OPTION = /\s+(\w+)=("(?:[^"\\]|\\.)*"|\S*)/y;
-// Where the options begin, after the place.
-const OPTIONS_START = /(?:^|\s)\w+=/;
+// Where the options begin: after a space, or first only with an option's name, so a path may hold "=".
+const OPTIONS_START = new RegExp(`^(?:${Object.keys(OPTIONS).join('|')})=|\\s\\w+=`);
 
 function value(key: string, raw: string): unknown {
   let text: string | undefined = raw;
@@ -33,7 +33,7 @@ function value(key: string, raw: string): unknown {
   const result = text === undefined ? undefined
     : key === 'match' ? text
     : CHOICES[key]?.includes(text) ? (key === 'scroll' ? text : text === 'true')
-    : NUMBERS.includes(key) && text !== '' && !Number.isNaN(Number(text)) ? Number(text)
+    : NUMBERS.includes(key) && (/^\d+$/.test(text) || (key === 'wait' && text === 'Infinity')) ? Number(text)
     : undefined;
   if (result === undefined || result === '') throw new Error(`${key}=${raw} is not a value ${key} takes: ${OPTIONS[key]}`);
   return result;
@@ -96,9 +96,12 @@ export async function completePath(prefix: string, cwd: string) {
 export async function completePoint(prefix: string, cwd: string) {
   if (!/\s/.test(prefix.trimStart())) return completePath(prefix, cwd);
   const last = /\S*$/.exec(prefix)![0], base = prefix.slice(0, prefix.length - last.length);
+  // Without the quoted values, whose text is no option; one still open is being typed.
+  const bare = prefix.replace(/"(?:[^"\\]|\\.)*"/g, '');
+  if (bare.includes('"')) return null;
   const [key, typed] = last.split('=', 2);
   const items = typed === undefined
-    ? Object.keys(OPTIONS).filter(k => k.startsWith(key) && !base.includes(` ${k}=`))
+    ? Object.keys(OPTIONS).filter(k => k.startsWith(key) && !bare.includes(` ${k}=`))
       .map(k => ({ value: `${base}${k}=`, label: `${k}=`, description: OPTIONS[k] }))
     : (CHOICES[key] ?? []).filter(v => v.startsWith(typed)).map(v => ({ value: `${base}${key}=${v} `, label: v }));
   return items.length ? items : null;

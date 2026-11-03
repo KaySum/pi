@@ -96,7 +96,8 @@ type Lua = Pick<Remote, 'lua'>;
 
 function check(place: Place, cwd: string): Record<string, unknown> {
   const { match, line = 1, endLine = line, col = 0, context = 0 } = place;
-  if ((place.path === undefined) === (place.buf === undefined)) throw new Error('A place needs a path or a buf, not both');
+  if (place.path === undefined && place.buf === undefined) throw new Error('A place needs a path or a buf');
+  if (place.path !== undefined && place.buf !== undefined) throw new Error('A place needs a path or a buf, not both');
   if (place.buf !== undefined && (!Number.isInteger(place.buf) || place.buf < 1)) throw new Error(`buf must be a buffer number: ${place.buf}`);
   if (match !== undefined) {
     if (typeof match !== 'string' || !match.trim()) throw new Error('match must be some code to find');

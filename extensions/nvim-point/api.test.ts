@@ -1159,6 +1159,42 @@ test('scrolling sideways is scrolling too', async () => {
   assert.equal(shown(await show({ path, match: 'TARGET' })).scrolled, false); // There already.
 });
 
+test('a FileChangedShell of yours for other files or buffers leaves this one guarded: no prompt', async () => {
+  const ui = await connect(socket);
+  await ui.request('nvim_ui_attach', [80, 24, { ext_linegrid: true }]);
+  try {
+    for (const scope of ['pattern', 'buffer']) {
+      await lua(`local scope = ...
+        vim.g.unrelated = 0
+        vim.api.nvim_create_augroup('mine', {})
+        local where = scope == 'pattern' and { pattern = '*.unrelated' } or { buffer = vim.api.nvim_create_buf(true, false) }
+        vim.api.nvim_create_autocmd('FileChangedShell', vim.tbl_extend('force', where, { group = 'mine', callback = function() vim.g.unrelated = vim.g.unrelated + 1 end }))`, scope);
+      const { path, yours } = await changed({ edit: true });
+      shown(await show({ path, line: 2 }, { jump: false }));
+      await delay(50);
+      assert.equal(await mode(), 'nt', scope);
+      assert.deepEqual([await lua('return vim.api.nvim_buf_get_lines(vim.fn.bufnr(...), 0, 1, true)[1]', path), (await state(yours)).cursor[0], await lua('return vim.g.unrelated')], ['yours', 2, 0], scope);
+      await lua('vim.api.nvim_del_augroup_by_name("mine")');
+    }
+  } finally {
+    await editor.request('nvim_input', ['<Esc>']);
+    await ui.request('nvim_ui_detach', []);
+    ui.close();
+  }
+});
+
+test('a FileChangedShell of yours whose pattern matches the file is yours to handle', async () => {
+  await lua(`vim.g.handled = nil
+    vim.api.nvim_create_augroup('mine', {})
+    vim.api.nvim_create_autocmd('FileChangedShell', { group = 'mine', pattern = '*.{ts,js}', callback = function() vim.g.handled = vim.v.fcs_reason vim.v.fcs_choice = '' end })`);
+  try {
+    const { path } = await changed({ edit: true });
+    shown(await show({ path, line: 1 }));
+    assert.equal(await lua('return vim.g.handled'), 'conflict');
+    assert.equal(await handlers(), 1); // Only yours: none of ours left.
+  } finally { await lua('vim.api.nvim_del_augroup_by_name("mine")'); }
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

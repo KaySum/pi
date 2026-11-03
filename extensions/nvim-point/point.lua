@@ -172,11 +172,31 @@ local function open_here(spec)
 	return false
 end
 
+-- Whether a FileChangedShell autocommand of the user's applies to `buf`: one of its own, or one
+-- whose pattern matches its file, as Neovim matches them (the name alone, without a "/").
+local function handled(buf)
+	local name = vim.api.nvim_buf_get_name(buf)
+	for _, autocmd in ipairs(vim.api.nvim_get_autocmds({ event = "FileChangedShell" })) do
+		if autocmd.buflocal then
+			if autocmd.buffer == buf then
+				return true
+			end
+		else
+			local target = autocmd.pattern:find("/", 1, true) and name or vim.fn.fnamemodify(name, ":t")
+			if vim.fn.match(target, vim.fn.glob2regpat(autocmd.pattern)) ~= -1 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- Run `fn` where Neovim may find `buf`'s file changed on disk and ask what to do at a prompt,
--- which would hold this call until the user answers: unless they handle it themselves
--- (FileChangedShell), it is reloaded as 'autoread' would, else left, and they are told after.
+-- which would hold this call until the user answers: unless they handle it themselves (a
+-- FileChangedShell that applies to it), it is reloaded as 'autoread' would, else left, and they
+-- are told after.
 local function guarded(buf, fn)
-	local guard = #vim.api.nvim_get_autocmds({ event = "FileChangedShell" }) == 0
+	local guard = not handled(buf)
 		and vim.api.nvim_create_autocmd("FileChangedShell", {
 			buffer = buf,
 			callback = function()

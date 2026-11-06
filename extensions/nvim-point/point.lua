@@ -158,13 +158,17 @@ local function find(buf, match, near)
 end
 
 -- Whether two names are one file, as Neovim tells files apart: by device and inode, so links,
--- hard or symbolic, are; by name for a file no longer on disk.
+-- hard or symbolic, are; by name for a file no longer on disk, case aside with 'fileignorecase'.
 local function same_file(a, b)
 	local x, y = vim.uv.fs_stat(a), vim.uv.fs_stat(b)
 	if x and y then
 		return x.dev == y.dev and x.ino == y.ino
 	end
-	return vim.fs.normalize(a) == vim.fs.normalize(b)
+	a, b = vim.fs.normalize(a), vim.fs.normalize(b)
+	if vim.o.fileignorecase then
+		a, b = vim.fn.tolower(a), vim.fn.tolower(b)
+	end
+	return a == b
 end
 
 -- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`.

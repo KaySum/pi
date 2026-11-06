@@ -537,6 +537,25 @@ test('with open: false, a file shown under a hard link counts as open, as Neovim
   assert.deepEqual(await show({ path: copy, line: 1 }, { open: false }), { shown: false, closed: true });
 });
 
+test('with open: false, a file gone from disk is told by its name, case aside only with fileignorecase', async () => {
+  try {
+    for (const ignore of [true, false]) {
+      const path = join(dir, `gone-${files++}.txt`);
+      await writeFile(path, 'a\nb\n');
+      const [yours] = await layout(path);
+      await rm(path);
+      await lua('vim.o.fileignorecase = ...', ignore);
+      const upper = path.replace(/gone-\d+\.txt$/, name => name.toUpperCase());
+      const result = await show({ path: upper, line: 2 }, { open: false });
+      if (ignore) assert.equal(shown(result).win, yours, 'fileignorecase');
+      else assert.deepEqual(result, { shown: false, closed: true }, 'nofileignorecase');
+      // By its own name, shown either way.
+      assert.equal(shown(await show({ path, line: 1 }, { open: false })).win, yours);
+      await lua('vim.cmd("silent! only | enew! | silent! %bwipeout!")');
+    }
+  } finally { await lua('vim.o.fileignorecase = vim.fn.has("mac") == 1'); }
+});
+
 test('with open: false, a file not open is closed at once, whatever the wait', async () => {
   await layout(await file());
   const started = performance.now();

@@ -573,6 +573,21 @@ test('with open: false, a file gone from disk is told by its name as Neovim tell
   } finally { await lua('vim.o.fileignorecase = vim.fn.has("mac") == 1'); }
 });
 
+test('with open: false, a name like a pattern is taken literally: case-[ab].ts is not case-a.ts', async () => {
+  const a = await file(['A'], 'case-a.ts'), b = await file(['B1', 'B2', 'B3'], 'case-[ab].ts');
+  const [yours] = await layout(a);
+  // Loaded, hidden: closed, nothing loaded or changed.
+  await lua('vim.fn.bufload(vim.fn.bufadd(...))', b);
+  const before = await lua('return #vim.api.nvim_list_bufs()');
+  assert.deepEqual(await show({ path: b, line: 1 }, { open: false }), { shown: false, closed: true });
+  assert.deepEqual([(await state(yours)).path, await lua('return #vim.api.nvim_list_bufs()')], [a, before]);
+  // Shown, then gone from disk: still shown, by its name.
+  await lua('vim.api.nvim_win_set_buf(..., vim.fn.bufadd(select(2, ...)))', yours, b);
+  await rm(b);
+  assert.equal(shown(await show({ path: b, line: 3 }, { open: false })).win, yours);
+  assert.deepEqual([(await state(yours)).path, (await state(yours)).cursor[0]], [b, 3]);
+});
+
 test('with open: false, a file not open is closed at once, whatever the wait', async () => {
   await layout(await file());
   const started = performance.now();

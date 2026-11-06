@@ -159,9 +159,11 @@ end
 
 -- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`, as Neovim tells
 -- files apart: by device and inode while it is on disk, so links, hard or symbolic, are one
--- file; and by buffer name as Neovim matches one ('fileignorecase', its own case folding).
+-- file; and by buffer name as Neovim matches one ('fileignorecase', its own case folding). The
+-- buffer of that name from bufadd(), which takes it literally, as bufnr() does not (a pattern);
+-- only once bufexists() has found one, so that none is added.
 local function open_here(spec)
-	local named = spec.path and vim.fn.bufexists(spec.path) == 1 and vim.fn.bufnr(spec.path) or nil
+	local named = spec.path and vim.fn.bufexists(spec.path) == 1 and vim.fn.bufadd(spec.path) or nil
 	local stat = spec.path and vim.uv.fs_stat(spec.path)
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local buf = vim.api.nvim_win_get_buf(win)

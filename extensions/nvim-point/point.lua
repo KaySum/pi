@@ -157,14 +157,23 @@ local function find(buf, match, near)
 	return best
 end
 
--- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`, links followed.
+-- Whether two names are one file, as Neovim tells files apart: by device and inode, so links,
+-- hard or symbolic, are; by name for a file no longer on disk.
+local function same_file(a, b)
+	local x, y = vim.uv.fs_stat(a), vim.uv.fs_stat(b)
+	if x and y then
+		return x.dev == y.dev and x.ino == y.ino
+	end
+	return vim.fs.normalize(a) == vim.fs.normalize(b)
+end
+
+-- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`.
 local function open_here(spec)
-	local want = spec.path and (vim.uv.fs_realpath(spec.path) or vim.fs.normalize(spec.path))
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local buf = vim.api.nvim_win_get_buf(win)
 		local name = vim.api.nvim_buf_get_name(buf)
 		if vim.api.nvim_win_get_config(win).relative == "" then
-			if spec.buf == buf or (want and name ~= "" and (vim.uv.fs_realpath(name) or vim.fs.normalize(name)) == want) then
+			if spec.buf == buf or (spec.path and name ~= "" and same_file(spec.path, name)) then
 				return true
 			end
 		end

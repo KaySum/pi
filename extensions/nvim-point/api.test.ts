@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -518,6 +518,23 @@ test('with open: false, a file shown through a link counts as open', async () =>
   const [yours] = await layout(link);
   assert.equal(shown(await show({ path, line: 50 }, { open: false })).win, yours);
   assert.equal((await state(yours)).cursor[0], 50);
+});
+
+test('with open: false, a file shown under a hard link counts as open, as Neovim tells files apart', async () => {
+  const path = await file();
+  const alias = join(dir, `hard-link-${files}.ts`);
+  await link(path, alias);
+  // Shown by one name, asked for by the other, both ways.
+  for (const [opened, asked] of [[path, alias], [alias, path]]) {
+    const [yours] = await layout(opened);
+    assert.equal(shown(await show({ path: asked, line: 50 }, { open: false })).win, yours);
+    assert.equal((await state(yours)).cursor[0], 50);
+    await lua('vim.cmd("silent! only | enew! | silent! %bwipeout!")');
+  }
+  // A copy, the same text in another file, is another file: closed.
+  const copy = await file();
+  await layout(path);
+  assert.deepEqual(await show({ path: copy, line: 1 }, { open: false }), { shown: false, closed: true });
 });
 
 test('with open: false, a file not open is closed at once, whatever the wait', async () => {

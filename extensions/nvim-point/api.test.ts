@@ -556,6 +556,23 @@ test('with open: false, a file gone from disk is told by its name, case aside on
   } finally { await lua('vim.o.fileignorecase = vim.fn.has("mac") == 1'); }
 });
 
+test('with open: false, a file gone from disk is told by its name as Neovim tells buffer names apart', async () => {
+  try {
+    await lua('vim.o.fileignorecase = true');
+    // Neovim folds Σ and ς together, but not ẞ and ß, nor İ and i.
+    for (const [opened, asked, same] of [['Σ', 'ς', true], ['É', 'é', true], ['ẞ', 'ß', false], ['İ', 'i', false]] as const) {
+      const path = join(dir, `${opened}-${files++}.txt`);
+      await writeFile(path, 'a\nb\n');
+      const [yours] = await layout(path);
+      await rm(path);
+      const result = await show({ path: path.replace(`${opened}-`, `${asked}-`), line: 2 }, { open: false });
+      if (same) assert.equal(shown(result).win, yours, `${opened}/${asked}`);
+      else assert.deepEqual(result, { shown: false, closed: true }, `${opened}/${asked}`);
+      await lua('vim.cmd("silent! only | enew! | silent! %bwipeout!")');
+    }
+  } finally { await lua('vim.o.fileignorecase = vim.fn.has("mac") == 1'); }
+});
+
 test('with open: false, a file not open is closed at once, whatever the wait', async () => {
   await layout(await file());
   const started = performance.now();

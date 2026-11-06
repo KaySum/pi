@@ -157,27 +157,21 @@ local function find(buf, match, near)
 	return best
 end
 
--- Whether two names are one file, as Neovim tells files apart: by device and inode, so links,
--- hard or symbolic, are; by name for a file no longer on disk, case aside with 'fileignorecase'.
-local function same_file(a, b)
-	local x, y = vim.uv.fs_stat(a), vim.uv.fs_stat(b)
-	if x and y then
-		return x.dev == y.dev and x.ino == y.ino
-	end
-	a, b = vim.fs.normalize(a), vim.fs.normalize(b)
-	if vim.o.fileignorecase then
-		a, b = vim.fn.tolower(a), vim.fn.tolower(b)
-	end
-	return a == b
-end
-
--- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`.
+-- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`, as Neovim tells
+-- files apart: by device and inode while it is on disk, so links, hard or symbolic, are one
+-- file; and by buffer name as Neovim matches one ('fileignorecase', its own case folding).
 local function open_here(spec)
+	local named = spec.path and vim.fn.bufexists(spec.path) == 1 and vim.fn.bufnr(spec.path) or nil
+	local stat = spec.path and vim.uv.fs_stat(spec.path)
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local buf = vim.api.nvim_win_get_buf(win)
-		local name = vim.api.nvim_buf_get_name(buf)
 		if vim.api.nvim_win_get_config(win).relative == "" then
-			if spec.buf == buf or (spec.path and name ~= "" and same_file(spec.path, name)) then
+			if buf == spec.buf or buf == named then
+				return true
+			end
+			local name = vim.api.nvim_buf_get_name(buf)
+			local shown = stat and name ~= "" and vim.uv.fs_stat(name)
+			if shown and shown.dev == stat.dev and shown.ino == stat.ino then
 				return true
 			end
 		end

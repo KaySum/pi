@@ -63,8 +63,9 @@ already, the window does not scroll: you know where to look. Else they are broug
 whole: centered if they fit with their context, or with `{ scroll: 'top' }` at the top, or
 with `{ scroll: 'minimal' }` just past the edge they were off, moving the screen least; too
 tall for the window, from their start. A move within the file goes in your jumplist, as does
-leaving another file for it; with `{ jump: false }`, as for following Pi around, neither your
-jumplist nor your alternate file (`<C-^>`) changes.
+leaving another file for it; with `{ jump: false }`, as for following Pi around, nothing is
+added to your jumplist and your alternate file (`<C-^>`) stays as it was; only Neovim itself
+may drop a stale jump to a file it reloads, as its own `keepjumps` does.
 
 It resolves to `{ shown: true, win, buf, opened, scrolled }`: `opened` if a window was opened
 for it, `scrolled` if the window scrolled, up, down or sideways. While you are busy

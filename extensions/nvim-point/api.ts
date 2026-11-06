@@ -59,7 +59,9 @@ export type ShowOptions = CallOptions & {
   wait?: number;
   /**
    * `false`: leave the window's jumplist and alternate file (`<C-^>`) as they were, as one
-   * following Pi around should, not filling them with Pi's places. Default true: <C-o> goes back.
+   * following Pi around should, not filling them with Pi's places: nothing is added. (Entering a
+   * buffer it reloads, Neovim may drop a stale jump to it, as its own `keepjumps` does.)
+   * Default true: <C-o> goes back.
    */
   jump?: boolean;
   /**

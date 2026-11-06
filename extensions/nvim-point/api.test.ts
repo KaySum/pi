@@ -1270,6 +1270,35 @@ test('the warning for a file changed on disk and here fits where messages go: no
   }
 });
 
+test('a file named with a newline or a tab is named in one line in the warning, as Neovim shows such names', async () => {
+  const ui = await connect(socket);
+  try {
+    // Neovim shows a newline in a name as ^@ (a NUL, as Vim keeps one), a tab as ^I.
+    for (const [name, shown_] of [['two\nlines.txt', 'two^@lines.txt'], ['three\nmore\nlines.txt', 'three^@more^@lines.txt'], ['a\tb.txt', 'a^Ib.txt']] as const) {
+      await lua('vim.cmd("silent! only | enew!")');
+      await ui.request('nvim_ui_attach', [110, 24, { ext_linegrid: true }]);
+      await lua('vim.o.autoread = false vim.cmd("messages clear")');
+      const path = join(dir, name);
+      await writeFile(path, 'old\nTARGET\n');
+      // By the API, the name kept exactly as it is.
+      const [yours] = await layout(await file());
+      await lua('local buf = vim.fn.bufadd(...) vim.fn.bufload(buf) vim.api.nvim_buf_set_lines(buf, 0, 1, true, { "yours" })', path);
+      await writeFile(path, 'theirs\nTARGET\n');
+      await utimes(path, new Date(), new Date(Date.now() + 5000));
+      shown(await show({ path, match: 'TARGET' }, { jump: false }));
+      await delay(100);
+      assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false, JSON.stringify(name));
+      assert.equal((await messages()).trim().split('\n').at(-1), `${shown_} changed on disk and here: :e! loads it`);
+      assert.equal((await state(yours)).cursor[0], 2);
+      await ui.request('nvim_ui_detach', []);
+    }
+  } finally {
+    await editor.request('nvim_input', ['<CR>']); // Any Press ENTER answered, so Lua runs again.
+    await lua('vim.o.autoread = true');
+    ui.close();
+  }
+});
+
 // --- No traces --------------------------------------------------------------------------------
 
 test('your options, registers, search, histories and buffers are as they were', async () => {

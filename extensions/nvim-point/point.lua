@@ -232,7 +232,8 @@ local function guarded(buf, fn)
 				local reason = vim.v.fcs_reason
 				vim.v.fcs_choice = reason == "changed" and vim.o.autoread and "reload" or ""
 				if vim.v.fcs_choice == "" then
-					local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+					-- As Neovim shows what is not printable (^@ for a newline, ^I): a newline would start a line.
+					local name = vim.fn.strtrans(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"))
 					local how = reason == "conflict" and " and here" or (" (%s)"):format(reason)
 					vim.schedule(function()
 						warn({ ("%s changed on disk%s: :e! loads it"):format(name, how), ("%s changed on disk%s"):format(name, how) })

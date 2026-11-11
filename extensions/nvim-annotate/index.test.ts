@@ -260,6 +260,31 @@ test('remove takes several at once, saying which there were not', async () => {
   assert.equal(await annotate({ action: 'list' }), 'No notes');
 });
 
+test('a note whose code is gone after a reload from disk is forgotten, and does not block adding', async () => {
+  const { annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f20() {}', text: 'gone soon' }] });
+  await writeFile(path, 'const kept = 1;\n');
+  await lua('vim.api.nvim_buf_call(vim.fn.bufnr(...), function() vim.cmd("edit!") end)', path);
+  assert.equal(await annotate({ action: 'list' }), 'No notes');
+  assert.equal(await annotate({ action: 'remove', note: 1 }), 'No note 1');
+  // Its number is not given again.
+  assert.equal(await annotate({ action: 'add', notes: [{ file: name(path), match: 'const kept = 1;', text: 'here' }] }),
+    `Added note 2:\n2. ${name(path)}:1 \`const kept = 1;\`: here`);
+});
+
+test('two :PiNotes next at once go two notes on, not one', async () => {
+  const { annotate } = await attached();
+  const path = await file();
+  const [yours] = await layout(path);
+  await annotate({ action: 'add', notes: [20, 40, 60].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  await lua('vim.cmd("PiNotes next"); vim.cmd("PiNotes next")');
+  await eventually(async () => (await cursor(yours))[0] === 40);
+  await delay(150);
+  assert.equal((await cursor(yours))[0], 40);
+});
+
 test(':PiNotes in Neovim steps through the notes in order, passing over deleted ones', async () => {
   const { annotate } = await attached();
   const path = await file();

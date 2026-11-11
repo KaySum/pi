@@ -807,6 +807,30 @@ test('undoing a reload that moved a mark along its own line puts its columns bac
   assert.deepEqual(await at(), [[2, 0, 6]], 'redone');
 });
 
+test('positions saved around reloads stay few and small, however many reloads; the latest still undoes', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  for (let i = 0; i < 30; i++) await lua('vim.cmd("edit!")');
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nlines\nhead\ntarget\ntail\n');
+  await lua('vim.cmd("edit!")');
+  const [states, shapes] = await remote.lua(`local saved = remote.nvim_virtual_text.saved[vim.fn.bufnr(...)]
+    local shapes = {}
+    for _, positions in pairs(saved.at) do
+      for _, p in pairs(positions) do
+        local kinds = vim.tbl_map(type, p)
+        table.insert(shapes, table.concat(kinds, ' '))
+      end
+    end
+    return { vim.tbl_count(saved.at), vim.fn.uniq(vim.fn.sort(shapes)) }`, [path]);
+  assert.ok(states <= 40, `${states} states saved`);
+  assert.deepEqual(shapes, ['number number number number']);
+  await editor.request('nvim_input', ['u']);
+  await delay(100);
+  assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col]), [[2, 0]]);
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

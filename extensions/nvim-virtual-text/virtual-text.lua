@@ -917,13 +917,20 @@ local function before(entries, seq, prior)
 	end
 end
 
+-- How many undo states' positions a buffer keeps: before and after its last 20 reloads.
+local SAVED = 40
+
 -- Save where `buf`'s marks are, by their spans' extmarks, under its undo state: before a reload
 -- (`reloading`: the state before the one the reload makes, which exists already), or after.
+-- Each as { row, col, end row, end col } and whether hidden, all `restore` needs.
 function state.save(buf, reloading)
 	local positions = {}
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
-			positions[id] = vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, { details = true })
+			local found = vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, { details = true })
+			if found[1] then
+				positions[id] = { found[1], found[2], found[3].end_row, found[3].end_col, found[3].invalid or nil }
+			end
 		end
 	end
 	if not next(positions) then
@@ -931,18 +938,28 @@ function state.save(buf, reloading)
 	end
 	local tree = vim.fn.undotree(buf)
 	local seq = reloading and before(tree.entries, tree.seq_cur, 0) or tree.seq_cur
-	local saved = state.saved[buf] or {}
+	if not seq then
+		return
+	end
+	-- `at` by undo state; `order`, the states as saved, the oldest first.
+	local saved = state.saved[buf] or { at = {}, order = {} }
 	-- Undo states are numbered anew once its history is cleared: those saved are of another.
-	for at in pairs(saved) do
+	for at in pairs(saved.at) do
 		if at > tree.seq_last then
-			saved = {}
+			saved = { at = {}, order = {} }
 			break
 		end
 	end
-	if seq then
-		saved[seq] = positions
-		state.saved[buf] = saved
+	saved.at[seq] = positions
+	saved.order = vim.tbl_filter(function(at)
+		return at ~= seq
+	end, saved.order)
+	table.insert(saved.order, seq)
+	-- In the order saved, as a recent reload's state before may be numbered long ago.
+	while #saved.order > SAVED do
+		saved.at[table.remove(saved.order, 1)] = nil
 	end
+	state.saved[buf] = saved
 end
 
 -- Whether `spec` lies on `needles` in `text`: its lines hold them; with columns, exactly where
@@ -965,14 +982,16 @@ end
 -- A mark hidden then, or since removed, is left as it is.
 function state.restore(buf)
 	-- Its undo state, as changenr() has it: cheap, for every change typed (undotree() is not).
-	local positions = state.saved[buf] and state.saved[buf][vim.api.nvim_buf_call(buf, vim.fn.changenr)]
+	local positions = state.saved[buf] and state.saved[buf].at[vim.api.nvim_buf_call(buf, vim.fn.changenr)]
 	if not positions then
 		return
 	end
 	local text = text_of(buf)
-	for id, found in pairs(positions) do
+	for id, at in pairs(positions) do
 		local mark = state.marks[id]
-		if mark and mark.spec.buf == buf and found[1] and not found[3].invalid and not mark.stale then
+		if mark and mark.spec.buf == buf and not at[5] and not mark.stale then
+			-- As nvim_buf_get_extmark_by_id() gives it, which `current` takes.
+			local found = { at[1], at[2], { end_row = at[3], end_col = at[4] } }
 			local now, saved = current(mark), current(mark, found)
 			if not on_text(text, mark.anchor, now) and on_text(text, mark.anchor, saved) then
 				pcall(install, id, mark.group, saved, false, true)

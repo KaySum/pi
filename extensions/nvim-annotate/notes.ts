@@ -44,7 +44,8 @@ export class Notes {
   private at = 0;
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
-  private stepping: Promise<unknown> = Promise.resolve();
+  /** What the notes are doing, each after the one before: see `queued`. */
+  private queue: Promise<unknown> = Promise.resolve();
   private remote: Remote;
 
   constructor(remote: Remote) {
@@ -54,6 +55,17 @@ export class Notes {
   private get text() { return virtualText(this.remote, GROUP); }
 
   get size() { return this.notes.length; }
+
+  /**
+   * Run `fn` once all before it are done. A step from :PiNotes comes from Neovim, not as a tool
+   * call, so it would otherwise run alongside one: reading the notes as they were, or undoing
+   * where a replace or clear left the walkthrough.
+   */
+  private queued<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
 
   /**
    * The marks of the notes, by key. A note whose mark is gone, its code gone when its file was
@@ -69,7 +81,11 @@ export class Notes {
    * Add notes after those there, or with `replace` instead of them, numbered from 1 again: all
    * placed, or none if one cannot be (its file or code missing), those there left as they were.
    */
-  async add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<Note[]> {
+  add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<Note[]> {
+    return this.queued(() => this.adding(specs, cwd, replace));
+  }
+
+  private async adding(specs: NoteSpec[], cwd: string, replace: boolean) {
     if (!replace) await this.marks();
     const kept = replace ? [] : this.notes;
     const after = replace ? 0 : this.last;
@@ -102,7 +118,11 @@ export class Notes {
   }
 
   /** Change note `number`'s text or kind, where it is now. Resolves to whether there was one. */
-  async update(number: number, change: { text?: string; kind?: Kind }): Promise<boolean> {
+  update(number: number, change: { text?: string; kind?: Kind }): Promise<boolean> {
+    return this.queued(() => this.updating(number, change));
+  }
+
+  private async updating(number: number, change: { text?: string; kind?: Kind }) {
     const found = await this.find(number);
     if (!found) return false;
     const { note, id } = found;
@@ -115,7 +135,11 @@ export class Notes {
   }
 
   /** Remove the notes `numbers`, the others keeping theirs. Resolves to the numbers there were. */
-  async remove(numbers: number[]): Promise<number[]> {
+  remove(numbers: number[]): Promise<number[]> {
+    return this.queued(() => this.removing(numbers));
+  }
+
+  private async removing(numbers: number[]) {
     const marks = await this.marks();
     const found = this.notes.filter(note => numbers.includes(note.number));
     if (found.length) await this.text.remove(found.map(note => marks.get(note.mark.key)!.id));
@@ -133,7 +157,11 @@ export class Notes {
   }
 
   /** The notes, where their code is now. */
-  async list(): Promise<Placed[]> {
+  list(): Promise<Placed[]> {
+    return this.queued(() => this.listing());
+  }
+
+  private async listing(): Promise<Placed[]> {
     const marks = await this.marks();
     const found = this.notes.map(note => ({ note, mark: marks.get(note.mark.key)! }));
     if (!found.length) return [];
@@ -148,15 +176,11 @@ export class Notes {
    * over hidden ones): its code on screen, the cursor on it. Undefined if there is no such note.
    */
   show(which: number | 'next' | 'prev', cwd: string, options: { focus?: boolean } = {}) {
-    // One at a time: each steps on from where the one before it left, and two at once would both
-    // step from the same note.
-    const step = this.stepping.then(() => this.step(which, cwd, options));
-    this.stepping = step.catch(() => {});
-    return step;
+    return this.queued(() => this.step(which, cwd, options));
   }
 
-  private async step(which: number | 'next' | 'prev', cwd: string, options: { focus?: boolean } = {}): Promise<{ note: Placed; total: number; pointed: Pointed } | undefined> {
-    const notes = (await this.list()).filter(note => !note.hidden);
+  private async step(which: number | 'next' | 'prev', cwd: string, options: { focus?: boolean }): Promise<{ note: Placed; total: number; pointed: Pointed } | undefined> {
+    const notes = (await this.listing()).filter(note => !note.hidden);
     const note = typeof which === 'number' ? notes.find(note => note.number === which)
       : which === 'next' ? notes.find(note => note.number > this.at)
       : notes.findLast(note => note.number < this.at);
@@ -167,7 +191,11 @@ export class Notes {
   }
 
   /** Remove every note. Resolves to how many there were. */
-  async clear(): Promise<number> {
+  clear(): Promise<number> {
+    return this.queued(() => this.clearing());
+  }
+
+  private async clearing() {
     const count = this.notes.length;
     await this.text.clear();
     this.notes = [];

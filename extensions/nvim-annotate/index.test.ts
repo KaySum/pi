@@ -62,6 +62,28 @@ async function attached() {
   return p;
 }
 
+/**
+ * Hold the reply to the first call of `remote.lua` that `holds`, once Neovim has run it: `held`
+ * resolves then, and `release` lets the reply through.
+ */
+function hold(remote: Remote, holds: (code: string, args: unknown[]) => boolean) {
+  const lua = remote.lua;
+  let release!: () => void, reached!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const held = new Promise<void>(resolve => { reached = resolve; });
+  let armed = true;
+  remote.lua = async (code, args = [], options) => {
+    const result = await lua(code, args, options);
+    if (armed && holds(code, args)) {
+      armed = false;
+      reached();
+      await gate;
+    }
+    return result;
+  };
+  return { held, release };
+}
+
 let files = 0;
 /** A file of `n` numbered lines, every tenth one a function. */
 async function file(n = 200) {
@@ -284,6 +306,42 @@ test('two :PiNotes next at once go two notes on, not one', async () => {
   await delay(150);
   assert.equal((await cursor(yours))[0], 40);
 });
+
+test('a note added while a step is reading the notes is kept', async () => {
+  const { nvim, annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 20, text: 'one' }] });
+  const { held, release } = hold(nvim!, (_code, args) => args[0] === 'list');
+  await editor.request('nvim_command', ['PiNotes next']);
+  await held;
+  const adding = annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'two' }] });
+  await delay(50);
+  release();
+  assert.match(await adding, /^Added note 2:/);
+  assert.equal(await annotate({ action: 'list' }), `1. ${name(path)}:20 \`function f20() {}\`: one\n2. ${name(path)}:40 \`function f40() {}\`: two`);
+});
+
+for (const reset of ['replace', 'clear'] as const) {
+  test(`notes ${reset === 'replace' ? 'replaced' : 'cleared'} while a step is under way start their walkthrough again`, async () => {
+    const { nvim, annotate } = await attached();
+    const path = await file();
+    const [yours] = await layout(path);
+    await annotate({ action: 'add', notes: [20, 40, 60].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+    const { held, release } = hold(nvim!, code => code.includes('remote.nvim_point.show'));
+    await editor.request('nvim_command', ['PiNotes 3']);
+    await held;
+    const notes = [10, 30].map(line => ({ file: name(path), line, text: `new ${line}` }));
+    const resetting = reset === 'replace' ? annotate({ action: 'add', replace: true, notes })
+      : annotate({ action: 'clear' }).then(() => annotate({ action: 'add', notes }));
+    await delay(50);
+    release();
+    await resetting;
+    await eventually(async () => (await cursor(yours))[0] === 60);
+    await editor.request('nvim_command', ['PiNotes next']);
+    await eventually(async () => (await cursor(yours))[0] === 10);
+  });
+}
 
 test(':PiNotes in Neovim steps through the notes in order, passing over deleted ones', async () => {
   const { annotate } = await attached();

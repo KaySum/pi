@@ -701,6 +701,18 @@ local function watch(buf)
 		end,
 		on_detach = function()
 			state.watched[buf] = nil
+			-- A reload by :checktime (autoread) detaches it after BufReadPost, when it was still
+			-- watched: watched again, next, if still loaded with marks (unloaded, it is not).
+			vim.schedule(function()
+				if state.closed or not vim.api.nvim_buf_is_loaded(buf) then
+					return
+				end
+				for _, mark in pairs(state.marks) do
+					if mark.spec.buf == buf then
+						return watch(buf)
+					end
+				end
+			end)
 		end,
 	})
 end

@@ -831,6 +831,25 @@ test('positions saved around reloads stay few and small, however many reloads; t
   assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col]), [[2, 0]]);
 });
 
+test('after an autoread reload, a mark updated while hidden shows the update once undo brings it back', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  const [id] = await text.place({ path, match: 'target', text: 'original', position: 'above', invalidate: true });
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nhead\ntarget\ntail\n');
+  await lua('vim.o.autoread = true; vim.cmd("checktime")');
+  try {
+    await delay(50);
+    assert.equal((await text.list())[0].line, 3);
+    await lua('vim.api.nvim_buf_set_lines(0, 2, 3, true, {})');
+    await text.update(id, { text: 'pending after reload' });
+    await editor.request('nvim_input', ['u']);
+    await delay(100);
+    const drawn = (await shown(path)).flatMap(([, , d]) => (d.virt_lines as string[][][] ?? []).map(words));
+    assert.deepEqual(drawn, ['pending after reload']);
+  } finally { await lua('vim.o.autoread = false'); }
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

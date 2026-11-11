@@ -195,6 +195,25 @@ test('guarded: a buffer\'s own noautoread is kept, whatever the global value', a
   } finally { await lua('vim.o.autoread = false'); }
 });
 
+test('guarded: a buffer with no autoread of its own follows the global one, not the current buffer\'s', async () => {
+  const path = await file('before\n');
+  const buf = await lua(`local path = ...
+    vim.cmd.edit(vim.fn.fnameescape(path))
+    local buf = vim.api.nvim_get_current_buf()
+    vim.go.autoread = false
+    vim.api.nvim_set_option_value('autoread', nil, { buf = buf })
+    vim.cmd.enew()
+    vim.bo.autoread = true
+    return buf`, path);
+  try {
+    assert.equal(await lua('return vim.api.nvim_get_option_value("autoread", { buf = ... })', buf), null, 'its own is unset');
+    await new Promise(resolve => setTimeout(resolve, 1100)); // A later mtime.
+    await writeFile(path, 'after\n');
+    await kit('local buf = ... kit.guarded(buf, function() vim.cmd(("checktime %d"):format(buf)) end)', buf);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), 'before');
+  } finally { await lua('vim.go.autoread = false'); }
+});
+
 test('the TypeScript helpers: one handle per attachment, a refused call\'s mode, an error\'s text, Pi\'s directory', async () => {
   let made = 0;
   const of = perAttachment(() => ++made);

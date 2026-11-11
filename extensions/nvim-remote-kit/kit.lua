@@ -174,10 +174,11 @@ function kit.guarded(buf, fn)
 			buffer = buf,
 			callback = function()
 				local reason = vim.v.fcs_reason
-				-- Its own 'autoread' if it has one (nil if not), else the global value.
+				-- Its own 'autoread' if it has one (nil if not), else the global value: vim.go's, as
+				-- vim.o's would be the current buffer's own.
 				local autoread = vim.bo[buf].autoread
 				if autoread == nil then
-					autoread = vim.o.autoread
+					autoread = vim.go.autoread
 				end
 				vim.v.fcs_choice = reason == "changed" and autoread and "reload" or ""
 				if vim.v.fcs_choice == "" then

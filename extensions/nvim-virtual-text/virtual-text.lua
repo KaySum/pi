@@ -43,12 +43,7 @@ if not state then
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		group = remote.group,
 		callback = function(ev)
-			for id, mark in pairs(state.marks) do
-				if mark.spec.buf == ev.buf then
-					state.marks[id] = nil
-				end
-			end
-			state.saved[ev.buf] = nil
+			state.forget(ev.buf)
 		end,
 	})
 	-- Reloaded from disk, a buffer keeps its marks at the same line numbers, wherever its
@@ -96,6 +91,27 @@ if not state then
 			end
 		end,
 	})
+end
+
+-- Forget `buf`'s marks and what is kept for them: it is wiped.
+function state.forget(buf)
+	for id, mark in pairs(state.marks) do
+		if mark.spec.buf == buf then
+			state.marks[id] = nil
+		end
+	end
+	state.saved[buf] = nil
+	state.watched[buf] = nil
+end
+
+-- Forget the marks of buffers wiped with no BufWipeout reaching us: from a user's autocommand,
+-- one not nested, Neovim fires none.
+function state.prune()
+	for _, mark in pairs(state.marks) do
+		if not vim.api.nvim_buf_is_valid(mark.spec.buf) then
+			state.forget(mark.spec.buf)
+		end
+	end
 end
 
 function state.define()
@@ -704,7 +720,11 @@ local function watch(buf)
 			-- A reload by :checktime (autoread) detaches it after BufReadPost, when it was still
 			-- watched: watched again, next, if still loaded with marks (unloaded, it is not).
 			vim.schedule(function()
-				if state.closed or not vim.api.nvim_buf_is_loaded(buf) then
+				if state.closed then
+					return
+				elseif not vim.api.nvim_buf_is_valid(buf) then
+					return state.forget(buf)
+				elseif not vim.api.nvim_buf_is_loaded(buf) then
 					return
 				end
 				for _, mark in pairs(state.marks) do
@@ -744,6 +764,7 @@ end
 --- Place `marks` in `group`; returns their ids, in order. One that cannot be placed fails the
 --- call, leaving those before it.
 function state.place(group, marks)
+	state.prune()
 	local ids = {}
 	for _, spec in ipairs(marks) do
 		local given = vim.deepcopy(spec)
@@ -761,6 +782,7 @@ local WHERE = { "path", "buf", "line", "endLine", "col", "endCol", "match", "col
 --- takes away. Lines and columns not given stay where edits have moved them. Returns
 --- whether there was such a mark; one that cannot be changed so stays as it was.
 function state.update(group, id, patch)
+	state.prune()
 	local mark = state.marks[id]
 	if not mark or mark.group ~= group then
 		return false
@@ -807,6 +829,7 @@ end
 --- Checked first: one that cannot be drawn fails the call before anything changes. A failure
 --- of Neovim's own while writing, after that, is not undone.
 function state.set(group, marks)
+	state.prune()
 	local keyed, seen, plan = {}, {}, {}
 	for id, mark in pairs(state.marks) do
 		if mark.group == group and mark.given and mark.given.key then
@@ -891,6 +914,7 @@ end
 -- Wrap again the marks wrapped to the windows showing their buffer, which are now wider or
 -- narrower; where they are now, as edits have moved them.
 function state.rewrap()
+	state.prune()
 	for id, mark in pairs(state.marks) do
 		if mark.width and not mark.stale and vim.api.nvim_buf_is_valid(mark.spec.buf) and text_width(mark.spec.buf) ~= mark.width then
 			local spec, invalid = current(mark)
@@ -902,6 +926,7 @@ function state.rewrap()
 end
 
 function state.refill()
+	state.prune()
 	for id, mark in pairs(state.marks) do
 		if mark.spec.fill and not mark.stale then
 			local spec, invalid = current(mark)
@@ -1046,6 +1071,7 @@ end
 
 --- Remove the marks `ids` of `group` (of any group if nil); returns those that were there.
 function state.remove(group, ids)
+	state.prune()
 	group = group ~= vim.NIL and group or nil
 	local removed = {}
 	for _, id in ipairs(ids) do
@@ -1071,6 +1097,7 @@ end
 --- The marks of `group` (every group if nil), only in the buffer of `path` or `buf` if given,
 --- in order of placement: each with its id, buffer and file, where edits have moved it.
 function state.list(group, filter)
+	state.prune()
 	local marks = {}
 	for id, mark in pairs(matching(group ~= vim.NIL and group or nil, filter)) do
 		local spec, invalid = current(mark)
@@ -1087,6 +1114,7 @@ end
 --- What there is, for `/nvim-virtual-text`: every mark as `list` gives it, `stale` if changed
 --- while hidden; and how many buffers are watched and styles made.
 function state.inspect()
+	state.prune()
 	local marks = state.list(nil, {})
 	for _, mark in ipairs(marks) do
 		mark.stale = state.marks[mark.id].stale
@@ -1096,6 +1124,7 @@ end
 
 --- Remove the marks `list` would give. Returns how many went.
 function state.clear(group, filter)
+	state.prune()
 	local removed = 0
 	for id in pairs(matching(group ~= vim.NIL and group or nil, filter)) do
 		remove(id)

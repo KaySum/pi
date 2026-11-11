@@ -850,6 +850,26 @@ test('after an autoread reload, a mark updated while hidden shows the update onc
   } finally { await lua('vim.o.autoread = false'); }
 });
 
+test('a buffer wiped by a user\'s autocommand, which fires no BufWipeout, takes its marks with it', async () => {
+  const path = await file('head\ntarget\ntail\n'), other = await file();
+  await open(path);
+  await text.place([{ path, match: 'target', text: 'NOTE' }, { path: other, line: 1, text: 'KEPT' }]);
+  // Not nested, as autocommands are unless asked: Neovim fires none from within it.
+  await lua(`vim.api.nvim_create_autocmd('BufReadPost', { once = true, pattern = vim.fn.fnameescape(...), callback = function(ev)
+    vim.api.nvim_buf_delete(ev.buf, { force = true })
+  end })`, path);
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nhead\ntarget\ntail\n');
+  await lua('vim.o.autoread = true; vim.cmd("checktime")');
+  try {
+    assert.equal(await lua('return vim.fn.bufexists(...)', path), 0);
+    assert.deepEqual((await text.list()).map(mark => mark.text), ['KEPT']);
+    await delay(50); // And once its watcher has seen it go.
+    assert.deepEqual((await text.list()).map(mark => mark.text), ['KEPT']);
+    assert.equal(await text.clear(), 1);
+  } finally { await lua('vim.o.autoread = false'); }
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

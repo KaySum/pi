@@ -48,6 +48,9 @@ function M._sweep()
 end
 
 function M.attach(chan, info)
+  -- One whose channel the editor closed is only found by looking: a reconnect looks first, so
+  -- that it never runs beside what it replaces.
+  M._sweep()
   local ctx = {
     channel = chan, pid = info.pid, cwd = info.cwd, terminal = terminal_of(info.pid), cleanups = {},
     group = vim.api.nvim_create_augroup('nvim-remote.' .. chan, { clear = true }),

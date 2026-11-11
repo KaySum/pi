@@ -32,6 +32,8 @@ Neovim it runs inside, when started from a Neovim terminal.
 code there with virtual text.
 [`nvim-view`](extensions/nvim-view/README.md) gives them what you see there: the splits and
 windows on screen, the lines in them, the buffers they show, and focus.
+[`nvim-point`](extensions/nvim-point/README.md) lets them show you a place there: your window,
+your cursor on it, scrolled to it.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

@@ -36,6 +36,8 @@ code there with virtual text.
 windows on screen, the lines in them, the buffers they show, and focus.
 [`nvim-point`](extensions/nvim-point/README.md) lets them show you a place there: your window,
 your cursor on it, scrolled to it.
+[`nvim-annotate`](extensions/nvim-annotate/README.md) lets Pi explain code there with numbered
+notes on it, and walk you through them.
 
 Then start Pi and sign in to your model provider. Credentials are stored locally
 and are not included in this repository.

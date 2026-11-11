@@ -13,10 +13,15 @@ export type Kind = typeof KINDS[number];
 export type NoteSpec = { file: string; match?: string; line?: number; text: string; kind?: Kind };
 /** A note as placed, numbered in the order notes were added. */
 export type Note = { number: number; path: string; text: string; kind: Kind; mark: Mark };
-/** Where a note is now, its code moved by edits; `hidden` while its lines are deleted. */
-export type Placed = Note & { line: number; endLine: number; hidden?: true };
+/** Where a note is now, its code moved by edits, and the first line of that code; `hidden` while it is deleted. */
+export type Placed = Note & { line: number; endLine: number; code: string; hidden?: true };
 
 const GROUP = 'nvim-annotate';
+// The line of each [buffer, line], '' where there is none.
+const LINES = `return vim.tbl_map(function(at)
+  local ok, lines = pcall(vim.api.nvim_buf_get_lines, at[1], at[2] - 1, at[2], false)
+  return ok and lines[1] or ''
+end, ...)`;
 const HL: Record<Kind, string> = {
   info: 'PiVirtualTextInfo', hint: 'PiVirtualTextHint', warn: 'PiVirtualTextWarn', error: 'PiVirtualTextError',
 };
@@ -54,10 +59,15 @@ export class Notes {
   /** The notes, where their code is now. */
   async list(): Promise<Placed[]> {
     const placed = new Map((await this.text.list()).map(mark => [mark.key, mark]));
-    return this.notes.flatMap(note => {
+    const found = this.notes.flatMap(note => {
       const mark = placed.get(note.mark.key);
-      return mark ? [{ ...note, line: mark.line, endLine: mark.endLine ?? mark.line, ...(mark.invalid ? { hidden: true as const } : {}) }] : [];
+      return mark ? [{ note, mark }] : [];
     });
+    if (!found.length) return [];
+    const code: string[] = await this.remote.lua(LINES, [found.map(({ mark }) => [mark.buf, mark.line])]);
+    return found.map(({ note, mark }, i) => ({
+      ...note, line: mark.line, endLine: mark.endLine ?? mark.line, code: code[i] ?? '', ...(mark.invalid ? { hidden: true as const } : {}),
+    }));
   }
 
   /**

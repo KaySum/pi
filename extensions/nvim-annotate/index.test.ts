@@ -111,14 +111,14 @@ test('notes go above code found by match or line, numbered, wrapped and indented
     { file: name(path), line: 45, text: 'Then this.', kind: 'warn' },
     { file: name(path), match: 'function f60', text: 'short', kind: 'hint' },
   ] });
-  assert.equal(said, `Added notes 1-3:\n1. ${name(path)}:20: Starts here.\n2. ${name(path)}:45 warn: Then this.\n3. ${name(path)}:60 hint: short`);
+  assert.equal(said, `Added notes 1-3:\n1. ${name(path)}:20 \`function f20() {}\`: Starts here.\n2. ${name(path)}:45 warn \`line 45\`: Then this.\n3. ${name(path)}:60 hint \`function f60() {}\`: short`);
   assert.deepEqual(await drawn(nvim!, path), [
     [20, '1. Starts here.', 'PiVirtualTextInfo', 'above'],
     [45, '2. Then this.', 'PiVirtualTextWarn', 'above'],
     [60, '3. short', 'PiVirtualTextHint', 'above'],
   ]);
   // More come after, numbered on.
-  assert.match(await annotate({ action: 'add', notes: [{ file: path, line: 100, text: 'Last.' }] }), /^Added note 4:\n4\. .*:100: Last\.$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: path, line: 100, text: 'Last.' }] }), /^Added note 4:\n4\. .*:100 `function f100\(\) \{\}`: Last\.$/);
 });
 
 test('a note that cannot be placed places none: all or nothing', async () => {
@@ -135,6 +135,17 @@ test('a note that cannot be placed places none: all or nothing', async () => {
   assert.equal(await annotate({ action: 'list' }), 'No notes');
 });
 
+test('each note says the code it is on, its space trimmed and a long line cut', async () => {
+  const { annotate } = await attached();
+  const path = join(dir, 'code.ts');
+  await writeFile(path, `const a = 1;\n    if (ready) {\n${'x'.repeat(100)}\n`);
+  await layout(path);
+  assert.equal(await annotate({ action: 'add', notes: [
+    { file: name(path), match: 'if (ready) {', text: 'indented' },
+    { file: name(path), line: 3, text: 'long' },
+  ] }), `Added notes 1-2:\n1. code.ts:2 \`if (ready) {\`: indented\n2. code.ts:3 \`${'x'.repeat(79)}…\`: long`);
+});
+
 test('notes move with the code as it is edited, and hide while it is deleted', async () => {
   const { annotate } = await attached();
   const path = await file();
@@ -144,7 +155,7 @@ test('notes move with the code as it is edited, and hide while it is deleted', a
     { file: name(path), match: 'function f50', text: 'two' },
   ] });
   await lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 0, true, { "a", "b", "c" })', path);
-  assert.equal(await annotate({ action: 'list' }), `1. ${name(path)}:33: one\n2. ${name(path)}:53: two`);
+  assert.equal(await annotate({ action: 'list' }), `1. ${name(path)}:33 \`function f30() {}\`: one\n2. ${name(path)}:53 \`function f50() {}\`: two`);
   await lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 52, 53, true, {})', path);
   assert.match(await annotate({ action: 'list' }), /^2\. .* \(its lines deleted\): two$/m);
 });
@@ -191,7 +202,7 @@ test('/nvim-annotate lists the notes, goes to one with your focus, and clears th
   const [yours] = await layout(path);
   assert.deepEqual(await run(''), ['No notes', 'info']);
   await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f40', text: 'here' }] });
-  assert.deepEqual(await run(''), [`1. ${name(path)}:40: here`, 'info']);
+  assert.deepEqual(await run(''), [`1. ${name(path)}:40 \`function f40() {}\`: here`, 'info']);
   assert.deepEqual(await run('next'), [`Note 1 of 1: ${name(path)}:40`, 'info']);
   assert.deepEqual([(await cursor(yours))[0], await current()], [40, yours]);
   assert.deepEqual(await run('wat'), ['Usage: /nvim-annotate [next | prev | <number> | clear]', 'warning']);

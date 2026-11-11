@@ -18,7 +18,7 @@ const errorText = (error: unknown) =>
 const where = (note: Placed, cwd: string) =>
   `${relative(cwd, note.path).startsWith('..') ? note.path : relative(cwd, note.path)}:${note.line === note.endLine ? note.line : `${note.line}-${note.endLine}`}`;
 const describe = (note: Placed, cwd: string) =>
-  `${note.number}. ${where(note, cwd)} ${note.position}${note.kind === 'info' ? '' : ` ${note.kind}`}${note.hidden ? ' (its lines deleted)' : ''}: ${note.text}`;
+  `${note.number}. ${where(note, cwd)}${note.kind === 'info' ? '' : ` ${note.kind}`}${note.hidden ? ' (its lines deleted)' : ''}: ${note.text}`;
 
 /** Everything nvim-annotate registers; `parameters`, the tool's schema, from index.ts. */
 export default function register(pi: ExtensionAPI, parameters: Parameters<ExtensionAPI['registerTool']>[0]['parameters']) {
@@ -53,7 +53,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     name: 'nvim_annotate',
     label: 'Neovim notes',
     promptSnippet: 'Explain code with notes in the user\'s Neovim, and walk them through it',
-    description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above, below or at the end of the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now; show takes the user to note N; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
+    description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now; show takes the user to note N; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
     promptGuidelines: [
       'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them, then show note 1. Keep each note to a sentence or two about that code. Anchor notes by match, a distinctive line of the code. Clear notes once they no longer apply.',
     ],

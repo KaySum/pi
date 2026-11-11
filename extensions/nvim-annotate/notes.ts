@@ -4,14 +4,15 @@ import { point, type Pointed } from '../nvim-point/api.ts';
 import { virtualText, type Mark } from '../nvim-virtual-text/api.ts';
 
 export const KINDS = ['info', 'hint', 'warn', 'error'] as const;
-export const POSITIONS = ['above', 'below', 'eol'] as const;
 export type Kind = typeof KINDS[number];
-export type Position = typeof POSITIONS[number];
 
-/** A note as asked for: on code by `match`, or on a line, in a file from Pi's working directory. */
-export type NoteSpec = { file: string; match?: string; line?: number; text: string; position?: Position; kind?: Kind };
+/**
+ * A note as asked for: on code by `match`, or on a line, in a file from Pi's working directory.
+ * Always above its code, wrapped to the window and indented to it.
+ */
+export type NoteSpec = { file: string; match?: string; line?: number; text: string; kind?: Kind };
 /** A note as placed, numbered in the order notes were added. */
-export type Note = { number: number; path: string; text: string; kind: Kind; position: Position; mark: Mark };
+export type Note = { number: number; path: string; text: string; kind: Kind; mark: Mark };
 /** Where a note is now, its code moved by edits; `hidden` while its lines are deleted. */
 export type Placed = Note & { line: number; endLine: number; hidden?: true };
 
@@ -36,13 +37,13 @@ export class Notes {
   /** Add notes after those there: all placed, or none if one cannot be (its file or code missing). */
   async add(specs: NoteSpec[], cwd: string): Promise<Note[]> {
     const added = specs.map((spec, i): Note => {
-      const number = this.notes.length + i + 1, position = spec.position ?? 'above', kind = spec.kind ?? 'info';
-      const lines = position === 'eol' ? {} : { indent: true, wrap: true };
+      const number = this.notes.length + i + 1, kind = spec.kind ?? 'info';
       const mark: Mark = {
-        key: `note-${number}`, path: resolve(cwd, spec.file), text: `${number}. ${spec.text}`, position, hl: HL[kind],
-        invalidate: true, ...lines, ...(spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line }),
+        key: `note-${number}`, path: resolve(cwd, spec.file), text: `${number}. ${spec.text}`, position: 'above', hl: HL[kind],
+        indent: true, wrap: true, invalidate: true,
+        ...(spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line }),
       };
-      return { number, path: mark.path!, text: spec.text, kind, position, mark };
+      return { number, path: mark.path!, text: spec.text, kind, mark };
     });
     // All of them, those there as they were: the call is checked whole before anything changes.
     await this.text.set([...this.notes, ...added].map(note => note.mark));

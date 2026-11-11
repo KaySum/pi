@@ -20,7 +20,7 @@ Installed in an attachment before any module that uses it (see `install` below).
 | `open(path)` | The file's buffer, loaded unlisted as the user's own would be, never at a swap file's prompt, and what was done for it. Refuses what is no file to read: missing, a directory or device, unreadable, or made a buffer of another kind by the user's autocommands. An error of theirs once it is loaded is no failure. |
 | `load(buf, existed)` | Load a buffer as `open` does. |
 | `undo(buf, done)` | Undo what `open` or `load` did: no file left loaded (a swap file and all) that the user did not open. |
-| `guarded(buf, fn)` | Run `fn` where Neovim may find the file changed on disk: rather than ask at a prompt, it is reloaded as `'autoread'` would, else left and the user told; unless they handle `FileChangedShell` for it themselves. |
+| `guarded(buf, fn)` | Run `fn` where Neovim may find the file changed on disk: rather than ask at a prompt, it is reloaded as `'autoread'` would (the buffer's own, if it has one), else left and the user told; unless they handle `FileChangedShell` for it themselves. |
 
 ## In Pi: `api.ts`
 

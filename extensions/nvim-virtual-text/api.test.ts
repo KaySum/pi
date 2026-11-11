@@ -744,6 +744,23 @@ test('wrapped to the window, lines wrap again as its width changes; to a number 
   } finally { await lua('vim.o.columns = 80'); }
 });
 
+test('reloaded by checktime, as autoread does, marks find their text where it now is', async () => {
+  for (const columns of [false, true]) {
+    const path = await file('head\ntarget\ntail\n');
+    await open(path);
+    await text.place({ path, match: 'target', columns, text: 'NOTE' });
+    await delay(1100); // A later mtime.
+    await writeFile(path, 'new\nlines\nhead\ntarget\ntail\n');
+    await lua('vim.o.autoread = true; vim.cmd("checktime")');
+    try {
+      assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col ?? null]), [[4, columns ? 0 : null]], `columns: ${columns}`);
+    } finally {
+      await lua('vim.o.autoread = false');
+      await text.clear();
+    }
+  }
+});
+
 test('a deleted buffer, opened again, shows its marks again', async () => {
   for (const content of ['head\ntarget\ntail\n', 'head\nother\ntail\n']) {
     const path = await file('head\ntarget\ntail\n');

@@ -20,29 +20,34 @@ export const install = (remote: Lua, source: string, options?: CallOptions) =>
  * in an attachment.
  */
 export function module(name: string, source: string) {
-  const call = `if not remote.${name} then return 'not installed' end
+  const call = `if not remote.${name} then return false end
 local fn = ...
-return remote.${name}[fn](select(2, ...))`;
-  return async (remote: Lua, fn: string, args: unknown[] = [], options?: CallOptions): Promise<any> => {
-    const result = await remote.lua(call, [fn, ...args], options);
-    if (result !== 'not installed') return result;
+return { true, remote.${name}[fn](select(2, ...)) }`;
+  return (remote: Lua, fn: string, args: unknown[] = [], options?: CallOptions) =>
+    installing(remote, call, [fn, ...args], source, options);
+}
+
+// Run `code`, which returns false if what it needs is not installed, else `{ true, result }`:
+// apart from anything the result could be, so that the code runs once. If not, install `source`
+// (the kit first) and run it again.
+async function installing(remote: Lua, code: string, args: unknown[], source: string, options?: CallOptions): Promise<any> {
+  let result = await remote.lua(code, args, options);
+  if (result === false) {
     await install(remote, source, options);
-    return remote.lua(call, [fn, ...args], options);
-  };
+    result = await remote.lua(code, args, options);
+  }
+  return result[1] ?? null;
 }
 
 /**
  * Run `code` as `remote.lua` does, with `kit` in scope: the kit installed first, the first time
  * it is needed in an attachment.
  */
-export async function withKit(remote: Lua, code: string, args: unknown[] = [], options?: CallOptions): Promise<any> {
-  const wrapped = `if not remote.kit then return 'not installed' end
+export function withKit(remote: Lua, code: string, args: unknown[] = [], options?: CallOptions): Promise<any> {
+  const wrapped = `if not remote.kit then return false end
 local kit = remote.kit
-return (function(...)\n${code}\nend)(...)`;
-  const result = await remote.lua(wrapped, args, options);
-  if (result !== 'not installed') return result;
-  await install(remote, '', options);
-  return remote.lua(wrapped, args, options);
+return { true, (function(...)\n${code}\nend)(...) }`;
+  return installing(remote, wrapped, args, '', options);
 }
 
 /** One of what `make` makes for each attachment, made the first time it is asked for. */

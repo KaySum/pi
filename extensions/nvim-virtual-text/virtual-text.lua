@@ -888,6 +888,8 @@ end
 --- showing one hidden by a deletion again, and drawing again one whose extmarks went with
 --- the buffer (`:bdelete`); one that `invalidate`s goes if its text is nowhere.
 function state.reanchor(buf)
+	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
+	texts[buf] = nil
 	local text = text_of(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then

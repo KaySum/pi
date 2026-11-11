@@ -46,8 +46,18 @@ test('the kit is installed once, with a module in the same call, and withKit ins
     assert.deepEqual(await call(fresh, 'twice', [4]), [8, true]);
     assert.deepEqual(await call(fresh, 'twice', [5]), [10, true]);
     assert.equal(calls.length, 4, 'tried, installed, ran; then ran');
-    assert.match(calls[0], /^if not remote\.kit_test then return 'not installed' end/);
+    assert.match(calls[0], /^if not remote\.kit_test then return false end/);
   } finally { fresh.close(); }
+});
+
+test('a result like the install protocol\'s own is returned as it is, the code run once', async () => {
+  const call = module('kit_echo', 'remote.kit_echo = { say = function(s) remote.runs = (remote.runs or 0) + 1 return s end }');
+  assert.equal(await call(remote, 'say', ['not installed']), 'not installed');
+  assert.equal(await call(remote, 'say', ['not installed']), 'not installed');
+  assert.equal(await remote.lua('return remote.runs'), 2);
+  assert.equal(await call(remote, 'say', []), null);
+  assert.equal(await kit("remote.kit_runs = (remote.kit_runs or 0) + 1 return 'not installed'"), 'not installed');
+  assert.equal(await remote.lua('return remote.kit_runs'), 1);
 });
 
 test('busy: free in normal and terminal mode; busy in any other', async () => {
@@ -169,6 +179,19 @@ test('guarded: a file changed on disk never stops the editor at a prompt; autore
     assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false);
     // No autocommand of the kit's is left behind.
     assert.equal(await lua('return #vim.api.nvim_get_autocmds({ event = "FileChangedShell" })'), 0);
+  } finally { await lua('vim.o.autoread = false'); }
+});
+
+test('guarded: a buffer\'s own noautoread is kept, whatever the global value', async () => {
+  const path = await file('before\n');
+  const buf = await lua('local path = ... vim.cmd.edit(vim.fn.fnameescape(path)) vim.bo.autoread = false vim.cmd.enew() return vim.fn.bufnr(path)', path);
+  await lua('vim.o.autoread = true');
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1100)); // A later mtime.
+    await writeFile(path, 'after\n');
+    await kit('local buf = ... kit.guarded(buf, function() vim.cmd(("checktime %d"):format(buf)) end)', buf);
+    assert.equal(await lua('return vim.api.nvim_buf_get_lines(..., 0, -1, true)[1]', buf), 'before');
+    assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false);
   } finally { await lua('vim.o.autoread = false'); }
 });
 

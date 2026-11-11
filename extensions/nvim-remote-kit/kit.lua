@@ -174,7 +174,12 @@ function kit.guarded(buf, fn)
 			buffer = buf,
 			callback = function()
 				local reason = vim.v.fcs_reason
-				vim.v.fcs_choice = reason == "changed" and vim.o.autoread and "reload" or ""
+				-- Its own 'autoread' if it has one (nil if not), else the global value.
+				local autoread = vim.bo[buf].autoread
+				if autoread == nil then
+					autoread = vim.o.autoread
+				end
+				vim.v.fcs_choice = reason == "changed" and autoread and "reload" or ""
 				if vim.v.fcs_choice == "" then
 					-- As Neovim shows what is not printable (^@ for a newline, ^I): a newline would start a line.
 					local name = vim.fn.strtrans(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"))

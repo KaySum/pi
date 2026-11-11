@@ -276,22 +276,6 @@ local function buffer(buf)
 	}
 end
 
--- The user's window: the focused one unless it is Pi's terminal or another like it, else the
--- one they came from, else any showing a file.
-local function yours(windows)
-	local order = {}
-	for _, win in ipairs(windows) do
-		table.insert(order, win.focused and 1 or win.previous and 2 or 3)
-	end
-	local best
-	for i, win in ipairs(windows) do
-		if win.kind == "normal" and (not best or order[i] < order[best]) then
-			best = i
-		end
-	end
-	return best and windows[best].id or nil
-end
-
 --- What the user sees now: the current tab's windows (but floats it hides), the buffers they
 --- show, and the tabs the tabline names.
 function state.snapshot()
@@ -338,7 +322,7 @@ function state.snapshot()
 			buf = vim.api.nvim_get_current_buf(),
 			previous = previous ~= 0 and previous or nil,
 		},
-		you = yours(windows),
+		you = remote.kit.yours(), -- Installed before this.
 		pi = showing[remote.terminal] and { buf = remote.terminal, windows = showing[remote.terminal] } or nil,
 		tabs = tabs,
 		layout = layout(vim.fn.winlayout()),

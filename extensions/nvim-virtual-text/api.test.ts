@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,10 +34,10 @@ afterEach(async () => {
 });
 
 type Extmark = [id: number, row: number, col: number, details: Record<string, any>];
-/** The extmarks of `group` in the buffer of `path`. */
+/** The extmarks of `group` in the buffer of `path`; none if there is no such buffer. */
 const extmarks = (path: string, group = 'test'): Promise<Extmark[]> => lua(`local path, group = ...
-  local ns = vim.api.nvim_get_namespaces()['nvim-virtual-text.${remote.channel}.' .. group]
-  return vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, { details = true })`, path, group);
+  local ns, buf = vim.api.nvim_get_namespaces()['nvim-virtual-text.${remote.channel}.' .. group], vim.fn.bufnr(path)
+  return buf == -1 and {} or vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })`, path, group);
 /** Those that show text: [row, col, details]. */
 const shown = async (path: string, group?: string) =>
   (await extmarks(path, group)).filter(m => m[3].virt_text || m[3].virt_lines).map(([, row, col, details]) => [row, col, details] as const);
@@ -668,6 +668,44 @@ test('lines past the end are clamped, and bad marks are refused', async () => {
   await assert.rejects(text.place({ path, buf: 1, line: 1 }), /not both/);
   await assert.rejects(text.place({ path: join(dir, 'missing.txt'), line: 1, text: 'x' }), /no such file/);
   assert.throws(() => virtualText(remote, 'bad name'), /group/);
+});
+
+test('a file that cannot be one is refused, and one loaded for a mark that fails is not left loaded', async () => {
+  const folder = join(dir, `folder-${++files}`);
+  await mkdir(folder);
+  await assert.rejects(text.place({ path: folder, line: 1, text: 'x' }), /not a file/);
+  const locked = await file();
+  await chmod(locked, 0o000);
+  try {
+    await assert.rejects(text.place({ path: locked, line: 1, text: 'x' }), /cannot read/);
+  } finally {
+    await chmod(locked, 0o644);
+  }
+  const path = await file();
+  await assert.rejects(text.place({ path, match: 'nowhere', text: 'x' }), /not found/);
+  assert.equal(await lua('return vim.fn.bufexists(...)', path), 0);
+  const open = await file();
+  await lua('vim.cmd.edit(...); vim.cmd.enew()', open);
+  await assert.rejects(text.place({ path: open, match: 'nowhere', text: 'x' }), /not found/);
+  assert.equal(await lua('return vim.fn.bufexists(...)', open), 1, 'one the user opened stays');
+  assert.deepEqual([await text.list(), await lua('local folder = ...; return #vim.tbl_filter(function(b) return vim.api.nvim_buf_get_name(b) == folder end, vim.api.nvim_list_bufs())', folder)], [[], 0]);
+});
+
+test('the user\'s autocommands failing as a file is read do not fail a mark; one making it no file does', async () => {
+  await lua(`vim.api.nvim_create_augroup('user', {})
+    vim.api.nvim_create_autocmd('BufReadPost', { group = 'user', pattern = '*.txt', callback = function() error('broken plugin') end })
+    vim.api.nvim_create_autocmd('BufReadPost', { group = 'user', pattern = '*.scratch', command = 'setlocal buftype=nofile' })`);
+  try {
+    const path = await file();
+    await text.place({ path, line: 2, text: 'fine' });
+    assert.equal((await shown(path)).length, 1);
+    const scratch = join(dir, `file-${++files}.scratch`);
+    await writeFile(scratch, 'one\n');
+    await assert.rejects(text.place({ path: scratch, line: 1, text: 'x' }), /not a file/);
+    assert.equal(await lua('return vim.fn.bufexists(...)', scratch), 0);
+  } finally {
+    await lua("vim.api.nvim_del_augroup_by_name('user')");
+  }
 });
 
 test('a deleted buffer, opened again, shows its marks again', async () => {

@@ -1,25 +1,16 @@
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import { relative, resolve } from 'node:path';
 import { useRemote, type Remote } from '../nvim-remote/api.ts';
+import { errorText, withKit } from '../nvim-remote-kit/api.ts';
 import { completeAdd, markOf } from './add.ts';
 import { call, virtualText, type Chunk, type Placed } from './api.ts';
 
 const SHOWN = 50;
 /** The group of the marks you place yourself. */
 const GROUP = 'user';
-// Your window: the one you are in unless it is Pi's terminal (or another like it), else the
-// one you came from, else any showing a file.
-const YOURS = `local function yours(win)
-  return win ~= 0 and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative == ''
-    and vim.bo[vim.api.nvim_win_get_buf(win)].buftype == ''
-end
-local wins = { vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr('#')) }
-for _, win in ipairs(vim.list_extend(wins, vim.api.nvim_tabpage_list_wins(0))) do
-  if yours(win) then return { buf = vim.api.nvim_win_get_buf(win), line = vim.api.nvim_win_get_cursor(win)[1] } end
-end`;
-// What went wrong, without the "Lua:" and stack trace an error from the editor carries.
-const errorText = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
+// Your window's buffer and cursor line (see the kit's `yours`), if you have one.
+const YOURS = `local win = kit.yours()
+return win and { buf = vim.api.nvim_win_get_buf(win), line = vim.api.nvim_win_get_cursor(win)[1] }`;
 type Inspected = Placed & { stale?: true };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -92,7 +83,7 @@ export default function (pi: ExtensionAPI) {
       const remote = attached(ctx);
       if (!remote) return;
       try {
-        const mark = markOf(args, await remote.lua(YOURS) ?? undefined, path => resolve(ctx.cwd, path));
+        const mark = markOf(args, await withKit(remote, YOURS) ?? undefined, path => resolve(ctx.cwd, path));
         const [id] = await virtualText(remote, GROUP).place(mark);
         // A short ttl may have taken it already.
         const placed = (await virtualText(remote, GROUP).list()).find(m => m.id === id);

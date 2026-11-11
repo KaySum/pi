@@ -62,7 +62,7 @@ view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 | --- | --- |
 | `editor` | `columns` × `lines`, `cmdheight`, `mode` (as `mode()` gives it) and `blocking` (waiting at a prompt), the global `cwd`, and `focused`: whether the terminal it runs in has focus, once it has said (for terminals that report it). |
 | `focus` | The current `tab`, `win` and `buf`, and the `previous` window (`#`): the one the user came from. |
-| `you` | The user's window: the focused one unless it's Pi's terminal or another like it, else the one they came from, else any showing a file. The place to show something to the user. |
+| `you` | The user's window: the focused one unless it's Pi's terminal or another like it, else the one they came from, else any showing a file, as [nvim-remote-kit](../nvim-remote-kit/README.md)'s `yours()` decides. The place to show something to the user. |
 | `pi` | Pi's terminal `buf` and the `windows` showing it, if it's on screen. |
 | `tabs` | Each tab's `id` and `number`, and which is `focused`: what the tabline names. Only the current tab's windows are on screen. |
 | `layout` | The current tab's splits, as a tree of `{ split: 'row' \| 'col', children }` (side by side, stacked) with `{ win }` leaves. |

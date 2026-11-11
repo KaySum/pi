@@ -79,7 +79,7 @@ checks have passed.
 
 | Mark | |
 | --- | --- |
-| `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it. |
+| `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it; one loaded for a mark that then fails is not left loaded. A path that is no file to read (missing, a directory, unreadable, or made a buffer of another kind by the user's autocommands) is refused; files are opened as [nvim-remote-kit](../nvim-remote-kit/README.md) does. |
 | `line`, `endLine` | 1-based lines, clamped to the buffer. `endLine` (default `line`) ends the span `highlight` covers, and is where `below` goes. |
 | `match` | Code to find instead of giving lines: the mark covers the lines it's on. Each line of `match` must be found within one of the buffer's, in order, ignoring the whitespace around it, so quoted code needn't be indented as in the file. The occurrence nearest `line` wins (the first, without it). Not found, the call is rejected. It's looked for when the mark is placed, and when an update gives it a new `match`, `line`, `path` or `buf`. Otherwise the mark keeps to its lines as they're edited. |
 | `columns` | With `match`: mark just the text it finds, not its whole lines. The mark's columns are where the text is in its lines (the first place on each, tabs and multi-byte characters counted as Neovim counts them), so `highlight` covers only that text, `inline` goes right before it and `after` right after. They follow the text through edits, and through reloads too, along its line as well as to other lines. |

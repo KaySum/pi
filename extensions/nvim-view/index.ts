@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import { readFileSync } from 'node:fs';
 import { useRemote, type Remote } from '../nvim-remote/api.ts';
+import { errorText, install as withKit } from '../nvim-remote-kit/api.ts';
 import type { Layout, View, Window } from './api.ts';
 
 /** view.lua, installed in each attachment: it sends a view whenever the editor's changes. */
@@ -10,8 +11,6 @@ const SNAPSHOT = 'if not remote.nvim_view then return vim.NIL end return { remot
 
 type Stats = { count: number; built: number };
 
-const errorText = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
 // Fields in the order api.ts gives them, as Lua tables keep none; any others, as options, by name.
 const ORDER: Record<string, string[]> = Object.fromEntries(Object.entries({
   view: 'editor focus you pi tabs layout windows buffers',
@@ -110,7 +109,7 @@ export default function (pi: ExtensionAPI) {
   let stats: Stats | undefined;
   let attached: Remote | undefined;
 
-  const install = (remote: Remote) => remote.lua(MODULE);
+  const install = (remote: Remote) => withKit(remote, MODULE);
   const publish = (view: View) => {
     latest = view;
     pi.events.emit('nvim-view:changed', view);

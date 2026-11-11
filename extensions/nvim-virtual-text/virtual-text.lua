@@ -96,36 +96,20 @@ local function highlight(hl)
 	return name
 end
 
+-- The buffer of the file at `path`, by any name of it (see the kit's `file`); -1 if none.
 local function find(path)
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		if vim.api.nvim_buf_get_name(buf) == path then
-			return buf
-		end
-	end
-	return -1
+	local is = remote.kit.file(path)
+	return vim.iter(vim.api.nvim_list_bufs()):find(is) or -1
 end
 
 -- The buffer of `spec.buf`, or of the file at `spec.path`: loaded but not listed if the user
--- has not opened it, so marks are there when they do.
+-- has not opened it, so marks are there when they do; and what was done for it, to undo if its
+-- mark fails (see nvim-remote-kit, installed before this).
 local function buffer(spec)
-	if spec.buf then
-		return vim.api.nvim_buf_is_valid(spec.buf) and spec.buf or error(("no buffer %d"):format(spec.buf), 0)
+	if spec.path then
+		return remote.kit.open(spec.path)
 	end
-	if vim.fn.bufexists(spec.path) == 0 and not vim.uv.fs_stat(spec.path) then
-		error(("no such file: %s"):format(spec.path), 0)
-	end
-	local buf = vim.fn.bufadd(spec.path)
-	if not vim.api.nvim_buf_is_loaded(buf) then
-		-- An existing swap file would otherwise stop the editor at a prompt.
-		local shortmess = vim.o.shortmess
-		vim.opt.shortmess:append("A")
-		local ok, err = pcall(vim.fn.bufload, buf)
-		vim.o.shortmess = shortmess
-		if not ok then
-			error(err, 0)
-		end
-	end
-	return buf
+	return vim.api.nvim_buf_is_valid(spec.buf) and spec.buf or error(("no buffer %d"):format(spec.buf), 0)
 end
 
 -- Columns of text in the widest window showing `buf`, else in the editor.
@@ -579,7 +563,8 @@ end
 -- extmarks by id, still knows them; its parts not drawn now go. One hidden by a deletion is
 -- drawn anew: drawn over where it is, Neovim would keep it hidden.
 local function draw(group, spec, resolve, old)
-	local buf, ns = buffer(spec), namespace(group)
+	local buf, done = buffer(spec)
+	local ns = namespace(group)
 	spec.buf, spec.path = buf, nil
 	local reuse = {}
 	if old and old.spec.buf == buf and old.ns == ns then
@@ -596,6 +581,7 @@ local function draw(group, spec, resolve, old)
 		delete(buf, ns, vim.tbl_filter(function(extmark)
 			return not vim.tbl_contains(vim.tbl_values(reuse), extmark)
 		end, vim.tbl_values(extmarks)))
+		remote.kit.undo(buf, done)
 		error(anchor, 0)
 	end
 	if old then

@@ -11,6 +11,7 @@ import { launch } from '../nvim-service/service.mjs';
 import { attach, connect } from '../nvim-remote/remote.ts';
 import registerRemote from '../nvim-remote/index.ts';
 import registerView, { describe as summary } from './index.ts';
+import { install } from '../nvim-remote-kit/api.ts';
 import { bufferFor, bufferOf, isShown, lineAtRow, shownLine, useView, windowOf, type View } from './api.ts';
 
 const service = launch({ cwd: '/tmp', init: 'NONE', graceMs: 100, killMs: 300 });
@@ -573,7 +574,7 @@ test('Pi\'s own terminal, and the windows showing it, are marked', async () => {
   const remote = await attach(socket, { pid: term.pid, onError: () => {} });
   try {
     remote.on('nvim-view:changed', () => {});
-    await remote.lua(readFileSync(new URL('./view.lua', import.meta.url), 'utf8'));
+    await install(remote, readFileSync(new URL('./view.lua', import.meta.url), 'utf8'));
     const v = await remote.lua('return remote.nvim_view.snapshot()') as View;
     const win = v.windows.find(w => w.buf === term.buf)!;
     assert.deepEqual([v.pi?.buf, v.pi?.windows, win.pi, bufferOf(v, term.buf)!.pi], [term.buf, [win.id], true, true]);

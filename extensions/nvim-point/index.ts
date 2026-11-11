@@ -1,13 +1,10 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { readdir, stat } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
+import { errorText, useCwd } from '../nvim-remote-kit/api.ts';
 import { usePoint, type Place, type ShowOptions } from './api.ts';
 
 const USAGE = 'Usage: /nvim-point <path>:<line>[-<end line>][:<column>] [option=value …]';
-// What went wrong, without the "Lua:" and stack trace an error from the editor carries.
-const errorText = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
-
 // The options, as show takes them; a value with spaces is "quoted", as JSON.
 const OPTIONS: Record<string, string> = {
   match: 'Code to find instead of a line; the line given, the nearest',
@@ -123,12 +120,11 @@ export async function completePoint(prefix: string, cwd: string) {
 export default function (pi: ExtensionAPI) {
   const point = usePoint(pi);
   // Pi's working directory, which paths typed are from.
-  let cwd = process.cwd();
-  pi.on('session_start', (_event, ctx) => { cwd = ctx.cwd; });
+  const cwd = useCwd(pi);
 
   pi.registerCommand('nvim-point', {
     description: 'Show a place in your Neovim window, as other extensions would: <path>:<line>[-<end line>][:<column>] [option=value …]',
-    getArgumentCompletions: prefix => completePoint(prefix, cwd),
+    getArgumentCompletions: prefix => completePoint(prefix, cwd()),
     handler: async (args, ctx) => {
       let parsed;
       try { parsed = parsePoint(args); } catch (error) { return ctx.ui.notify(errorText(error), 'warning'); }

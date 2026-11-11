@@ -788,6 +788,33 @@ test('undoing a reload puts marks back where they were in that text; redo, where
   }
 });
 
+/** Wait, up to 3 s, until `check` holds. */
+async function eventually(check: () => Promise<boolean>) {
+  for (const end = Date.now() + 3000; !(await check()); await delay(20)) {
+    if (Date.now() > end) assert.fail('not within 3000 ms');
+  }
+}
+
+test('with the undo history cleared since a reload, an undo leaves marks on their text', async () => {
+  const path = await file('head\ntarget here\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nother\nhead\ntarget here\ntail\n');
+  await lua('vim.cmd("edit!")');
+  // Cleared as plugins do: an edit with 'undolevels' at -1.
+  await lua(`local levels = vim.bo.undolevels
+    vim.bo.undolevels = -1
+    vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'new' })
+    vim.bo.undolevels = levels`);
+  await editor.request('nvim_input', ['ggOadded<Esc>']);
+  await eventually(async () => (await text.list())[0]?.line === 5);
+  await editor.request('nvim_input', ['u']);
+  await eventually(async () => (await lua('return vim.api.nvim_buf_line_count(0)')) === 5);
+  await delay(100);
+  assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col]), [[4, 0]]);
+});
+
 test('a deleted buffer, opened again, shows its marks again', async () => {
   for (const content of ['head\ntarget\ntail\n', 'head\nother\ntail\n']) {
     const path = await file('head\ntarget\ntail\n');

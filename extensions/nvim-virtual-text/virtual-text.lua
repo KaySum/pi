@@ -946,16 +946,22 @@ function state.save(buf, reloading)
 end
 
 -- Put `buf`'s marks back where they were saved for its undo state, if they were: its text is
--- that state's again. A mark hidden then, or since removed, is left as it is.
+-- that state's again. Only a mark off the text it was placed on, and only back onto it: undo
+-- states are numbered anew once the history is cleared, so one saved may be of another text.
+-- A mark hidden then, or since removed, is left as it is.
 function state.restore(buf)
 	-- Its undo state, as changenr() has it: cheap, for every change typed (undotree() is not).
 	local positions = state.saved[buf] and state.saved[buf][vim.api.nvim_buf_call(buf, vim.fn.changenr)]
-	for id, found in pairs(positions or {}) do
+	if not positions then
+		return
+	end
+	local text = text_of(buf)
+	for id, found in pairs(positions) do
 		local mark = state.marks[id]
 		if mark and mark.spec.buf == buf and found[1] and not found[3].invalid and not mark.stale then
-			local now = vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, { details = true })
-			if now[1] ~= found[1] or now[2] ~= found[2] or now[3].end_row ~= found[3].end_row or now[3].end_col ~= found[3].end_col then
-				pcall(install, id, mark.group, (current(mark, found)), false, true)
+			local now, saved = current(mark), current(mark, found)
+			if not holds(text.lines, mark.anchor, now.line) and holds(text.lines, mark.anchor, saved.line) then
+				pcall(install, id, mark.group, saved, false, true)
 			end
 		end
 	end

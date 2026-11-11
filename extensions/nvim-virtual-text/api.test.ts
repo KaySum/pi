@@ -870,6 +870,26 @@ test('a buffer wiped by a user\'s autocommand, which fires no BufWipeout, takes 
   } finally { await lua('vim.o.autoread = false'); }
 });
 
+test('positions saved for a buffer go once it is wiped, even with its marks cleared first', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', text: 'NOTE' });
+  await lua('vim.cmd("edit!")'); // Saves positions around the reload.
+  const buf = await lua('return vim.fn.bufnr(...)', path);
+  await text.clear();
+  await lua('vim.cmd.enew(); vim.cmd.bunload(...)', buf);
+  await delay(50);
+  // Wiped from a user's autocommand, not nested: no BufWipeout, and unloaded, no detach either.
+  await lua(`local buf = ...
+    vim.api.nvim_create_autocmd('User', { pattern = 'WipeIt', once = true, callback = function()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end })
+    vim.api.nvim_exec_autocmds('User', { pattern = 'WipeIt' })`, buf);
+  assert.equal(await lua('return vim.api.nvim_buf_is_valid(...)', buf), false);
+  assert.deepEqual(await text.list(), []);
+  assert.equal(await remote.lua('return remote.nvim_virtual_text.saved[...] ~= nil', [buf]), false);
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

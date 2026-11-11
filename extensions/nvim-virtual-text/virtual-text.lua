@@ -104,12 +104,17 @@ function state.forget(buf)
 	state.watched[buf] = nil
 end
 
--- Forget the marks of buffers wiped with no BufWipeout reaching us: from a user's autocommand,
--- one not nested, Neovim fires none.
+-- Forget the buffers wiped with no BufWipeout reaching us (from a user's autocommand, one not
+-- nested, Neovim fires none): those of marks, and those with positions saved, marks or not.
 function state.prune()
 	for _, mark in pairs(state.marks) do
 		if not vim.api.nvim_buf_is_valid(mark.spec.buf) then
 			state.forget(mark.spec.buf)
+		end
+	end
+	for buf in pairs(state.saved) do
+		if not vim.api.nvim_buf_is_valid(buf) then
+			state.forget(buf)
 		end
 	end
 end

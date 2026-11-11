@@ -788,6 +788,25 @@ test('undoing a reload puts marks back where they were in that text; redo, where
   }
 });
 
+test('undoing a reload that moved a mark along its own line puts its columns back', async () => {
+  const path = await file('head\n    target and the rest\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  const at = async () => (await text.list()).map(mark => [mark.line, mark.col, mark.endCol]);
+  assert.deepEqual(await at(), [[2, 4, 10]]);
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'head\ntarget and the rest\ntail\n');
+  await lua('vim.cmd("edit!")');
+  assert.deepEqual(await at(), [[2, 0, 6]]);
+  await editor.request('nvim_input', ['u']);
+  await delay(100);
+  assert.equal(await lua('return vim.api.nvim_buf_get_lines(0, 1, 2, true)[1]'), '    target and the rest');
+  assert.deepEqual(await at(), [[2, 4, 10]], 'undone');
+  await editor.request('nvim_input', ['<C-r>']);
+  await delay(100);
+  assert.deepEqual(await at(), [[2, 0, 6]], 'redone');
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

@@ -945,6 +945,20 @@ function state.save(buf, reloading)
 	end
 end
 
+-- Whether `spec` lies on `needles` in `text`: its lines hold them; with columns, exactly where
+-- they are, its first column where the first begins and its last where the last ends.
+local function on_text(text, needles, spec)
+	if not holds(text.lines, needles, spec.line) then
+		return false
+	elseif not (spec.columns and spec.col and spec.endCol) then
+		return true
+	end
+	local first, last = text.raw[spec.line], text.raw[spec.line + #needles - 1]
+	local tail = needles[#needles]
+	return first:sub(spec.col + 1, spec.col + #needles[1]) == needles[1]
+		and last:sub(spec.endCol - #tail + 1, spec.endCol) == tail
+end
+
 -- Put `buf`'s marks back where they were saved for its undo state, if they were: its text is
 -- that state's again. Only a mark off the text it was placed on, and only back onto it: undo
 -- states are numbered anew once the history is cleared, so one saved may be of another text.
@@ -960,7 +974,7 @@ function state.restore(buf)
 		local mark = state.marks[id]
 		if mark and mark.spec.buf == buf and found[1] and not found[3].invalid and not mark.stale then
 			local now, saved = current(mark), current(mark, found)
-			if not holds(text.lines, mark.anchor, now.line) and holds(text.lines, mark.anchor, saved.line) then
+			if not on_text(text, mark.anchor, now) and on_text(text, mark.anchor, saved) then
 				pcall(install, id, mark.group, saved, false, true)
 			end
 		end

@@ -23,7 +23,7 @@ if not state then
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come.
-	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {} }
+	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
 		state.closed = true
@@ -48,6 +48,7 @@ if not state then
 					state.marks[id] = nil
 				end
 			end
+			state.saved[ev.buf] = nil
 		end,
 	})
 	-- Reloaded from disk, a buffer keeps its marks at the same line numbers, wherever its
@@ -56,6 +57,20 @@ if not state then
 		group = remote.group,
 		callback = function(ev)
 			state.reanchor(ev.buf)
+		end,
+	})
+	-- Undoing a reload brings its old text back, not where the marks were in it: saved before
+	-- and after each, by the undo state, they are put back when undo or redo comes to one.
+	vim.api.nvim_create_autocmd("BufReadPre", {
+		group = remote.group,
+		callback = function(ev)
+			state.save(ev.buf, true)
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = remote.group,
+		callback = function(ev)
+			state.restore(ev.buf)
 		end,
 	})
 	-- Filled lines are padded to the editor's width, which has changed.
@@ -623,9 +638,10 @@ end
 
 -- The mark's spec, its lines and columns where edits have moved them, and whether deleting
 -- them has hidden it.
-local function current(mark)
+-- Where `mark` is now; or, given `found` (its span's extmark as saved, see `positions`), then.
+local function current(mark, found)
 	local spec = vim.deepcopy(mark.spec)
-	local found = vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, mark.extmarks.span, { details = true })
+	found = found or vim.api.nvim_buf_get_extmark_by_id(spec.buf, mark.ns, mark.extmarks.span, { details = true })
 	if not found[1] then
 		return spec, false
 	end
@@ -887,6 +903,64 @@ end
 --- Move each mark in `buf` whose text is no longer on its lines to the nearest place it is,
 --- showing one hidden by a deletion again, and drawing again one whose extmarks went with
 --- the buffer (`:bdelete`); one that `invalidate`s goes if its text is nowhere.
+-- The undo state before `seq`: the one its change was made in.
+local function before(entries, seq, prior)
+	for i, entry in ipairs(entries) do
+		local previous = i == 1 and prior or entries[i - 1].seq
+		if entry.seq == seq then
+			return previous
+		end
+		local found = entry.alt and before(entry.alt, seq, previous)
+		if found then
+			return found
+		end
+	end
+end
+
+-- Save where `buf`'s marks are, by their spans' extmarks, under its undo state: before a reload
+-- (`reloading`: the state before the one the reload makes, which exists already), or after.
+function state.save(buf, reloading)
+	local positions = {}
+	for id, mark in pairs(state.marks) do
+		if mark.spec.buf == buf then
+			positions[id] = vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, { details = true })
+		end
+	end
+	if not next(positions) then
+		return
+	end
+	local tree = vim.fn.undotree(buf)
+	local seq = reloading and before(tree.entries, tree.seq_cur, 0) or tree.seq_cur
+	local saved = state.saved[buf] or {}
+	-- Undo states are numbered anew once its history is cleared: those saved are of another.
+	for at in pairs(saved) do
+		if at > tree.seq_last then
+			saved = {}
+			break
+		end
+	end
+	if seq then
+		saved[seq] = positions
+		state.saved[buf] = saved
+	end
+end
+
+-- Put `buf`'s marks back where they were saved for its undo state, if they were: its text is
+-- that state's again. A mark hidden then, or since removed, is left as it is.
+function state.restore(buf)
+	-- Its undo state, as changenr() has it: cheap, for every change typed (undotree() is not).
+	local positions = state.saved[buf] and state.saved[buf][vim.api.nvim_buf_call(buf, vim.fn.changenr)]
+	for id, found in pairs(positions or {}) do
+		local mark = state.marks[id]
+		if mark and mark.spec.buf == buf and found[1] and not found[3].invalid and not mark.stale then
+			local now = vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, { details = true })
+			if now[1] ~= found[1] or now[2] ~= found[2] or now[3].end_row ~= found[3].end_row or now[3].end_col ~= found[3].end_col then
+				pcall(install, id, mark.group, (current(mark, found)), false, true)
+			end
+		end
+	end
+end
+
 function state.reanchor(buf)
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
@@ -916,6 +990,7 @@ function state.reanchor(buf)
 			end
 		end
 	end
+	state.save(buf, false)
 end
 
 --- Remove the marks `ids` of `group` (of any group if nil); returns those that were there.

@@ -106,6 +106,10 @@ nearest place that does. For a mark placed by line, that's the nearest exact cop
 if there is one, however far. A mark whose text is gone stays where it was, unless it
 `invalidate`s.
 
+Undoing a reload (`u` straight after it, which Neovim allows with `'undoreload'`) brings the
+old text back and the marks with it, where they were in it; redo, where the reload moved them.
+A mark hidden then, or removed since, is left as it is.
+
 ## Development
 
 ```sh

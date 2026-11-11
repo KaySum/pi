@@ -761,6 +761,33 @@ test('reloaded by checktime, as autoread does, marks find their text where it no
   }
 });
 
+test('undoing a reload puts marks back where they were in that text; redo, where the reload moved them', async () => {
+  for (const [how, columns] of [['edit!', false], ['checktime', true]] as const) {
+    const path = await file('head\ntarget here\ntail\n');
+    await open(path);
+    await text.place([{ path, match: 'target', columns, text: 'NOTE' }, { path, line: 3, text: 'BY LINE' }]);
+    const at = async () => (await text.list()).map(mark => [mark.line, mark.col ?? null]);
+    const before = await at();
+    await delay(1100); // A later mtime.
+    await writeFile(path, 'new\nlines\nhead\ntarget here\ntail\n');
+    await lua('vim.o.autoread = true; vim.cmd(...)', how);
+    try {
+      const after = await at();
+      assert.deepEqual(after, [[4, columns ? 0 : null], [5, null]], how);
+      await editor.request('nvim_input', ['u']);
+      await delay(100);
+      assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(0, 0, -1, true)'), ['head', 'target here', 'tail']);
+      assert.deepEqual(await at(), before, `${how}: undone`);
+      await editor.request('nvim_input', ['<C-r>']);
+      await delay(100);
+      assert.deepEqual(await at(), after, `${how}: redone`);
+    } finally {
+      await lua('vim.o.autoread = false');
+      await text.clear();
+    }
+  }
+});
+
 test('a deleted buffer, opened again, shows its marks again', async () => {
   for (const content of ['head\ntarget\ntail\n', 'head\nother\ntail\n']) {
     const path = await file('head\ntarget\ntail\n');

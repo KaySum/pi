@@ -22,6 +22,17 @@ const LINES = `return vim.tbl_map(function(at)
   local ok, lines = pcall(vim.api.nvim_buf_get_lines, at[1], at[2] - 1, at[2], false)
   return ok and lines[1] or ''
 end, ...)`;
+// Each mark tried alone, in a group of its own, all in one call so none is ever drawn: why it
+// cannot be placed, '' if it can.
+const CHECK = `local vt, group, marks = remote.nvim_virtual_text, ...
+if not vt then return nil end
+local why = {}
+for i, mark in ipairs(marks) do
+  local ok, err = pcall(vt.set, group, { mark })
+  why[i] = ok and '' or tostring(err)
+end
+vt.set(group, {})
+return why`;
 const HL: Record<Kind, string> = {
   info: 'PiVirtualTextInfo', hint: 'PiVirtualTextHint', warn: 'PiVirtualTextWarn', error: 'PiVirtualTextError',
 };
@@ -51,9 +62,22 @@ export class Notes {
       return { number, path: mark.path!, text: spec.text, kind, mark };
     });
     // All of them, those there as they were: the call is checked whole before anything changes.
-    await this.text.set([...this.notes, ...added].map(note => note.mark));
+    try {
+      await this.text.set([...this.notes, ...added].map(note => note.mark));
+    } catch (error) {
+      throw await this.why(added.map(note => note.mark)) ?? error;
+    }
     this.notes.push(...added);
     return added;
+  }
+
+  /** Why each of `marks` that cannot be placed cannot, or undefined if each can alone. */
+  private async why(marks: Mark[]) {
+    // Through JSON, as undefined would reach Lua as vim.NIL.
+    const why: string[] | null = await this.remote.lua(CHECK, [`${GROUP}.check`, JSON.parse(JSON.stringify(marks))]);
+    const failed = (why ?? []).flatMap((reason, i) => reason ? [`notes[${i}]: ${reason.split('\n')[0]}`] : []);
+    if (!failed.length) return undefined;
+    return new Error(`${failed.length} of ${marks.length} notes cannot be placed, so none were:\n${failed.join('\n')}`);
   }
 
   /** The notes, where their code is now. */

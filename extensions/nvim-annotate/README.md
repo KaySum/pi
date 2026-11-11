@@ -23,7 +23,7 @@ Notes last until cleared, and go when Pi detaches from Neovim.
 
 | Action | Does | Needs |
 | --- | --- | --- |
-| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows. | `notes` |
+| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows; failing, says every note that cannot be placed, and why. | `notes` |
 | `list` | Each note: its number, file and lines now, the code it is on, and its text. | — |
 | `show` | Takes you to a note, as `:PiNotes` would; your focus stays where it is. | `note`, its number |
 | `clear` | Removes every note. | — |

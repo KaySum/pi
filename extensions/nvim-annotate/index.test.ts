@@ -146,6 +146,27 @@ test('each note says the code it is on, its space trimmed and a long line cut', 
   ] }), `Added notes 1-2:\n1. code.ts:2 \`if (ready) {\`: indented\n2. code.ts:3 \`${'x'.repeat(79)}…\`: long`);
 });
 
+test('a failed add names every note that cannot be placed, and draws none of them', async () => {
+  const { nvim, annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 1, text: 'there before' }] });
+  const error = await annotate({ action: 'add', notes: [
+    { file: name(path), match: 'function f10', text: 'fine' },
+    { file: name(path), match: 'nowhere()', text: 'missing code' },
+    { file: name(path), line: 20, text: 'fine too' },
+    { file: 'missing.ts', line: 1, text: 'missing file' },
+  ] }).catch((error: Error) => error.message);
+  assert.equal(error, `2 of 4 notes cannot be placed, so none were:\nnotes[1]: not found in ${path}: nowhere()\nnotes[3]: no such file: ${join(dir, 'missing.ts')}`);
+  assert.deepEqual(await drawn(nvim!, path), [[1, '1. there before', 'PiVirtualTextInfo', 'above']]);
+  // Nothing is left of the trial.
+  assert.equal(await lua(`local channel, path = ...
+    local ns = vim.api.nvim_get_namespaces()['nvim-virtual-text.' .. channel .. '.nvim-annotate.check']
+    return ns and #vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, {}) or 0`, nvim!.channel, path), 0);
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(path), text: 'a' }, { file: name(path), line: 2, text: 'b' }, { file: name(path), text: 'c' }] }),
+    /^Error: A note needs a match or a line: notes\[0\], notes\[2\]$/);
+});
+
 test('notes move with the code as it is edited, and hide while it is deleted', async () => {
   const { annotate } = await attached();
   const path = await file();

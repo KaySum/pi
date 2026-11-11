@@ -73,8 +73,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
         switch (params.action) {
           case 'add': {
             if (!params.notes?.length) throw new Error('add needs notes');
-            const bad = params.notes.find(note => note.match === undefined && note.line === undefined);
-            if (bad) throw new Error(`A note needs a match or a line: ${bad.text}`);
+            const bad = params.notes.flatMap((note, i) => note.match === undefined && note.line === undefined ? [`notes[${i}]`] : []);
+            if (bad.length) throw new Error(`A note needs a match or a line: ${bad.join(', ')}`);
             const added = await notes.add(params.notes, ctx.cwd);
             const placed = (await notes.list()).filter(note => added.some(a => a.number === note.number));
             return `Added ${placed.length === 1 ? 'note' : 'notes'} ${added[0].number}${added.length > 1 ? `-${added.at(-1)!.number}` : ''}:\n${placed.map(note => describe(note, ctx.cwd)).join('\n')}`;

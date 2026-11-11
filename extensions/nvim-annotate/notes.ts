@@ -42,6 +42,8 @@ export class Notes {
   private notes: Note[] = [];
   /** The note last shown; 0 before any. */
   private at = 0;
+  /** The last number given: one removed is not given again, until all are cleared or replaced. */
+  private last = 0;
   private remote: Remote;
 
   constructor(remote: Remote) {
@@ -58,7 +60,7 @@ export class Notes {
    */
   async add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<Note[]> {
     const kept = replace ? [] : this.notes;
-    const after = kept.at(-1)?.number ?? 0;
+    const after = replace ? 0 : this.last;
     const added = specs.map((spec, i): Note => {
       const number = after + i + 1, kind = spec.kind ?? 'info';
       const mark: Mark = {
@@ -75,8 +77,38 @@ export class Notes {
       throw await this.why(added.map(note => note.mark)) ?? error;
     }
     this.notes = [...kept, ...added];
+    this.last = after + added.length;
     if (replace) this.at = 0;
     return added;
+  }
+
+  /** The id nvim-virtual-text gave note `number`, and the note; undefined if there is none. */
+  private async find(number: number) {
+    const note = this.notes.find(note => note.number === number);
+    const mark = note && (await this.text.list()).find(mark => mark.key === note.mark.key);
+    return note && mark && { note, id: mark.id };
+  }
+
+  /** Change note `number`'s text or kind, where it is now. Resolves to whether there was one. */
+  async update(number: number, change: { text?: string; kind?: Kind }): Promise<boolean> {
+    const found = await this.find(number);
+    if (!found) return false;
+    const { note, id } = found;
+    const text = change.text ?? note.text, kind = change.kind ?? note.kind;
+    const patch = { text: `${number}. ${text}`, hl: HL[kind] };
+    if (!await this.text.update(id, patch)) return false;
+    // As nvim-virtual-text now has it given, so that a later add leaves it as it is.
+    Object.assign(note, { text, kind, mark: { ...note.mark, ...patch } });
+    return true;
+  }
+
+  /** Remove note `number`, the others keeping theirs. Resolves to whether there was one. */
+  async remove(number: number): Promise<boolean> {
+    const found = await this.find(number);
+    if (!found) return false;
+    await this.text.remove(found.id);
+    this.notes = this.notes.filter(note => note !== found.note);
+    return true;
   }
 
   /** Why each of `marks` that cannot be placed cannot, or undefined if each can alone. */
@@ -122,7 +154,7 @@ export class Notes {
     const count = this.notes.length;
     await this.text.clear();
     this.notes = [];
-    this.at = 0;
+    this.at = this.last = 0;
     return count;
   }
 }

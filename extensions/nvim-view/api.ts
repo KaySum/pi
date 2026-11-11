@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 /** Tab ids, window ids and buffer ids are Neovim's handles. Lines are 1-based. */
@@ -82,6 +83,8 @@ export type Buffer = {
   id: number;
   /** Its file, for one that has one: an absolute path. */
   name: string;
+  /** Its file's device and inode, while it is on disk: other names of the file (links) share them. */
+  file?: { dev: number; ino: number };
   filetype: string;
   /** Empty for a file; else `terminal`, `help`, `nofile`, `quickfix`… */
   buftype: string;
@@ -127,8 +130,16 @@ export type View = {
 // Lookups in a view, or in none: `windowOf(view(), id)` while not attached is undefined.
 export const windowOf = (view: View | undefined, id: number | undefined) => view?.windows.find(win => win.id === id);
 export const bufferOf = (view: View | undefined, id: number | undefined) => view?.buffers.find(buf => buf.id === id);
-/** The buffer of a file, by its absolute path. */
-export const bufferFor = (view: View | undefined, path: string) => view?.buffers.find(buf => buf.name === path);
+/**
+ * The buffer of a file, by its absolute path or any other name of it, as Neovim tells files
+ * apart: a link, or another case where the file system ignores it, is the same file.
+ */
+export function bufferFor(view: View | undefined, path: string) {
+  const named = view?.buffers.find(buf => buf.name === path);
+  if (named || !view) return named;
+  const file = statSync(path, { throwIfNoEntry: false });
+  return file && view.buffers.find(buf => buf.file?.dev === file.dev && buf.file.ino === file.ino);
+}
 
 /** Where a line is on screen in a window: its own entry, or the closed fold hiding it. */
 export const shownLine = (win: Window | undefined, line: number) =>

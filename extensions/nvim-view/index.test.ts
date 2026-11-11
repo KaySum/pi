@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { link, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -33,6 +33,28 @@ async function eventually<T>(check: () => Promise<T> | T, ms = 3000): Promise<No
 }
 
 type Command = { handler(args: string, ctx: object): Promise<void> };
+
+test('bufferFor finds a file by any name of it, as Neovim tells files apart', async () => {
+  const { view, shutdown } = await pi();
+  try {
+    const path = await file('named.txt', 3);
+    const linked = join(dir, 'linked.txt'), hard = join(dir, 'hard.txt');
+    await symlink(path, linked);
+    await link(path, hard);
+    await lua('vim.cmd.edit(vim.fn.fnameescape(...))', path);
+    const v = await eventually(() => bufferFor(view(), path) && view());
+    const id = bufferFor(v, path)!.id;
+    assert.deepEqual([bufferFor(v, linked)?.id, bufferFor(v, hard)?.id], [id, id]);
+    // A file system that ignores case (macOS's, as a rule) has one file by both.
+    const upper = join(dir, 'NAMED.txt');
+    assert.equal(bufferFor(v, upper)?.id, existsSync(upper) ? id : undefined);
+    assert.equal(bufferFor(v, join(dir, 'missing.txt')), undefined);
+    // One not on disk yet: by its name alone.
+    const unsaved = join(dir, 'unsaved.txt');
+    await lua('vim.cmd.edit(vim.fn.fnameescape(...))', unsaved);
+    assert.ok(bufferFor(await eventually(() => bufferFor(view(), unsaved) && view()), unsaved));
+  } finally { await shutdown(); }
+});
 
 /** Pi with nvim-remote and nvim-view loaded (only nvim-view's API if `!view`), its session started. */
 async function pi({ view = true } = {}) {

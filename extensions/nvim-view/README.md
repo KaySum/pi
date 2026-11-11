@@ -54,7 +54,9 @@ export default function (pi) {
 ```
 
 A view is plain data. `windowOf(view, id)`, `bufferOf(view, id)` and `bufferFor(view, path)`
-find a window or buffer in it, or give undefined for no view. `isShown(win, line)` says whether a line's text is on screen, `shownLine(win, line)` gives where (the fold hiding it, if one is), and `lineAtRow(win, row)` which line is at a screen row. `refresh()` makes a view now:
+find a window or buffer in it, or give undefined for no view. `bufferFor` finds a file by any
+name of it, as Neovim tells files apart: a link to it, or another case where the file system
+ignores case, is the same file (each buffer's `file`, its device and inode, while on disk). `isShown(win, line)` says whether a line's text is on screen, `shownLine(win, line)` gives where (the fold hiding it, if one is), and `lineAtRow(win, row)` which line is at a screen row. `refresh()` makes a view now:
 one that's new goes to every extension, as if sent by itself. The same view is on `pi.events`: `nvim-view:changed` (the
 view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 

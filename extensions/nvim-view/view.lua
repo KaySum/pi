@@ -255,9 +255,12 @@ end
 local function buffer(buf)
 	local loaded = vim.api.nvim_buf_is_loaded(buf)
 	local lines = loaded and vim.api.nvim_buf_line_count(buf) or nil
+	local name = vim.api.nvim_buf_get_name(buf)
+	local stat = name ~= "" and option(buf, "buftype") == "" and vim.uv.fs_stat(name)
 	return {
 		id = buf,
-		name = vim.api.nvim_buf_get_name(buf),
+		name = name,
+		file = stat and { dev = stat.dev, ino = stat.ino } or nil,
 		filetype = option(buf, "filetype"),
 		buftype = option(buf, "buftype"),
 		listed = option(buf, "buflisted") == 1,

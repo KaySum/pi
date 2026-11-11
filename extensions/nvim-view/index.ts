@@ -22,7 +22,7 @@ const ORDER: Record<string, string[]> = Object.fromEntries(Object.entries({
   window: 'id number buf kind focused previous pi row col width height winbar textRow textCol textWidth textOff topline botline leftcol skipcol rows shown cursor screenCursor cwd float options',
   line: 'line row rows fold',
   float: 'relative zindex focusable border',
-  buffer: 'id name filetype buftype listed loaded modified readonly modifiable lines bytes changedtick windows lsp pi',
+  buffer: 'id name file filetype buftype listed loaded modified readonly modifiable lines bytes changedtick windows lsp pi',
 }).map(([shape, keys]) => [shape, keys.split(' ')]));
 // What each field holds, by the shape holding it.
 const FIELDS: Record<string, Record<string, string>> = {

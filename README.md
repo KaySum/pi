@@ -28,6 +28,8 @@ npm ci --omit=dev --prefix ~/.pi/agent/extensions/nvim-service
 [`nvim-refactor`](extensions/nvim-refactor/README.md) build on it and need no install.
 [`nvim-remote`](extensions/nvim-remote/README.md) reuses its RPC client to let Pi control the
 Neovim it runs inside, when started from a Neovim terminal.
+[`nvim-remote-kit`](extensions/nvim-remote-kit/README.md) is not an extension but what the
+extensions below share, so that each works in your Neovim the same way.
 [`nvim-virtual-text`](extensions/nvim-virtual-text/README.md) lets other extensions annotate the
 code there with virtual text.
 [`nvim-view`](extensions/nvim-view/README.md) gives them what you see there: the splits and

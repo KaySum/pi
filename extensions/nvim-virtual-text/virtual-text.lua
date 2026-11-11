@@ -65,6 +65,22 @@ if not state then
 			state.refill()
 		end,
 	})
+	-- Lines wrapped to the windows showing their buffer are wrapped again once those change:
+	-- after the event, when a closed window is gone, and once for several.
+	vim.api.nvim_create_autocmd({ "WinResized", "VimResized", "WinClosed", "BufWinEnter" }, {
+		group = remote.group,
+		callback = function()
+			if not state.rewrapping then
+				state.rewrapping = true
+				vim.schedule(function()
+					state.rewrapping = false
+					if not state.closed then
+						state.rewrap()
+					end
+				end)
+			end
+		end,
+	})
 end
 
 function state.define()
@@ -684,6 +700,8 @@ local function install(id, group, spec, resolve, moved)
 	end
 	local mark = { group = group, spec = spec, given = old and old.given, generation = old and old.generation }
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
+	-- Wrapped to the windows showing it, the width it was wrapped to (see `rewrap`).
+	mark.width = spec.wrap == true and text_width(spec.buf) or nil
 	-- What reloads look for is what it was placed on, not what edits have made of that since.
 	if old and not resolve then
 		mark.anchor = old.anchor
@@ -842,6 +860,19 @@ function state.sync(buf)
 end
 
 --- Pad filled lines anew, but those hidden by a deletion: drawn over, they would show again.
+-- Wrap again the marks wrapped to the windows showing their buffer, which are now wider or
+-- narrower; where they are now, as edits have moved them.
+function state.rewrap()
+	for id, mark in pairs(state.marks) do
+		if mark.width and not mark.stale and vim.api.nvim_buf_is_valid(mark.spec.buf) and text_width(mark.spec.buf) ~= mark.width then
+			local spec, invalid = current(mark)
+			if not invalid then
+				pcall(install, id, mark.group, spec, false, true)
+			end
+		end
+	end
+end
+
 function state.refill()
 	for id, mark in pairs(state.marks) do
 		if mark.spec.fill and not mark.stale then

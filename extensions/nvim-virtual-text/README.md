@@ -92,7 +92,7 @@ checks have passed.
 | `lineHl` | Color the lines marked across the whole window, under everything else on them: a group name or a style. |
 | `sign` | Up to two cells in the sign column at `line`: a string, or `[text, hl]`. In `hl` unless given its own. |
 | `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
-| `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
+| `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. With `true`, they are wrapped again whenever that width changes: a window resized, split, closed, or the buffer shown in another. |
 | `fill` | For `above` and `below`: give each line `hl`'s background across the window's whole width, whatever its size, indentation and blank lines included. |
 | `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Updated while hidden without being moved, it stays hidden and shows the change once undone. Reloaded from disk, it shows again if its text is back, and is removed if its text is nowhere. |
 | `ttl` | Remove the mark after this many milliseconds. |

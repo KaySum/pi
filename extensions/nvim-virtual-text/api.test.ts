@@ -708,6 +708,42 @@ test('the user\'s autocommands failing as a file is read do not fail a mark; one
   }
 });
 
+test('wrapped to the window, lines wrap again as its width changes; to a number of columns, they stay', async () => {
+  const path = await file('    code();\n');
+  await lua('vim.o.columns = 120; vim.cmd.edit(...)', path);
+  try {
+    const sentence = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+    await text.place([
+      { path, line: 1, text: sentence, position: 'above', wrap: true, indent: true },
+      { path, line: 1, text: sentence, position: 'below', wrap: 50 },
+    ]);
+    // [above's rows, below's], whichever Neovim lists first.
+    const rows = async () => {
+      const found = await shown(path);
+      return [true, false].map(above => (found.find(([, , d]) => !!d.virt_lines_above === above)![2].virt_lines as unknown[]).length);
+    };
+    const widest = async () => {
+      const above = (await shown(path)).find(([, , d]) => d.virt_lines_above)![2].virt_lines as string[][][];
+      return Math.max(...above.map(line => words(line).length));
+    };
+    const [wide, fixed] = await rows();
+    await lua('vim.cmd("vsplit | vertical resize 40")');
+    await delay(50);
+    const [narrow, stillFixed] = await rows();
+    assert.ok(narrow > wide, `${wide} rows at 120 columns, ${narrow} at 40`);
+    assert.equal(stillFixed, fixed);
+    // The widest window showing it counts: closing the narrow one, they widen again.
+    await lua('vim.cmd("close")');
+    await delay(50);
+    assert.deepEqual(await rows(), [wide, fixed]);
+    // Shown nowhere, the editor's width; the same on the screen of a resized editor.
+    await lua('vim.o.columns = 60');
+    await delay(50);
+    assert.ok((await rows())[0] > wide);
+    assert.ok(await widest() <= 60);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
 test('a deleted buffer, opened again, shows its marks again', async () => {
   for (const content of ['head\ntarget\ntail\n', 'head\nother\ntail\n']) {
     const path = await file('head\ntarget\ntail\n');

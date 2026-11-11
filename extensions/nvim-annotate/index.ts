@@ -15,6 +15,7 @@ const PARAMETERS = Type.Object({
   }), { minItems: 1, maxItems: 50, description: 'For add: the notes, in the order to read them.' })),
   note: Type.Optional(Type.Integer({ minimum: 1, description: 'For show: the note\'s number.' })),
   show: Type.Optional(Type.Boolean({ description: 'For add: then take the user to the first note added, as show would.' })),
+  replace: Type.Optional(Type.Boolean({ description: 'For add: instead of the notes there, numbered from 1 again; those stay if the new cannot be placed.' })),
 });
 
 export default (pi: ExtensionAPI) => register(pi, PARAMETERS);

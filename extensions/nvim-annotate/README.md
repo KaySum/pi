@@ -19,11 +19,11 @@ Notes last until cleared, and go when Pi detaches from Neovim.
 
 ## The tool
 
-`nvim_annotate({ action, notes?, note?, show? })`
+`nvim_annotate({ action, notes?, note?, show?, replace? })`
 
 | Action | Does | Needs |
 | --- | --- | --- |
-| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows; failing, says every note that cannot be placed, and why. With `show: true`, then takes you to the first note added. | `notes` |
+| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows; failing, says every note that cannot be placed, and why. With `show: true`, then takes you to the first note added; with `replace: true`, the notes there go, the new numbered from 1, or stay if the new cannot be placed. | `notes` |
 | `list` | Each note: its number, file and lines now, the code it is on, and its text. | — |
 | `show` | Takes you to a note, as `:PiNotes` would; your focus stays where it is. | `note`, its number |
 | `clear` | Removes every note. | — |

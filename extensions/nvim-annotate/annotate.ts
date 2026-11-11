@@ -60,12 +60,12 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     promptSnippet: 'Explain code with notes in the user\'s Neovim, and walk them through it',
     description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now and the code they are on, to check the right code was found; show takes the user to note N; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
     promptGuidelines: [
-      'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them with show: true, which takes the user to the first. Keep each note to a sentence or two about that code. Anchor notes by match, a distinctive line of the code. Clear notes once they no longer apply.',
+      'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them with show: true, which takes the user to the first. Keep each note to a sentence or two about that code. Anchor notes by match, a distinctive line of the code. For a new explanation add with replace: true, which swaps the old notes for the new; clear notes once they no longer apply.',
     ],
     executionMode: 'sequential',
     parameters,
     async execute(_id, raw, _signal, _onUpdate, ctx) {
-      const params = raw as { action: 'add' | 'list' | 'show' | 'clear'; notes?: NoteSpec[]; note?: number; show?: boolean };
+      const params = raw as { action: 'add' | 'list' | 'show' | 'clear'; notes?: NoteSpec[]; note?: number; show?: boolean; replace?: boolean };
       const remote = nvim();
       if (!remote) throw new Error('Pi is not attached to Neovim');
       const notes = notesOf(remote);
@@ -75,9 +75,11 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             if (!params.notes?.length) throw new Error('add needs notes');
             const bad = params.notes.flatMap((note, i) => note.match === undefined && note.line === undefined ? [`notes[${i}]`] : []);
             if (bad.length) throw new Error(`A note needs a match or a line: ${bad.join(', ')}`);
-            const added = await notes.add(params.notes, ctx.cwd);
+            const before = notes.size;
+            const added = await notes.add(params.notes, ctx.cwd, { replace: params.replace });
             const placed = (await notes.list()).filter(note => added.some(a => a.number === note.number));
-            const said = `Added ${placed.length === 1 ? 'note' : 'notes'} ${added[0].number}${added.length > 1 ? `-${added.at(-1)!.number}` : ''}:\n${placed.map(note => describe(note, ctx.cwd)).join('\n')}`;
+            const replaced = params.replace ? `, replacing ${before}` : '';
+            const said = `Added ${placed.length === 1 ? 'note' : 'notes'} ${added[0].number}${added.length > 1 ? `-${added.at(-1)!.number}` : ''}${replaced}:\n${placed.map(note => describe(note, ctx.cwd)).join('\n')}`;
             return params.show ? `${said}\n${await step(remote, added[0].number)}` : said;
           }
           case 'list': {

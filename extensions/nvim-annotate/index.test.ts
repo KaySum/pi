@@ -207,6 +207,21 @@ test('add with show takes you to the first note added, in the same call', async 
   await eventually(async () => (await cursor(yours))[0] === 150);
 });
 
+test('add with replace swaps the notes there for the new, numbered from 1, or leaves them if it fails', async () => {
+  const { nvim, annotate } = await attached();
+  const path = await file();
+  const [yours] = await layout(path);
+  await annotate({ action: 'add', show: true, notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `old ${line}` })) });
+  await assert.rejects(annotate({ action: 'add', replace: true, notes: [{ file: name(path), match: 'nowhere()', text: 'x' }] }), /cannot be placed/);
+  assert.equal((await drawn(nvim!, path)).length, 3);
+  assert.equal(await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 40, text: 'new' }, { file: name(path), line: 50, text: 'newer' }] }),
+    `Added notes 1-2, replacing 3:\n1. ${name(path)}:40 \`function f40() {}\`: new\n2. ${name(path)}:50 \`function f50() {}\`: newer`);
+  assert.deepEqual((await drawn(nvim!, path)).map(([line, text]) => [line, text]), [[40, '1. new'], [50, '2. newer']]);
+  // The walkthrough starts again.
+  await editor.request('nvim_command', ['PiNotes next']);
+  await eventually(async () => (await cursor(yours))[0] === 40);
+});
+
 test(':PiNotes in Neovim steps through the notes in order, passing over deleted ones', async () => {
   const { annotate } = await attached();
   const path = await file();

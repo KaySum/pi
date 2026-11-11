@@ -50,10 +50,17 @@ export class Notes {
 
   private get text() { return virtualText(this.remote, GROUP); }
 
-  /** Add notes after those there: all placed, or none if one cannot be (its file or code missing). */
-  async add(specs: NoteSpec[], cwd: string): Promise<Note[]> {
+  get size() { return this.notes.length; }
+
+  /**
+   * Add notes after those there, or with `replace` instead of them, numbered from 1 again: all
+   * placed, or none if one cannot be (its file or code missing), those there left as they were.
+   */
+  async add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<Note[]> {
+    const kept = replace ? [] : this.notes;
+    const after = kept.at(-1)?.number ?? 0;
     const added = specs.map((spec, i): Note => {
-      const number = this.notes.length + i + 1, kind = spec.kind ?? 'info';
+      const number = after + i + 1, kind = spec.kind ?? 'info';
       const mark: Mark = {
         key: `note-${number}`, path: resolve(cwd, spec.file), text: `${number}. ${spec.text}`, position: 'above', hl: HL[kind],
         indent: true, wrap: true, invalidate: true,
@@ -61,13 +68,14 @@ export class Notes {
       };
       return { number, path: mark.path!, text: spec.text, kind, mark };
     });
-    // All of them, those there as they were: the call is checked whole before anything changes.
+    // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
-      await this.text.set([...this.notes, ...added].map(note => note.mark));
+      await this.text.set([...kept, ...added].map(note => note.mark));
     } catch (error) {
       throw await this.why(added.map(note => note.mark)) ?? error;
     }
-    this.notes.push(...added);
+    this.notes = [...kept, ...added];
+    if (replace) this.at = 0;
     return added;
   }
 

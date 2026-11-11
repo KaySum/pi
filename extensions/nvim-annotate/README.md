@@ -19,11 +19,11 @@ Notes last until cleared, and go when Pi detaches from Neovim.
 
 ## The tool
 
-`nvim_annotate({ action, notes?, note? })`
+`nvim_annotate({ action, notes?, note?, show? })`
 
 | Action | Does | Needs |
 | --- | --- | --- |
-| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows; failing, says every note that cannot be placed, and why. | `notes` |
+| `add` | Places notes after those there, numbered on. All of them or, if one cannot be (its file or code not there), none. Says each as `list` does, so that a `match` that found other code than meant shows; failing, says every note that cannot be placed, and why. With `show: true`, then takes you to the first note added. | `notes` |
 | `list` | Each note: its number, file and lines now, the code it is on, and its text. | — |
 | `show` | Takes you to a note, as `:PiNotes` would; your focus stays where it is. | `note`, its number |
 | `clear` | Removes every note. | — |
@@ -38,8 +38,8 @@ Each note in `notes`:
 | `text` | The note. It is drawn above the lines, its number first, wrapped to the window and indented to the code. |
 | `kind` | Its color: `info` (default), `hint`, `warn` or `error`, as the diagnostics of that name. |
 
-For a walkthrough Pi adds its notes in the order to read them, then shows note 1; you go on
-with `:PiNotes next`. When you are typing, showing a note does nothing and says so: Pi's notes
+For a walkthrough Pi adds its notes in the order to read them, with `show: true` to take you
+to the first; you go on with `:PiNotes next`. When you are typing, showing a note does nothing and says so: Pi's notes
 never move your cursor while you are busy.
 
 ## Development

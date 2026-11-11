@@ -192,6 +192,21 @@ test('show takes you to a note, focus staying in Pi\'s terminal', async () => {
   await assert.rejects(annotate({ action: 'show' }), /show needs a note number/);
 });
 
+test('add with show takes you to the first note added, in the same call', async () => {
+  const { annotate } = await attached();
+  const path = await file();
+  const [yours, term] = await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 5, text: 'earlier' }] });
+  assert.equal(await annotate({ action: 'add', show: true, notes: [
+    { file: name(path), match: 'function f120', text: 'first of these' },
+    { file: name(path), match: 'function f150', text: 'then' },
+  ] }), `Added notes 2-3:\n2. ${name(path)}:120 \`function f120() {}\`: first of these\n3. ${name(path)}:150 \`function f150() {}\`: then\nNote 2 of 3: ${name(path)}:120`);
+  assert.deepEqual([(await cursor(yours))[0], await current()], [120, term]);
+  // And :PiNotes goes on from there.
+  await editor.request('nvim_command', ['PiNotes next']);
+  await eventually(async () => (await cursor(yours))[0] === 150);
+});
+
 test(':PiNotes in Neovim steps through the notes in order, passing over deleted ones', async () => {
   const { annotate } = await attached();
   const path = await file();

@@ -214,6 +214,21 @@ test('guarded: a buffer with no autoread of its own follows the global one, not 
   } finally { await lua('vim.go.autoread = false'); }
 });
 
+test('guarded: a callback that wipes its buffer gets no error of the kit\'s, and its own error is kept', async () => {
+  const wipe = async (raise: boolean) => {
+    const path = await file();
+    const buf = await kit('return (kit.open(...))', path);
+    return kit(`local buf, raise = ...
+      kit.guarded(buf, function()
+        vim.api.nvim_buf_delete(buf, { force = true })
+        if raise then error('callback fault', 0) end
+      end)`, buf, raise);
+  };
+  await wipe(false);
+  await assert.rejects(wipe(true), (error: Error) => /callback fault/.test(error.message) && !/autocmd/.test(error.message));
+  assert.equal(await lua('return #vim.api.nvim_get_autocmds({ event = "FileChangedShell" })'), 0);
+});
+
 test('the TypeScript helpers: one handle per attachment, a refused call\'s mode, an error\'s text, Pi\'s directory', async () => {
   let made = 0;
   const of = perAttachment(() => ++made);

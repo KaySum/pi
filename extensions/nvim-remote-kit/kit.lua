@@ -193,7 +193,8 @@ function kit.guarded(buf, fn)
 		})
 	local ok, err = pcall(fn)
 	if guard then
-		vim.api.nvim_del_autocmd(guard)
+		-- Gone already if `fn` wiped the buffer, which takes its own autocommands with it.
+		pcall(vim.api.nvim_del_autocmd, guard)
 	end
 	if not ok then
 		error(err, 0)

@@ -58,7 +58,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     name: 'nvim_annotate',
     label: 'Neovim notes',
     promptSnippet: 'Explain code with notes in the user\'s Neovim, and walk them through it',
-    description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now and the code they are on, to check the right code was found; show takes the user to note N; update changes the text or kind of one, and remove removes one, the others keeping their numbers; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
+    description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now and the code they are on, to check the right code was found; show takes the user to note N; update changes the text or kind of one, and remove removes one or several, the others keeping their numbers; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
     promptGuidelines: [
       'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them with show: true, which takes the user to the first. Keep each note to a sentence or two about that code. Anchor notes by match, a distinctive line of the code. For a new explanation add with replace: true, which swaps the old notes for the new; clear notes once they no longer apply.',
     ],
@@ -66,12 +66,13 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     parameters,
     async execute(_id, raw, _signal, _onUpdate, ctx) {
       const params = raw as {
-        action: 'add' | 'list' | 'show' | 'update' | 'remove' | 'clear'; notes?: NoteSpec[]; note?: number;
+        action: 'add' | 'list' | 'show' | 'update' | 'remove' | 'clear'; notes?: NoteSpec[]; note?: number | number[];
         show?: boolean; replace?: boolean; text?: string; kind?: Kind;
       };
       const remote = nvim();
       if (!remote) throw new Error('Pi is not attached to Neovim');
       const notes = notesOf(remote);
+      if (Array.isArray(params.note) && params.action !== 'remove') throw new Error(`${params.action} takes one note number`);
       const text = await (async () => {
         switch (params.action) {
           case 'add': {
@@ -91,17 +92,24 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
           }
           case 'show':
             if (params.note === undefined) throw new Error('show needs a note number');
-            return step(remote, params.note);
+            return step(remote, params.note as number);
           case 'update': {
             if (params.note === undefined) throw new Error('update needs a note number');
             if (params.text === undefined && params.kind === undefined) throw new Error('update needs a text or a kind');
-            if (!await notes.update(params.note, { text: params.text, kind: params.kind })) return `No note ${params.note}`;
-            const note = (await notes.list()).find(note => note.number === params.note)!;
+            const number = params.note as number;
+            if (!await notes.update(number, { text: params.text, kind: params.kind })) return `No note ${number}`;
+            const note = (await notes.list()).find(note => note.number === number)!;
             return `Updated:\n${describe(note, ctx.cwd)}`;
           }
-          case 'remove':
+          case 'remove': {
             if (params.note === undefined) throw new Error('remove needs a note number');
-            return await notes.remove(params.note) ? `Removed note ${params.note}; the others keep their numbers` : `No note ${params.note}`;
+            const asked = [...new Set([params.note].flat())];
+            const removed = await notes.remove(asked), missing = asked.filter(number => !removed.includes(number));
+            const numbers = (list: number[]) => `${list.length === 1 ? 'note' : 'notes'} ${list.join(', ')}`;
+            const none = missing.length ? `no ${numbers(missing)}` : '';
+            if (!removed.length) return none.replace(/^n/, 'N');
+            return `Removed ${numbers(removed)}${none && `; ${none}`}${notes.size ? '; the others keep their numbers' : ''}`;
+          }
           case 'clear': {
             const count = await notes.clear();
             return `Removed ${count} ${count === 1 ? 'note' : 'notes'}`;

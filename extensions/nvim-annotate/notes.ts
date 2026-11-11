@@ -102,13 +102,13 @@ export class Notes {
     return true;
   }
 
-  /** Remove note `number`, the others keeping theirs. Resolves to whether there was one. */
-  async remove(number: number): Promise<boolean> {
-    const found = await this.find(number);
-    if (!found) return false;
-    await this.text.remove(found.id);
-    this.notes = this.notes.filter(note => note !== found.note);
-    return true;
+  /** Remove the notes `numbers`, the others keeping theirs. Resolves to the numbers there were. */
+  async remove(numbers: number[]): Promise<number[]> {
+    const ids = new Map((await this.text.list()).map(mark => [mark.key, mark.id]));
+    const found = this.notes.filter(note => numbers.includes(note.number) && ids.has(note.mark.key));
+    if (found.length) await this.text.remove(found.map(note => ids.get(note.mark.key)!));
+    this.notes = this.notes.filter(note => !found.includes(note));
+    return found.map(note => note.number);
   }
 
   /** Why each of `marks` that cannot be placed cannot, or undefined if each can alone. */

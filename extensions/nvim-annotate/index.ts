@@ -13,7 +13,10 @@ const PARAMETERS = Type.Object({
     text: Type.String({ minLength: 1, maxLength: 2000, description: 'The note, drawn above the lines, wrapped to the window.' }),
     kind: Type.Optional(Type.Union(KINDS.map(k => Type.Literal(k)), { description: 'Its color: info (default), hint, warn or error.' })),
   }), { minItems: 1, maxItems: 50, description: 'For add: the notes, in the order to read them.' })),
-  note: Type.Optional(Type.Integer({ minimum: 1, description: 'For show, update and remove: the note\'s number.' })),
+  note: Type.Optional(Type.Union([
+    Type.Integer({ minimum: 1 }),
+    Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: 50 }),
+  ], { description: 'For show and update: the note\'s number. For remove: one, or a list of them.' })),
   text: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: 'For update: the note\'s new text.' })),
   kind: Type.Optional(Type.Union(KINDS.map(k => Type.Literal(k)), { description: 'For update: the note\'s new color.' })),
   show: Type.Optional(Type.Boolean({ description: 'For add: then take the user to the first note added, as show would.' })),

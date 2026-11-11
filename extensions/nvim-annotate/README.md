@@ -27,7 +27,7 @@ Notes last until cleared, and go when Pi detaches from Neovim.
 | `list` | Each note: its number, file and lines now, the code it is on, and its text. | — |
 | `show` | Takes you to a note, as `:PiNotes` would; your focus stays where it is. | `note`, its number |
 | `update` | Changes a note's text or color, where its code is now. | `note`, and `text` or `kind` |
-| `remove` | Removes a note; the others keep their numbers, and its number is not given again until the notes are cleared or replaced. | `note` |
+| `remove` | Removes notes, saying any numbers there were not; the others keep their numbers, and a removed number is not given again until the notes are cleared or replaced. | `note`, a number or a list of them |
 | `clear` | Removes every note. | — |
 
 Each note in `notes`:

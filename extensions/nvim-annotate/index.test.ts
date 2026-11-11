@@ -243,8 +243,21 @@ test('update changes a note where its code is now; remove takes one out, the num
   await editor.request('nvim_command', ['PiNotes next']);
   await eventually(async () => (await cursor(yours))[0] === 32);
   for (const action of ['update', 'remove']) assert.equal(await annotate({ action, note: 2, text: 'x' }), 'No note 2');
+  await assert.rejects(annotate({ action: 'update', note: [1, 3], text: 'x' }), /update takes one note number/);
   await assert.rejects(annotate({ action: 'update', note: 1 }), /update needs a text or a kind/);
   await assert.rejects(annotate({ action: 'remove' }), /remove needs a note number/);
+});
+
+test('remove takes several at once, saying which there were not', async () => {
+  const { nvim, annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [10, 20, 30, 40, 50].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  assert.equal(await annotate({ action: 'remove', note: [4, 2, 2, 9] }), 'Removed notes 2, 4; no note 9; the others keep their numbers');
+  assert.deepEqual((await drawn(nvim!, path)).map(([, text]) => text), ['1. at 10', '3. at 30', '5. at 50']);
+  assert.equal(await annotate({ action: 'remove', note: [2, 4] }), 'No notes 2, 4');
+  assert.equal(await annotate({ action: 'remove', note: [1, 3, 5] }), 'Removed notes 1, 3, 5');
+  assert.equal(await annotate({ action: 'list' }), 'No notes');
 });
 
 test(':PiNotes in Neovim steps through the notes in order, passing over deleted ones', async () => {

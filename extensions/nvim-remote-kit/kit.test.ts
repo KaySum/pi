@@ -81,6 +81,9 @@ test('say: the first text that fits where messages go, else the last cut to fit'
   await kit('remote_say = kit.say');
   try {
     assert.equal(await said('short', 80), 'short');
+    // One line however it is written: a newline, as in a file's name, would make two, and stop the editor.
+    assert.equal(await said('odd\nname.py:2', 80), 'odd^@name.py:2');
+    assert.equal(await said(['tab\there', 'x'], 80), 'tab^Ihere');
     assert.equal(await said(['a long one that does not fit here', 'shorter'], 20), 'shorter');
     const cut = await said(['x'.repeat(100)], 20);
     assert.ok(cut!.endsWith('…') && cut!.length < 20, cut!);

@@ -10,6 +10,8 @@ const COMMAND = `vim.api.nvim_create_user_command('PiNotes', function(o) remote.
   complete = function() return { 'next', 'prev' } end,
 })
 remote.on_detach(function() pcall(vim.api.nvim_del_user_command, 'PiNotes') end)`;
+// A note whose code a reload took since it was placed or changed.
+const GONE = 'gone: its code is no longer in the file';
 const USAGE = 'Usage: /nvim-annotate [next | prev | <number> | clear]';
 
 const where = (note: Placed, cwd: string) =>
@@ -74,9 +76,14 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             if (bad.length) throw new Error(`A note needs a match or a line: ${bad.join(', ')}`);
             const before = notes.size;
             const added = await notes.add(params.notes, ctx.cwd, { replace: params.replace });
-            const placed = (await notes.list()).filter(note => added.some(a => a.number === note.number));
+            // Read again, where they are now: one whose code a reload took meanwhile is gone.
+            const placed = await notes.list();
+            const lines = added.map(a => {
+              const note = placed.find(note => note.number === a.number);
+              return note ? describe(note, ctx.cwd) : `${a.number}. ${GONE}`;
+            });
             const replaced = params.replace ? `, replacing ${before}` : '';
-            const said = `Added ${placed.length === 1 ? 'note' : 'notes'} ${added[0].number}${added.length > 1 ? `-${added.at(-1)!.number}` : ''}${replaced}:\n${placed.map(note => describe(note, ctx.cwd)).join('\n')}`;
+            const said = `Added ${added.length === 1 ? 'note' : 'notes'} ${added[0].number}${added.length > 1 ? `-${added.at(-1)!.number}` : ''}${replaced}:\n${lines.join('\n')}`;
             return params.show ? `${said}\n${await step(remote, added[0].number)}` : said;
           }
           case 'list': {
@@ -91,8 +98,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             if (params.text === undefined && params.kind === undefined) throw new Error('update needs a text or a kind');
             const number = params.note as number;
             if (!await notes.update(number, { text: params.text, kind: params.kind })) return `No note ${number}`;
-            const note = (await notes.list()).find(note => note.number === number)!;
-            return `Updated:\n${describe(note, ctx.cwd)}`;
+            const note = (await notes.list()).find(note => note.number === number);
+            return note ? `Updated:\n${describe(note, ctx.cwd)}` : `Note ${number} is ${GONE}`;
           }
           case 'remove': {
             if (params.note === undefined) throw new Error('remove needs a note number');

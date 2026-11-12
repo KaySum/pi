@@ -388,6 +388,26 @@ test(':PiNotes says how it went, cut to fit where messages go', async () => {
   } finally { await lua('vim.o.columns = 80'); }
 });
 
+for (const action of ['add', 'update'] as const) {
+  test(`${action} says a note is gone when a reload took its code as it was ${action === 'add' ? 'added' : 'updated'}`, async () => {
+    const { nvim, annotate } = await attached();
+    const path = await file();
+    await layout(path);
+    if (action === 'update') await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f30', text: 'one' }] });
+    const { held, release } = hold(nvim!, (_code, args) => args[0] === (action === 'add' ? 'set' : 'update'));
+    const doing = action === 'add'
+      ? annotate({ action: 'add', notes: [{ file: name(path), match: 'function f30', text: 'one' }] })
+      : annotate({ action: 'update', note: 1, text: 'changed' });
+    await held;
+    await writeFile(path, 'nothing of it\n');
+    await lua('vim.api.nvim_buf_call(vim.fn.bufnr(...), function() vim.cmd("edit!") end)', path);
+    release();
+    assert.equal(await doing, action === 'add'
+      ? 'Added note 1:\n1. gone: its code is no longer in the file'
+      : 'Note 1 is gone: its code is no longer in the file');
+  });
+}
+
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {
   const { nvim, annotate, run } = await attached();
   const path = await file();

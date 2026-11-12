@@ -54,6 +54,8 @@ test('a color for hl colors the text, and for highlight the lines\' background',
 test('completion offers option keys, then the values some take, and stops once the text begins', () => {
   assert.deepEqual(completeAdd('pos')?.map(item => item.value), ['position=']);
   assert.deepEqual(completeAdd('wrap=true pos')?.map(item => item.value), ['wrap=true position=']);
+  assert.deepEqual(parseAdd('position=above wrap=window Why').options, { position: 'above', wrap: 'window' });
+  assert.deepEqual(completeAdd('wrap=w')?.map(item => item.value), ['wrap=window ']);
   assert.deepEqual(completeAdd('position=b')?.map(item => item.value), ['position=below ']);
   assert.deepEqual(completeAdd('fill=')?.map(item => item.label), ['true', 'false']);
   assert.equal(completeAdd('hl='), null);

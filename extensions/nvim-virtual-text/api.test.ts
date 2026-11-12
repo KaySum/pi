@@ -890,6 +890,46 @@ test('positions saved for a buffer go once it is wiped, even with its marks clea
   assert.equal(await remote.lua('return remote.nvim_virtual_text.saved[...] ~= nil', [buf]), false);
 });
 
+test('wrapped as the window wraps its code: linebreak, breakindent, showbreak; and not, with nowrap', async () => {
+  const path = await file('    code();\n');
+  await lua(`vim.o.columns = 40; vim.cmd.edit(...)
+    vim.wo.wrap = true; vim.wo.linebreak = true; vim.wo.breakindent = true
+    vim.wo.breakindentopt = 'shift:4'; vim.wo.showbreak = '> '`, path);
+  const sentence = 'Waits for the server/client handshake, then retries with back-off until the deadline, logging each attempt.';
+  try {
+    await text.place({ path, line: 1, text: sentence, position: 'above', wrap: 'window', indent: true });
+    const lines = async () => (await shown(path))[0][2].virt_lines.map(words) as string[];
+    const width = (line: string) => lua('return vim.fn.strdisplaywidth(...)', line) as Promise<number>;
+    // The code's indent first; then that and the shift, and the showbreak.
+    const strip = (line: string, i: number) => line.slice(i === 0 ? 4 : 10);
+    let got = await lines();
+    assert.ok(got.length > 2, got.join('|'));
+    assert.ok(got[0].startsWith('    W'));
+    for (const line of got.slice(1)) assert.ok(line.startsWith('        > '), line);
+    for (const line of got) assert.ok(await width(line) <= 40, line);
+    assert.equal(got.map(strip).join(''), sentence);
+    // Each ends where 'breakat' lets a line break: a space, or one of its characters.
+    for (const line of got.slice(0, -1)) assert.match(line, /[ \-/,.]$/, line);
+
+    // Not at word boundaries: cut at the edge, mid-word if need be.
+    await lua('vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ""');
+    await delay(50);
+    got = await lines();
+    assert.equal(got[0].slice(4) + got.slice(1).join(''), sentence);
+    for (const line of got.slice(0, -1)) assert.equal(await width(line), 40, line);
+
+    // Not wrapped: one line, scrolling sideways with the code.
+    await lua('vim.wo.wrap = false');
+    await delay(50);
+    got = await lines();
+    assert.deepEqual(got, [`    ${sentence}`]);
+    assert.equal((await shown(path))[0][2].virt_lines_overflow, 'scroll');
+    await lua('vim.wo.wrap = true');
+    await delay(50);
+    assert.ok((await lines()).length > 2);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

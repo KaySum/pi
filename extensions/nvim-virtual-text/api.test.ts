@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,10 +34,10 @@ afterEach(async () => {
 });
 
 type Extmark = [id: number, row: number, col: number, details: Record<string, any>];
-/** The extmarks of `group` in the buffer of `path`. */
+/** The extmarks of `group` in the buffer of `path`; none if there is no such buffer. */
 const extmarks = (path: string, group = 'test'): Promise<Extmark[]> => lua(`local path, group = ...
-  local ns = vim.api.nvim_get_namespaces()['nvim-virtual-text.${remote.channel}.' .. group]
-  return vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, { details = true })`, path, group);
+  local ns, buf = vim.api.nvim_get_namespaces()['nvim-virtual-text.${remote.channel}.' .. group], vim.fn.bufnr(path)
+  return buf == -1 and {} or vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })`, path, group);
 /** Those that show text: [row, col, details]. */
 const shown = async (path: string, group?: string) =>
   (await extmarks(path, group)).filter(m => m[3].virt_text || m[3].virt_lines).map(([, row, col, details]) => [row, col, details] as const);
@@ -668,6 +668,253 @@ test('lines past the end are clamped, and bad marks are refused', async () => {
   await assert.rejects(text.place({ path, buf: 1, line: 1 }), /not both/);
   await assert.rejects(text.place({ path: join(dir, 'missing.txt'), line: 1, text: 'x' }), /no such file/);
   assert.throws(() => virtualText(remote, 'bad name'), /group/);
+});
+
+test('a file that cannot be one is refused, and one loaded for a mark that fails is not left loaded', async () => {
+  const folder = join(dir, `folder-${++files}`);
+  await mkdir(folder);
+  await assert.rejects(text.place({ path: folder, line: 1, text: 'x' }), /not a file/);
+  const locked = await file();
+  await chmod(locked, 0o000);
+  try {
+    await assert.rejects(text.place({ path: locked, line: 1, text: 'x' }), /cannot read/);
+  } finally {
+    await chmod(locked, 0o644);
+  }
+  const path = await file();
+  await assert.rejects(text.place({ path, match: 'nowhere', text: 'x' }), /not found/);
+  assert.equal(await lua('return vim.fn.bufexists(...)', path), 0);
+  const open = await file();
+  await lua('vim.cmd.edit(...); vim.cmd.enew()', open);
+  await assert.rejects(text.place({ path: open, match: 'nowhere', text: 'x' }), /not found/);
+  assert.equal(await lua('return vim.fn.bufexists(...)', open), 1, 'one the user opened stays');
+  assert.deepEqual([await text.list(), await lua('local folder = ...; return #vim.tbl_filter(function(b) return vim.api.nvim_buf_get_name(b) == folder end, vim.api.nvim_list_bufs())', folder)], [[], 0]);
+});
+
+test('the user\'s autocommands failing as a file is read do not fail a mark; one making it no file does', async () => {
+  await lua(`vim.api.nvim_create_augroup('user', {})
+    vim.api.nvim_create_autocmd('BufReadPost', { group = 'user', pattern = '*.txt', callback = function() error('broken plugin') end })
+    vim.api.nvim_create_autocmd('BufReadPost', { group = 'user', pattern = '*.scratch', command = 'setlocal buftype=nofile' })`);
+  try {
+    const path = await file();
+    await text.place({ path, line: 2, text: 'fine' });
+    assert.equal((await shown(path)).length, 1);
+    const scratch = join(dir, `file-${++files}.scratch`);
+    await writeFile(scratch, 'one\n');
+    await assert.rejects(text.place({ path: scratch, line: 1, text: 'x' }), /not a file/);
+    assert.equal(await lua('return vim.fn.bufexists(...)', scratch), 0);
+  } finally {
+    await lua("vim.api.nvim_del_augroup_by_name('user')");
+  }
+});
+
+test('wrapped to the window, lines wrap again as its width changes; to a number of columns, they stay', async () => {
+  const path = await file('    code();\n');
+  await lua('vim.o.columns = 120; vim.cmd.edit(...)', path);
+  try {
+    const sentence = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+    await text.place([
+      { path, line: 1, text: sentence, position: 'above', wrap: true, indent: true },
+      { path, line: 1, text: sentence, position: 'below', wrap: 50 },
+    ]);
+    // [above's rows, below's], whichever Neovim lists first.
+    const rows = async () => {
+      const found = await shown(path);
+      return [true, false].map(above => (found.find(([, , d]) => !!d.virt_lines_above === above)![2].virt_lines as unknown[]).length);
+    };
+    const widest = async () => {
+      const above = (await shown(path)).find(([, , d]) => d.virt_lines_above)![2].virt_lines as string[][][];
+      return Math.max(...above.map(line => words(line).length));
+    };
+    const [wide, fixed] = await rows();
+    await lua('vim.cmd("vsplit | vertical resize 40")');
+    await delay(50);
+    const [narrow, stillFixed] = await rows();
+    assert.ok(narrow > wide, `${wide} rows at 120 columns, ${narrow} at 40`);
+    assert.equal(stillFixed, fixed);
+    // The widest window showing it counts: closing the narrow one, they widen again.
+    await lua('vim.cmd("close")');
+    await delay(50);
+    assert.deepEqual(await rows(), [wide, fixed]);
+    // Shown nowhere, the editor's width; the same on the screen of a resized editor.
+    await lua('vim.o.columns = 60');
+    await delay(50);
+    assert.ok((await rows())[0] > wide);
+    assert.ok(await widest() <= 60);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
+test('reloaded by checktime, as autoread does, marks find their text where it now is', async () => {
+  for (const columns of [false, true]) {
+    const path = await file('head\ntarget\ntail\n');
+    await open(path);
+    await text.place({ path, match: 'target', columns, text: 'NOTE' });
+    await delay(1100); // A later mtime.
+    await writeFile(path, 'new\nlines\nhead\ntarget\ntail\n');
+    await lua('vim.o.autoread = true; vim.cmd("checktime")');
+    try {
+      assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col ?? null]), [[4, columns ? 0 : null]], `columns: ${columns}`);
+    } finally {
+      await lua('vim.o.autoread = false');
+      await text.clear();
+    }
+  }
+});
+
+test('undoing a reload puts marks back where they were in that text; redo, where the reload moved them', async () => {
+  for (const [how, columns] of [['edit!', false], ['checktime', true]] as const) {
+    const path = await file('head\ntarget here\ntail\n');
+    await open(path);
+    await text.place([{ path, match: 'target', columns, text: 'NOTE' }, { path, line: 3, text: 'BY LINE' }]);
+    const at = async () => (await text.list()).map(mark => [mark.line, mark.col ?? null]);
+    const before = await at();
+    await delay(1100); // A later mtime.
+    await writeFile(path, 'new\nlines\nhead\ntarget here\ntail\n');
+    await lua('vim.o.autoread = true; vim.cmd(...)', how);
+    try {
+      const after = await at();
+      assert.deepEqual(after, [[4, columns ? 0 : null], [5, null]], how);
+      await editor.request('nvim_input', ['u']);
+      await delay(100);
+      assert.deepEqual(await lua('return vim.api.nvim_buf_get_lines(0, 0, -1, true)'), ['head', 'target here', 'tail']);
+      assert.deepEqual(await at(), before, `${how}: undone`);
+      await editor.request('nvim_input', ['<C-r>']);
+      await delay(100);
+      assert.deepEqual(await at(), after, `${how}: redone`);
+    } finally {
+      await lua('vim.o.autoread = false');
+      await text.clear();
+    }
+  }
+});
+
+test('undoing a reload that moved a mark along its own line puts its columns back', async () => {
+  const path = await file('head\n    target and the rest\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  const at = async () => (await text.list()).map(mark => [mark.line, mark.col, mark.endCol]);
+  assert.deepEqual(await at(), [[2, 4, 10]]);
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'head\ntarget and the rest\ntail\n');
+  await lua('vim.cmd("edit!")');
+  assert.deepEqual(await at(), [[2, 0, 6]]);
+  await editor.request('nvim_input', ['u']);
+  await delay(100);
+  assert.equal(await lua('return vim.api.nvim_buf_get_lines(0, 1, 2, true)[1]'), '    target and the rest');
+  assert.deepEqual(await at(), [[2, 4, 10]], 'undone');
+  await editor.request('nvim_input', ['<C-r>']);
+  await delay(100);
+  assert.deepEqual(await at(), [[2, 0, 6]], 'redone');
+});
+
+test('positions saved around reloads stay few and small, however many reloads; the latest still undoes', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  for (let i = 0; i < 30; i++) await lua('vim.cmd("edit!")');
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nlines\nhead\ntarget\ntail\n');
+  await lua('vim.cmd("edit!")');
+  const [states, shapes] = await remote.lua(`local saved = remote.nvim_virtual_text.saved[vim.fn.bufnr(...)]
+    local shapes = {}
+    for _, positions in pairs(saved.at) do
+      for _, p in pairs(positions) do
+        local kinds = vim.tbl_map(type, p)
+        table.insert(shapes, table.concat(kinds, ' '))
+      end
+    end
+    return { vim.tbl_count(saved.at), vim.fn.uniq(vim.fn.sort(shapes)) }`, [path]);
+  assert.ok(states <= 40, `${states} states saved`);
+  assert.deepEqual(shapes, ['number number number number']);
+  await editor.request('nvim_input', ['u']);
+  await delay(100);
+  assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col]), [[2, 0]]);
+});
+
+test('after an autoread reload, a mark updated while hidden shows the update once undo brings it back', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  const [id] = await text.place({ path, match: 'target', text: 'original', position: 'above', invalidate: true });
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nhead\ntarget\ntail\n');
+  await lua('vim.o.autoread = true; vim.cmd("checktime")');
+  try {
+    await delay(50);
+    assert.equal((await text.list())[0].line, 3);
+    await lua('vim.api.nvim_buf_set_lines(0, 2, 3, true, {})');
+    await text.update(id, { text: 'pending after reload' });
+    await editor.request('nvim_input', ['u']);
+    await delay(100);
+    const drawn = (await shown(path)).flatMap(([, , d]) => (d.virt_lines as string[][][] ?? []).map(words));
+    assert.deepEqual(drawn, ['pending after reload']);
+  } finally { await lua('vim.o.autoread = false'); }
+});
+
+test('a buffer wiped by a user\'s autocommand, which fires no BufWipeout, takes its marks with it', async () => {
+  const path = await file('head\ntarget\ntail\n'), other = await file();
+  await open(path);
+  await text.place([{ path, match: 'target', text: 'NOTE' }, { path: other, line: 1, text: 'KEPT' }]);
+  // Not nested, as autocommands are unless asked: Neovim fires none from within it.
+  await lua(`vim.api.nvim_create_autocmd('BufReadPost', { once = true, pattern = vim.fn.fnameescape(...), callback = function(ev)
+    vim.api.nvim_buf_delete(ev.buf, { force = true })
+  end })`, path);
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nhead\ntarget\ntail\n');
+  await lua('vim.o.autoread = true; vim.cmd("checktime")');
+  try {
+    assert.equal(await lua('return vim.fn.bufexists(...)', path), 0);
+    assert.deepEqual((await text.list()).map(mark => mark.text), ['KEPT']);
+    await delay(50); // And once its watcher has seen it go.
+    assert.deepEqual((await text.list()).map(mark => mark.text), ['KEPT']);
+    assert.equal(await text.clear(), 1);
+  } finally { await lua('vim.o.autoread = false'); }
+});
+
+test('positions saved for a buffer go once it is wiped, even with its marks cleared first', async () => {
+  const path = await file('head\ntarget\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', text: 'NOTE' });
+  await lua('vim.cmd("edit!")'); // Saves positions around the reload.
+  const buf = await lua('return vim.fn.bufnr(...)', path);
+  await text.clear();
+  await lua('vim.cmd.enew(); vim.cmd.bunload(...)', buf);
+  await delay(50);
+  // Wiped from a user's autocommand, not nested: no BufWipeout, and unloaded, no detach either.
+  await lua(`local buf = ...
+    vim.api.nvim_create_autocmd('User', { pattern = 'WipeIt', once = true, callback = function()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end })
+    vim.api.nvim_exec_autocmds('User', { pattern = 'WipeIt' })`, buf);
+  assert.equal(await lua('return vim.api.nvim_buf_is_valid(...)', buf), false);
+  assert.deepEqual(await text.list(), []);
+  assert.equal(await remote.lua('return remote.nvim_virtual_text.saved[...] ~= nil', [buf]), false);
+});
+
+/** Wait, up to 3 s, until `check` holds. */
+async function eventually(check: () => Promise<boolean>) {
+  for (const end = Date.now() + 3000; !(await check()); await delay(20)) {
+    if (Date.now() > end) assert.fail('not within 3000 ms');
+  }
+}
+
+test('with the undo history cleared since a reload, an undo leaves marks on their text', async () => {
+  const path = await file('head\ntarget here\ntail\n');
+  await open(path);
+  await text.place({ path, match: 'target', columns: true, text: 'NOTE' });
+  await delay(1100); // A later mtime.
+  await writeFile(path, 'new\nother\nhead\ntarget here\ntail\n');
+  await lua('vim.cmd("edit!")');
+  // Cleared as plugins do: an edit with 'undolevels' at -1.
+  await lua(`local levels = vim.bo.undolevels
+    vim.bo.undolevels = -1
+    vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'new' })
+    vim.bo.undolevels = levels`);
+  await editor.request('nvim_input', ['ggOadded<Esc>']);
+  await eventually(async () => (await text.list())[0]?.line === 5);
+  await editor.request('nvim_input', ['u']);
+  await eventually(async () => (await lua('return vim.api.nvim_buf_line_count(0)')) === 5);
+  await delay(100);
+  assert.deepEqual((await text.list()).map(mark => [mark.line, mark.col]), [[4, 0]]);
 });
 
 test('a deleted buffer, opened again, shows its marks again', async () => {

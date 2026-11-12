@@ -149,6 +149,8 @@ test('when the editor drops the connection, Pi lets go, says why, and can reconn
   const again = await back;
   assert.notEqual(again, remote);
   assert.equal(nvim(), again);
+  // The dropped one is gone the moment it reconnects, not at the next look for closed channels.
+  assert.equal(await contexts(), 1);
   assert.equal(status['nvim-remote'], 'nvim');
   assert.match(notes.at(-1)![0], new RegExp(`^Neovim PID \\d+\\nSocket: ${socket}\\nChannel: ${again.channel}\\nTerminal buffer: not found$`));
   await fire('session_shutdown', { reason: 'quit' });

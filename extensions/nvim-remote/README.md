@@ -102,7 +102,8 @@ A Pi detaches when it quits, reloads, reconnects or is replaced by `/nvim-remote
 its cleanups run, its group and namespace go, and `User NvimRemoteDetach` fires. Cleanups
 that fail are reported in Pi. Neovim does not say when a channel closes, so it checks the
 channels of attached Pis every 0.5 s: a Pi that crashed or was killed is detached the same
-way, within half a second.
+way, within half a second; sooner, once anything is sent to it (`notify`, an `autocmd`), which
+is then dropped rather than raised at the user, or another Pi attaches.
 
 Several Pis can control one editor; each has its own `remote`, and detaching one leaves the
 others' setup alone. Their state is in `package.loaded['nvim_remote.v1']` (`.contexts`, by

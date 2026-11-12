@@ -79,7 +79,7 @@ checks have passed.
 
 | Mark | |
 | --- | --- |
-| `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it. |
+| `path` or `buf` | An absolute file path, or a buffer number. A file the user hasn't opened is loaded unlisted, so its marks are there when they open it; one loaded for a mark that then fails is not left loaded. A path that is no file to read (missing, a directory, unreadable, or made a buffer of another kind by the user's autocommands) is refused; files are opened as [nvim-remote-kit](../nvim-remote-kit/README.md) does. |
 | `line`, `endLine` | 1-based lines, clamped to the buffer. `endLine` (default `line`) ends the span `highlight` covers, and is where `below` goes. |
 | `match` | Code to find instead of giving lines: the mark covers the lines it's on. Each line of `match` must be found within one of the buffer's, in order, ignoring the whitespace around it, so quoted code needn't be indented as in the file. The occurrence nearest `line` wins (the first, without it). Not found, the call is rejected. It's looked for when the mark is placed, and when an update gives it a new `match`, `line`, `path` or `buf`. Otherwise the mark keeps to its lines as they're edited. |
 | `columns` | With `match`: mark just the text it finds, not its whole lines. The mark's columns are where the text is in its lines (the first place on each, tabs and multi-byte characters counted as Neovim counts them), so `highlight` covers only that text, `inline` goes right before it and `after` right after. They follow the text through edits, and through reloads too, along its line as well as to other lines. |
@@ -92,7 +92,7 @@ checks have passed.
 | `lineHl` | Color the lines marked across the whole window, under everything else on them: a group name or a style. |
 | `sign` | Up to two cells in the sign column at `line`: a string, or `[text, hl]`. In `hl` unless given its own. |
 | `indent` | For `above` and `below`: start at the indentation of the line they go by (`true`), or this many columns. |
-| `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. Measured when placed. |
+| `wrap` | For `above` and `below`: break lines at spaces (never inside a word, even one split across highlights) to fit the widest window showing the buffer, or the editor if none (`true`), or this many columns. Indentation counts. With `true`, they are wrapped again whenever that width changes: a window resized, split, closed, or the buffer shown in another. |
 | `fill` | For `above` and `below`: give each line `hl`'s background across the window's whole width, whatever its size, indentation and blank lines included. |
 | `invalidate` | Hide the mark while all its lines are deleted, and show it again if they come back on undo. `list` gives it with `invalid: true` meanwhile. Updated while hidden without being moved, it stays hidden and shows the change once undone. Reloaded from disk, it shows again if its text is back, and is removed if its text is nowhere. |
 | `ttl` | Remove the mark after this many milliseconds. |
@@ -105,6 +105,12 @@ or autoread after Pi edits it), a mark whose lines no longer hold that text move
 nearest place that does. For a mark placed by line, that's the nearest exact copy of its lines
 if there is one, however far. A mark whose text is gone stays where it was, unless it
 `invalidate`s.
+
+Undoing a reload (`u` straight after it, which Neovim allows with `'undoreload'`) brings the
+old text back and the marks with it, where they were in it; redo, where the reload moved them.
+A mark is only moved back onto the text it was placed on, never off it (as after the undo
+history is cleared, when Neovim numbers its states anew); one hidden then, or removed since,
+is left as it is.
 
 ## Development
 

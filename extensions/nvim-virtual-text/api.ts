@@ -2,13 +2,7 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { useRemote, type CallOptions, type Remote } from '../nvim-remote/api.ts';
-
-/** virtual-text.lua, sent once to each attachment, the first time it is needed there. */
-const MODULE = readFileSync(new URL('./virtual-text.lua', import.meta.url), 'utf8');
-const CALL = `local vt = remote.nvim_virtual_text
-if not vt then return 'not installed' end
-local fn = ...
-return vt[fn](select(2, ...))`;
+import { module, perAttachment } from '../nvim-remote-kit/api.ts';
 
 /** What nvim_set_hl takes; colors as `#rrggbb` or names. */
 export type Style = {
@@ -111,13 +105,11 @@ export type VirtualText = {
 
 type Lua = Pick<Remote, 'lua'>;
 
-/** Call `fn` of virtual-text.lua, installing it in this attachment first if it is not yet. */
-export async function call(remote: Lua, fn: string, args: unknown[], options?: CallOptions): Promise<any> {
-  const result = await remote.lua(CALL, [fn, ...args], options);
-  if (result !== 'not installed') return result;
-  await remote.lua(MODULE, [], options);
-  return remote.lua(CALL, [fn, ...args], options);
-}
+/**
+ * Call `fn` of virtual-text.lua, installing it in this attachment first if it is not yet: sent
+ * once to each attachment, the first time it is needed there.
+ */
+export const call = module('nvim_virtual_text', readFileSync(new URL('./virtual-text.lua', import.meta.url), 'utf8'));
 
 /** Without what is undefined, which would reach Lua as `vim.NIL`. */
 const defined = <T extends object>(value: T) =>
@@ -160,11 +152,7 @@ export function virtualText(remote: Lua, group: string): VirtualText {
  * `text()` wherever it is needed; undefined while Pi is not attached to Neovim.
  */
 export function useVirtualText(pi: ExtensionAPI, group: string, onAttach?: (text: VirtualText, nvim: Remote) => void) {
-  const handles = new WeakMap<Remote, VirtualText>();
-  const of = (nvim: Remote) => {
-    if (!handles.has(nvim)) handles.set(nvim, virtualText(nvim, group));
-    return handles.get(nvim)!;
-  };
+  const of = perAttachment(remote => virtualText(remote, group));
   const nvim = useRemote(pi, onAttach && (remote => onAttach(of(remote), remote)));
   return (): VirtualText | undefined => {
     const remote = nvim();

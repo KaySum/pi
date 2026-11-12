@@ -54,7 +54,9 @@ export default function (pi) {
 ```
 
 A view is plain data. `windowOf(view, id)`, `bufferOf(view, id)` and `bufferFor(view, path)`
-find a window or buffer in it, or give undefined for no view. `isShown(win, line)` says whether a line's text is on screen, `shownLine(win, line)` gives where (the fold hiding it, if one is), and `lineAtRow(win, row)` which line is at a screen row. `refresh()` makes a view now:
+find a window or buffer in it, or give undefined for no view. `bufferFor` finds a file by any
+name of it, as Neovim tells files apart: a link to it, or another case where the file system
+ignores case, is the same file (each buffer's `file`, its device and inode, while on disk). `isShown(win, line)` says whether a line's text is on screen, `shownLine(win, line)` gives where (the fold hiding it, if one is), and `lineAtRow(win, row)` which line is at a screen row. `refresh()` makes a view now:
 one that's new goes to every extension, as if sent by itself. The same view is on `pi.events`: `nvim-view:changed` (the
 view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 
@@ -62,7 +64,7 @@ view), `nvim-view:stopped`, and `nvim-view:get` with `{ reply }`.
 | --- | --- |
 | `editor` | `columns` × `lines`, `cmdheight`, `mode` (as `mode()` gives it) and `blocking` (waiting at a prompt), the global `cwd`, and `focused`: whether the terminal it runs in has focus, once it has said (for terminals that report it). |
 | `focus` | The current `tab`, `win` and `buf`, and the `previous` window (`#`): the one the user came from. |
-| `you` | The user's window: the focused one unless it's Pi's terminal or another like it, else the one they came from, else any showing a file. The place to show something to the user. |
+| `you` | The user's window: the focused one unless it's Pi's terminal or another like it, else the one they came from, else any showing a file, as [nvim-remote-kit](../nvim-remote-kit/README.md)'s `yours()` decides. The place to show something to the user. |
 | `pi` | Pi's terminal `buf` and the `windows` showing it, if it's on screen. |
 | `tabs` | Each tab's `id` and `number`, and which is `focused`: what the tabline names. Only the current tab's windows are on screen. |
 | `layout` | The current tab's splits, as a tree of `{ split: 'row' \| 'col', children }` (side by side, stacked) with `{ win }` leaves. |

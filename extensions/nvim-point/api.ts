@@ -3,8 +3,9 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { useRemote, type CallOptions, type Remote } from '../nvim-remote/api.ts';
+import { blocked, install, perAttachment, useCwd } from '../nvim-remote-kit/api.ts';
 
-/** point.lua, sent once to each attachment, the first time it is needed there. */
+/** point.lua, sent once to each attachment (the kit with it), the first time it is needed there. */
 const MODULE = readFileSync(new URL('./point.lua', import.meta.url), 'utf8');
 const SHOW = `if not remote.nvim_point then return 'not installed' end
 return remote.nvim_point.show(...)`;
@@ -121,11 +122,12 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
     try {
       const result = await remote.lua(SHOW, [spec], options);
       if (result !== 'not installed') return result;
-      await remote.lua(MODULE, [], options);
+      await install(remote, MODULE, options);
       return await remote.lua(SHOW, [spec], options);
     } catch (error) {
       // At a prompt, nvim-remote fails every call at once: the user is busy.
-      if ((error as { blocking?: boolean }).blocking) return { shown: false, busy: (error as { mode: string }).mode };
+      const busy = blocked(error);
+      if (busy !== undefined) return { shown: false, busy };
       throw error;
     }
   }
@@ -160,15 +162,10 @@ export function point(remote: Lua, cwd = process.cwd()): Point {
  * needed; undefined while Pi is not attached to Neovim.
  */
 export function usePoint(pi: ExtensionAPI) {
-  const handles = new WeakMap<Remote, Point>();
-  const nvim = useRemote(pi);
-  // Pi's working directory, which its tools' paths are relative to.
-  let cwd = process.cwd();
-  pi.on('session_start', (_event, ctx) => { cwd = ctx.cwd; });
+  const nvim = useRemote(pi), cwd = useCwd(pi);
+  const of = perAttachment(remote => point(remote, cwd()));
   return (): Point | undefined => {
     const remote = nvim();
-    if (!remote) return undefined;
-    if (!handles.has(remote)) handles.set(remote, point(remote, cwd));
-    return handles.get(remote);
+    return remote && of(remote);
   };
 }

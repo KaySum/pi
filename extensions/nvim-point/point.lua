@@ -8,84 +8,32 @@ end
 local point = {}
 remote.nvim_point = point
 
--- Load `buf`, as the user's own would be; `existed`: it was in the buffer list before. What was
--- done for it, to undo if it is not shown after all: "added", "loaded", or nothing.
-local function load(buf, existed)
-	if vim.api.nvim_buf_is_loaded(buf) then
-		return nil
-	end
-	-- An existing swap file would otherwise stop the editor at a prompt.
-	local shortmess = vim.o.shortmess
-	vim.opt.shortmess:append("A")
-	local ok, err = pcall(vim.fn.bufload, buf)
-	vim.o.shortmess = shortmess
-	-- An error from the user's autocommands once it is loaded is no failure.
-	if not ok and not vim.api.nvim_buf_is_loaded(buf) then
-		error(err, 0)
-	end
-	return existed and "loaded" or "added"
-end
+-- What it shares with the other extensions: installed before this.
+local kit = remote.kit
 
 -- The buffer of `spec`: `spec.buf`, any but a terminal, or the file at `spec.path`. Loaded,
--- and what was done for it (see `load`).
+-- and what was done for it (see the kit's `load`).
 local function buffer(spec)
-	if spec.buf then
-		if not vim.api.nvim_buf_is_valid(spec.buf) then
-			error(("no buffer %d"):format(spec.buf), 0)
-		elseif vim.bo[spec.buf].buftype == "terminal" then
-			error(("buffer %d is a terminal"):format(spec.buf), 0)
-		end
-		return spec.buf, load(spec.buf, true)
+	if spec.path then
+		return kit.open(spec.path)
+	elseif not vim.api.nvim_buf_is_valid(spec.buf) then
+		error(("no buffer %d"):format(spec.buf), 0)
+	elseif vim.bo[spec.buf].buftype == "terminal" then
+		error(("buffer %d is a terminal"):format(spec.buf), 0)
 	end
-	local path = spec.path
-	local stat = vim.uv.fs_stat(path)
-	local existed = vim.fn.bufexists(path) == 1
-	if not existed and not stat then
-		error(("no such file: %s"):format(path), 0)
-	elseif stat and stat.type ~= "file" then
-		error(("not a file: %s"):format(path), 0)
-	elseif stat and not vim.uv.fs_access(path, "R") then
-		error(("cannot read: %s"):format(path), 0)
-	end
-	local buf = vim.fn.bufadd(path)
-	if vim.bo[buf].buftype ~= "" then
-		error(("not a file: %s"):format(path), 0)
-	end
-	local done = load(buf, existed)
-	-- The user's autocommands, as it was read, may have made it a buffer of another kind.
-	if vim.bo[buf].buftype ~= "" then
-		if done then
-			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
-		end
-		error(("not a file: %s"):format(path), 0)
-	end
-	return buf, done
-end
-
-local function shows_file(win)
-	return win ~= 0
-		and vim.api.nvim_win_is_valid(win)
-		and vim.api.nvim_win_get_config(win).relative == ""
-		and vim.bo[vim.api.nvim_win_get_buf(win)].buftype == ""
+	return spec.buf, kit.load(spec.buf, true)
 end
 
 -- Where to show `buf`: a window of this tab showing it already, else the user's: the one they
 -- are in unless it is Pi's terminal (or another like it), else the one they came from, else any
 -- showing a file. Nil if none does.
 local function window(buf)
-	local wins = { vim.api.nvim_get_current_win(), vim.fn.win_getid(vim.fn.winnr("#")) }
-	vim.list_extend(wins, vim.api.nvim_tabpage_list_wins(0))
-	for _, win in ipairs(wins) do
-		local here = win ~= 0 and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_config(win).relative == ""
-		if here and vim.api.nvim_win_get_buf(win) == buf then
+	for _, win in ipairs(kit.windows()) do
+		if vim.api.nvim_win_get_config(win).relative == "" and vim.api.nvim_win_get_buf(win) == buf then
 			return win
 		end
 	end
-	for _, win in ipairs(wins) do
-		if shows_file(win) then
-			return win
-		end
-	end
+	return kit.yours()
 end
 
 -- The topline that leaves `rows` screen rows above `line`, folds and wrapping counted.
@@ -157,111 +105,22 @@ local function find(buf, match, near)
 	return best
 end
 
--- Whether a window of this tab shows `spec.buf`, or the file at `spec.path`, as Neovim tells
--- files apart: by device and inode while it is on disk, so links, hard or symbolic, are one
--- file; and by buffer name as Neovim matches one ('fileignorecase', its own case folding). The
--- buffer of that name from bufadd(), which takes it literally, as bufnr() does not (a pattern);
--- only once bufexists() has found one, so that none is added.
+-- Whether a window of this tab shows `spec.buf`, or the file at `spec.path` by any name of it
+-- (see the kit's `file`).
 local function open_here(spec)
-	local named = spec.path and vim.fn.bufexists(spec.path) == 1 and vim.fn.bufadd(spec.path) or nil
-	local stat = spec.path and vim.uv.fs_stat(spec.path)
+	local is = spec.path and kit.file(spec.path)
 	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
 		local buf = vim.api.nvim_win_get_buf(win)
-		if vim.api.nvim_win_get_config(win).relative == "" then
-			if buf == spec.buf or buf == named then
-				return true
-			end
-			local name = vim.api.nvim_buf_get_name(buf)
-			local shown = stat and name ~= "" and vim.uv.fs_stat(name)
-			if shown and shown.dev == stat.dev and shown.ino == stat.ino then
-				return true
-			end
+		if vim.api.nvim_win_get_config(win).relative == "" and (buf == spec.buf or is and is(buf)) then
+			return true
 		end
 	end
 	return false
 end
 
--- Warn with the first of `texts` that fits where messages go (`v:echospace`, less with 'ruler'
--- and 'showcmd'), else the last cut to fit: a longer one would stop the editor at "Press ENTER".
-local function warn(texts)
-	local room = vim.v.echospace
-	local text = vim.iter(texts):find(function(text)
-		return vim.fn.strdisplaywidth(text) <= room
-	end)
-	if not text then
-		text = ""
-		for _, char in ipairs(vim.fn.split(texts[#texts], "\\zs")) do
-			if vim.fn.strdisplaywidth(text .. char) > room - 1 then
-				break
-			end
-			text = text .. char
-		end
-		text = room > 1 and text .. "…" or nil
-	end
-	if text then
-		vim.notify(text, vim.log.levels.WARN)
-	end
-end
-
--- Whether a FileChangedShell autocommand of the user's applies to `buf`: one of its own, or one
--- whose pattern Neovim matches to its file. Neovim's own matching decides (short and full
--- names, 'fileignorecase'): each pattern is given to a probe of ours, fired for `buf` alone.
-local function handled(buf)
-	local applies = false
-	local probe = vim.api.nvim_create_augroup("nvim-point-probe", { clear = true })
-	for _, autocmd in ipairs(vim.api.nvim_get_autocmds({ event = "FileChangedShell" })) do
-		if autocmd.buflocal then
-			applies = applies or autocmd.buffer == buf
-		else
-			vim.api.nvim_create_autocmd("FileChangedShell", {
-				group = probe,
-				pattern = autocmd.pattern,
-				callback = function()
-					applies = true
-				end,
-			})
-		end
-	end
-	if not applies then
-		pcall(vim.api.nvim_exec_autocmds, "FileChangedShell", { group = probe, buffer = buf, modeline = false })
-	end
-	vim.api.nvim_del_augroup_by_id(probe)
-	return applies
-end
-
--- Run `fn` where Neovim may find `buf`'s file changed on disk and ask what to do at a prompt,
--- which would hold this call until the user answers: unless they handle it themselves (a
--- FileChangedShell that applies to it), it is reloaded as 'autoread' would, else left, and they
--- are told after.
-local function guarded(buf, fn)
-	local guard = not handled(buf)
-		and vim.api.nvim_create_autocmd("FileChangedShell", {
-			buffer = buf,
-			callback = function()
-				local reason = vim.v.fcs_reason
-				vim.v.fcs_choice = reason == "changed" and vim.o.autoread and "reload" or ""
-				if vim.v.fcs_choice == "" then
-					-- As Neovim shows what is not printable (^@ for a newline, ^I): a newline would start a line.
-					local name = vim.fn.strtrans(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"))
-					local how = reason == "conflict" and " and here" or (" (%s)"):format(reason)
-					vim.schedule(function()
-						warn({ ("%s changed on disk%s: :e! loads it"):format(name, how), ("%s changed on disk%s"):format(name, how) })
-					end)
-				end
-			end,
-		})
-	local ok, err = pcall(fn)
-	if guard then
-		vim.api.nvim_del_autocmd(guard)
-	end
-	if not ok then
-		error(err, 0)
-	end
-end
-
 -- Show `buf` in `win`; with `quiet`, leaving its jumplist and alternate file as they were.
 local function enter(win, buf, quiet)
-	guarded(buf, function()
+	kit.guarded(buf, function()
 		if not quiet then
 			return vim.api.nvim_win_set_buf(win, buf)
 		end
@@ -276,11 +135,9 @@ end
 --- `spec.line`. Not while the user is busy: then `{ shown = false, busy = mode }`. (At a prompt
 --- this does not run: nvim-remote fails the call first.)
 function point.show(spec)
-	local mode = vim.api.nvim_get_mode().mode
-	if not (mode == "n" or mode == "nt" or mode == "t") then
-		return { shown = false, busy = mode }
-	elseif vim.fn.getcmdwintype() ~= "" then
-		return { shown = false, busy = "cmdwin" } -- In q:, no other window can change.
+	local busy = kit.busy()
+	if busy then
+		return { shown = false, busy = busy }
 	elseif spec.open == false and not open_here(spec) then
 		return { shown = false, closed = true } -- Neither loaded nor any window changed for it.
 	end
@@ -288,15 +145,13 @@ function point.show(spec)
 	local name = spec.path or ("buffer %d"):format(buf)
 	-- Not left loaded (a swap file and all) for a file the user did not open.
 	local function fail(message)
-		if done then
-			vim.api.nvim_buf_delete(buf, { force = true, unload = done == "loaded" })
-		end
+		kit.undo(buf, done)
 		error(message, 0)
 	end
 	-- A file changed on disk since it was loaded is reloaded now, as entering it would: the place
 	-- is found in what will be shown.
 	if not done and vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
-		guarded(buf, function()
+		kit.guarded(buf, function()
 			vim.cmd(("checktime %d"):format(buf))
 		end)
 	end

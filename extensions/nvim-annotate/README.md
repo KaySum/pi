@@ -37,7 +37,7 @@ Each note in `notes`:
 | `file` | The file, from Pi's working directory or absolute. |
 | `match` | The code it is on: lines of it, the space around them aside. Better than `line`, as it moves with the code; with `line` too, the occurrence nearest it. |
 | `line` | Or the line it is on. |
-| `text` | The note. It is drawn above the lines, its number first, indented to the code and wrapped as your window wraps code: by its `'wrap'`, `'linebreak'`, `'breakindent'` and `'showbreak'`. With `nowrap` it stays one line, scrolling sideways with the code. |
+| `text` | The note. It is drawn above the lines, its number first, indented to the code and wrapped as your window wraps code: by its `'wrap'`, `'linebreak'`, `'breakindent'` and `'showbreak'`. With `nowrap` it stays one line, scrolling sideways with the code. A file in several windows has its notes wrapped for the narrowest, so that they are whole in each. |
 | `kind` | What it is: `info` (default) explains; `hint` is a suggestion or aside; `warn`, a risk or something easy to get wrong; `error`, a bug. It is drawn in the color of the diagnostics of that name, so is not for emphasis. |
 
 For a walkthrough Pi adds its notes in the order to read them, with `show: true` to take you

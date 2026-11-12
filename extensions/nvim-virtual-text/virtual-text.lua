@@ -171,7 +171,7 @@ local function buffer(spec)
 	return vim.api.nvim_buf_is_valid(spec.buf) and spec.buf or error(("no buffer %d"):format(spec.buf), 0)
 end
 
--- Columns of text in the widest window showing `buf`, else in the editor.
+-- Columns of text in the narrowest window showing `buf`, else in the editor.
 local function text_width(buf)
 	local width = 0
 	for _, win in ipairs(vim.fn.win_findbuf(buf)) do
@@ -180,20 +180,22 @@ local function text_width(buf)
 	return width > 0 and width or vim.o.columns
 end
 
--- How the widest window showing `buf` wraps its text (with none, the global options): its
+-- How the narrowest window showing `buf` wraps its text (with none, the global options): its
 -- width and 'wrap', 'linebreak' at 'breakat', 'breakindent' with 'breakindentopt' and
--- 'showbreak', each as that window has it.
+-- 'showbreak', each as that window has it. Virtual lines are the buffer's, the same in every
+-- window: wrapped for the narrowest, they are whole in each, where for a wider one they would
+-- be cut off in the rest.
 local function layout_of(buf)
-	local widest, width = nil, -1
+	local narrowest, width = nil, math.huge
 	for _, win in ipairs(vim.fn.win_findbuf(buf)) do
 		local w = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
-		if w > width then
-			widest, width = win, w
+		if w < width then
+			narrowest, width = win, w
 		end
 	end
 	local function read()
-		local layout = { width = widest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
-		local o = widest and vim.o or vim.go
+		local layout = { width = narrowest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
+		local o = narrowest and vim.o or vim.go
 		layout.wrap, layout.linebreak, layout.showbreak = o.wrap, o.linebreak, o.showbreak
 		layout.breakindent = o.breakindent
 		for _, item in ipairs(vim.split(o.breakindentopt, ",", { trimempty = true })) do
@@ -206,7 +208,7 @@ local function layout_of(buf)
 		end
 		return layout
 	end
-	return widest and vim.api.nvim_win_call(widest, read) or read()
+	return narrowest and vim.api.nvim_win_call(narrowest, read) or read()
 end
 
 -- What a mark wrapped to its windows was measured against, to wrap it again once it changes.
@@ -253,7 +255,11 @@ local function tokens(text, breaks)
 	local found, at = {}, 1
 	while at <= #text do
 		local first, last = text:find("^%s+", at)
-		if first then
+		if first and breaks == false then
+			-- Anywhere: a space too is a place of its own, carried to the next row as the rest.
+			last = first
+			table.insert(found, { text:sub(first, last), space = true, ends = true })
+		elseif first then
 			table.insert(found, { text:sub(first, last), space = true })
 		else
 			first, last = text:find("^%S+", at)
@@ -277,13 +283,14 @@ end
 -- Break a line of chunks so that none ends past column `limit`, where it can be: at spaces,
 -- and after `breaks` (see `tokens`); the line starting at column `start`, those after it at
 -- `cont`. A word is whole across chunks: a change of highlight is no place to break. Widths
--- are measured where the text falls, for tabs. Each line as { chunks, continued }.
-local function wrap(chunks, limit, start, cont, breaks)
+-- are measured where the text falls, for tabs; with `spaces`, a word's space must fit too, as
+-- Neovim's own wrapping keeps it on the row. Each line as { chunks, continued }.
+local function wrap(chunks, limit, start, cont, breaks, spaces)
 	local words = {}
 	for _, chunk in ipairs(chunks) do
 		for _, token in ipairs(tokens(chunk[1], breaks)) do
 			local word = words[#words]
-			if not word or (word.ended and not token.space) then
+			if not word or (word.ended and (not token.space or breaks == false)) then
 				word = { pieces = {}, ended = false }
 				table.insert(words, word)
 			end
@@ -301,7 +308,7 @@ local function wrap(chunks, limit, start, cont, breaks)
 	end
 	local lines, col = { { {} } }, start
 	for _, word in ipairs(words) do
-		local ends = after(word.pieces, col, false)
+		local ends = after(word.pieces, col, spaces)
 		if col > (#lines == 1 and start or cont) and ends > col and ends > limit then
 			table.insert(lines, { {}, true })
 			col = cont
@@ -344,14 +351,16 @@ local function virtual_lines(buf, spec, row)
 				end
 			end
 			local shown = layout.breakindent and math.max(0, math.min(indent + layout.shift, layout.width - layout.min)) or 0
-			before = layout.sbr and layout.showbreak .. string.rep(" ", shown) or string.rep(" ", shown) .. layout.showbreak
-			cont = vim.fn.strdisplaywidth(before)
+			local mark = vim.fn.strdisplaywidth(layout.showbreak)
+			-- With "sbr" it takes the indent's first columns; else it comes after it.
+			cont = layout.sbr and math.max(shown, mark) or shown + mark
+			before = layout.showbreak
 		elseif spec.wrap == true then
 			limit = text_width(buf)
 		end
 		local wrapped = {}
 		for _, line in ipairs(lines) do
-			vim.list_extend(wrapped, wrap(line, math.max(indent + 1, cont + 1, limit), indent, cont, breaks))
+			vim.list_extend(wrapped, wrap(line, math.max(indent + 1, cont + 1, limit), indent, cont, breaks, layout and true))
 		end
 		lines = wrapped
 	else

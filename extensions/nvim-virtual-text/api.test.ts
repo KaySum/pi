@@ -930,6 +930,32 @@ test('wrapped as the window wraps its code: linebreak, breakindent, showbreak; a
   } finally { await lua('vim.o.columns = 80'); }
 });
 
+test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr, mid-word, the narrowest window', async () => {
+  const path = await file('x\n');
+  await lua(`vim.o.columns = 20; vim.cmd.edit(...)
+    vim.wo.wrap = true; vim.wo.linebreak = true; vim.wo.breakindent = false; vim.wo.showbreak = ''`, path);
+  const rows = async () => (await shown(path))[0][2].virt_lines.map(words) as string[];
+  const note = async (text: string) => {
+    await text_.clear();
+    await text_.place({ path, line: 1, text, position: 'above', wrap: 'window', indent: true });
+    return rows();
+  };
+  const text_ = text;
+  try {
+    // "ddddd" ends at the edge, but the space after it, where it may break, does not fit.
+    assert.deepEqual(await note('aaaa bbbb cccc ddddd eeee'), ['aaaa bbbb cccc ', 'ddddd eeee']);
+    // With "sbr", 'showbreak' takes the first columns of the indent, not columns before it.
+    await lua("vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:4,min:8,sbr'; vim.wo.showbreak = '> '");
+    assert.deepEqual(await note('aaaa bbbb cccc dddd eeee ffff'), ['aaaa bbbb cccc dddd ', '>   eeee ffff']);
+    // Anywhere: a row is full to the edge, and a space that does not fit starts the next.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ''");
+    assert.deepEqual(await note('abcdefghijkl mno'), ['abcdefghijkl', ' mno']);
+    // In two windows, wrapped for the narrower: whole in both.
+    await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
+    assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

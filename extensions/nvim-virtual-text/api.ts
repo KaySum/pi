@@ -57,7 +57,7 @@ export type Mark = {
   indent?: boolean | number;
   /**
    * `above` and `below`: break lines at spaces to fit the window showing the buffer (`true`) or
-   * this many columns; or (`'window'`) as that window wraps its code, by its 'wrap', 'linebreak',
+   * this many columns; or (`'window'`) as the narrowest window showing it wraps its code, by its 'wrap', 'linebreak',
    * 'breakindent' and 'showbreak', scrolling sideways with it when it does not wrap.
    */
   wrap?: boolean | number | 'window';

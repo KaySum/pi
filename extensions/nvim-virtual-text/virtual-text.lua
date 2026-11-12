@@ -220,11 +220,25 @@ local function measure(spec)
 	end
 end
 
+-- Cells `text` takes from column `col`, as Neovim draws it: a tab to the next stop of the
+-- current buffer's 'tabstop'. Not strdisplaywidth(), which near the current window's edge
+-- counts that window's own wrapping in ('breakindent', 'showbreak').
+local function cells(text, col)
+	if not text:find("\t", 1, true) then
+		return vim.api.nvim_strwidth(text)
+	end
+	local width, stop = 0, vim.bo.tabstop
+	for _, char in ipairs(vim.fn.split(text, "\\zs")) do
+		width = width + (char == "\t" and stop - (col + width) % stop or vim.api.nvim_strwidth(char))
+	end
+	return width
+end
+
 -- Measured in sequence: a tab's width depends on the column it starts at.
 local function width_of(chunks)
 	local width = 0
 	for _, chunk in ipairs(chunks) do
-		width = width + vim.fn.strdisplaywidth(chunk[1], width)
+		width = width + cells(chunk[1], width)
 	end
 	return width
 end
@@ -283,9 +297,10 @@ end
 -- Break a line of chunks so that none ends past column `limit`, where it can be: at spaces,
 -- and after `breaks` (see `tokens`); the line starting at column `start`, those after it at
 -- `cont`. A word is whole across chunks: a change of highlight is no place to break. Widths
--- are measured where the text falls, for tabs; with `spaces`, a word's space must fit too, as
--- Neovim's own wrapping keeps it on the row. Each line as { chunks, continued }.
-local function wrap(chunks, limit, start, cont, breaks, spaces)
+-- are measured where the text falls, for tabs. `native`: as Neovim wraps code, a word's space
+-- must fit too, and a row is filled cell by cell where a word cannot be kept whole (see
+-- `fill`). Each line as { chunks, continued }.
+local function wrap(chunks, limit, start, cont, breaks, native)
 	local words = {}
 	for _, chunk in ipairs(chunks) do
 		for _, token in ipairs(tokens(chunk[1], breaks)) do
@@ -301,28 +316,60 @@ local function wrap(chunks, limit, start, cont, breaks, spaces)
 	local function after(pieces, col, spaces)
 		for _, piece in ipairs(pieces) do
 			if spaces or not piece.space then
-				col = col + vim.fn.strdisplaywidth(piece[1], col)
+				col = col + cells(piece[1], col)
 			end
 		end
 		return col
 	end
 	local lines, col = { { {} } }, start
+	local function row_start()
+		return #lines == 1 and start or cont
+	end
+	local function put(text, hl)
+		local line = lines[#lines][1]
+		local last = line[#line]
+		if last and last[2] == hl then
+			last[1] = last[1] .. text
+		else
+			table.insert(line, { text, hl })
+		end
+	end
+	-- Cell by cell, as Neovim fills a row to its edge: a tab is its spaces where it falls, those
+	-- that do not fit starting the next row.
+	local function fill(piece)
+		for _, char in ipairs(vim.fn.split(piece[1], "\\zs")) do
+			local width = cells(char, col)
+			local cells = char == "\t" and vim.split(string.rep(" ", width), "") or { char }
+			for _, cell in ipairs(cells) do
+				local w = char == "\t" and 1 or width
+				if col + w > limit and col > row_start() then
+					table.insert(lines, { {}, true })
+					col = cont
+				end
+				put(cell, piece[2])
+				col = col + w
+			end
+		end
+	end
 	for _, word in ipairs(words) do
-		local ends = after(word.pieces, col, spaces)
-		if col > (#lines == 1 and start or cont) and ends > col and ends > limit then
+		local ends = after(word.pieces, col, native)
+		local anywhere = native and breaks == false
+		if not anywhere and col > row_start() and ends > col and ends > limit then
 			table.insert(lines, { {}, true })
 			col = cont
 		end
-		local line = lines[#lines][1]
-		for _, piece in ipairs(word.pieces) do
-			local last = line[#line]
-			if last and last[2] == piece[2] then
-				last[1] = last[1] .. piece[1]
-			else
-				table.insert(line, { piece[1], piece[2] })
+		-- As Neovim: anywhere, cell by cell; and a word too long for a row of its own, broken at
+		-- the edge rather than cut off by it.
+		if anywhere or (native and after(word.pieces, col, true) > limit) then
+			for _, piece in ipairs(word.pieces) do
+				fill(piece)
 			end
+		else
+			for _, piece in ipairs(word.pieces) do
+				put(piece[1], piece[2])
+			end
+			col = after(word.pieces, col, true)
 		end
-		col = after(word.pieces, col, true)
 	end
 	return lines
 end
@@ -332,7 +379,7 @@ local function virtual_lines(buf, spec, row)
 	local lines = lines_of(spec.text, default)
 	local indent = 0
 	if spec.indent == true then
-		indent = vim.fn.strdisplaywidth(vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]:match("^%s*"))
+		indent = cells(vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]:match("^%s*"), 0)
 	elseif type(spec.indent) == "number" then
 		indent = spec.indent
 	end
@@ -351,7 +398,7 @@ local function virtual_lines(buf, spec, row)
 				end
 			end
 			local shown = layout.breakindent and math.max(0, math.min(indent + layout.shift, layout.width - layout.min)) or 0
-			local mark = vim.fn.strdisplaywidth(layout.showbreak)
+			local mark = cells(layout.showbreak, 0)
 			-- With "sbr" it takes the indent's first columns; else it comes after it.
 			cont = layout.sbr and math.max(shown, mark) or shown + mark
 			before = layout.showbreak
@@ -375,7 +422,7 @@ local function virtual_lines(buf, spec, row)
 		local prefix = { { string.rep(" ", continued and cont or indent), background } }
 		if continued and before then
 			-- 'showbreak' as Neovim draws it, in NonText, before the indent with "sbr", else after.
-			local pad = { string.rep(" ", cont - vim.fn.strdisplaywidth(layout.showbreak)), background }
+			local pad = { string.rep(" ", cont - cells(layout.showbreak, 0)), background }
 			local mark = { layout.showbreak, "NonText" }
 			prefix = layout.sbr and { mark, pad } or { pad, mark }
 		end

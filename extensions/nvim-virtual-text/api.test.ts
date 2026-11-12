@@ -950,6 +950,16 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     // Anywhere: a row is full to the edge, and a space that does not fit starts the next.
     await lua("vim.o.columns = 12; vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ''");
     assert.deepEqual(await note('abcdefghijkl mno'), ['abcdefghijkl', ' mno']);
+    // A word longer than a row is broken at the edge, as Neovim does, rather than cut off.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = true");
+    assert.deepEqual(await note('ab ' + 'x'.repeat(30)), ['ab ', 'x'.repeat(12), 'x'.repeat(12), 'x'.repeat(6)]);
+    // Measured as cells, whatever the window's own wrapping: a row after a break is full too.
+    await lua("vim.wo.linebreak = false; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:2,min:4'");
+    assert.deepEqual(await note('abcdefghijklmnopqrstuvwxyz'), ['abcdefghijkl', '  mnopqrstuv', '  wxyz']);
+    await lua("vim.wo.breakindent = false");
+    // A tab across the edge: what fits stays, and its other cells start the next row.
+    await lua("vim.wo.linebreak = false; vim.bo.tabstop = 8");
+    assert.deepEqual(await note('abcdefghij\tz'), ['abcdefghij  ', '    z']);
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

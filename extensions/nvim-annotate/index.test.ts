@@ -143,6 +143,32 @@ test('notes go above code found by match or line, numbered, wrapped and indented
   assert.match(await annotate({ action: 'add', notes: [{ file: path, line: 100, text: 'Last.' }] }), /^Added note 4:\n4\. .*:100 `function f100\(\) \{\}`: Last\.$/);
 });
 
+test('notes wrap as your window wraps code: its breakindent shift, or not at all with nowrap', async () => {
+  const { nvim, annotate } = await attached();
+  const path = join(dir, 'wrapped.ts');
+  await writeFile(path, '  indented();\n');
+  const [yours] = await layout(path);
+  await lua(`local win = ...
+    vim.wo[win].wrap = true; vim.wo[win].linebreak = true; vim.wo[win].breakindent = true
+    vim.wo[win].breakindentopt = 'shift:4'; vim.wo[win].showbreak = ''`, yours);
+  const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ');
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 1, text: long }] });
+  const lines = async (): Promise<string[]> => lua(`local channel, path = ...
+    local ns = vim.api.nvim_get_namespaces()['nvim-virtual-text.' .. channel .. '.nvim-annotate']
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(vim.fn.bufnr(path), ns, 0, -1, { details = true })) do
+      if m[4].virt_lines then
+        return vim.tbl_map(function(l) return table.concat(vim.tbl_map(function(c) return c[1] end, l)) end, m[4].virt_lines)
+      end
+    end`, nvim!.channel, path);
+  let got = await lines();
+  assert.ok(got.length > 1, got.join('|'));
+  assert.ok(got[0].startsWith('  1. word0'));
+  for (const line of got.slice(1)) assert.match(line, /^ {6}\S/, line); // Its indent, 2, and the shift, 4.
+  await lua('vim.wo[...].wrap = false', yours);
+  await eventually(async () => (await lines()).length === 1);
+  assert.deepEqual(await lines(), [`  1. ${long}`]);
+});
+
 test('a note that cannot be placed places none: all or nothing', async () => {
   const { annotate } = await attached();
   const path = await file();

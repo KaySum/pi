@@ -8,7 +8,7 @@ export type Kind = typeof KINDS[number];
 
 /**
  * A note as asked for: on code by `match`, or on a line, in a file from Pi's working directory.
- * Always above its code, wrapped to the window and indented to it.
+ * Always above its code, indented to it, and wrapped as the user's window wraps code.
  */
 export type NoteSpec = { file: string; match?: string; line?: number; text: string; kind?: Kind };
 /** A note as placed, numbered in the order notes were added. */
@@ -93,7 +93,7 @@ export class Notes {
       const number = after + i + 1, kind = spec.kind ?? 'info';
       const mark: Mark = {
         key: `note-${number}`, path: resolve(cwd, spec.file), text: `${number}. ${spec.text}`, position: 'above', hl: HL[kind],
-        indent: true, wrap: true, invalidate: true,
+        indent: true, wrap: 'window', invalidate: true,
         ...(spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line }),
       };
       return { number, path: mark.path!, text: spec.text, kind, mark };

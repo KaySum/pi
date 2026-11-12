@@ -11,7 +11,7 @@ const PARAMETERS = Type.Object({
     file: Type.String({ minLength: 1, maxLength: 4096, description: 'The file, from the working directory or absolute.' }),
     match: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: 'The code the note is on: lines of it, the space around them aside. Preferred to line.' })),
     line: Type.Optional(Type.Integer({ minimum: 1, description: 'The line the note is on; with match, the occurrence nearest it.' })),
-    text: Type.String({ minLength: 1, maxLength: 2000, description: 'The note, drawn above the lines, wrapped to the window.' }),
+    text: Type.String({ minLength: 1, maxLength: 2000, description: 'The note, drawn above the lines, wrapped as the user\'s window wraps code.' }),
     kind: Type.Optional(Type.Union(KINDS.map(k => Type.Literal(k)), { description: KIND })),
   }), { minItems: 1, maxItems: 50, description: 'For add: the notes, in the order to read them.' })),
   note: Type.Optional(Type.Union([

@@ -368,6 +368,26 @@ test(':PiNotes in Neovim steps through the notes in order, passing over deleted 
   assert.equal((await cursor(yours))[0], 119);
 });
 
+test(':PiNotes says how it went, cut to fit where messages go', async () => {
+  const { annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 10, text: 'a' }] });
+  const said = () => lua('return vim.api.nvim_exec2("messages", { output = true }).output') as Promise<string>;
+  await lua('vim.cmd("messages clear")');
+  await editor.request('nvim_command', ['PiNotes 9']);
+  await eventually(async () => (await said()).includes('No note 9'));
+  await editor.request('nvim_command', ['PiNotes 1']);
+  await eventually(async () => (await said()).includes(`Note 1 of 1: ${name(path)}:10`));
+  // Too long for a narrow editor: cut, so that it never stops the editor at "Press ENTER".
+  await lua('vim.o.columns = 20');
+  try {
+    await editor.request('nvim_command', ['PiNotes wat']);
+    await eventually(async () => (await said()).split('\n').some(line => line.endsWith('…')));
+    assert.equal((await editor.request('nvim_get_mode', []) as { blocking: boolean }).blocking, false);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {
   const { nvim, annotate, run } = await attached();
   const path = await file();

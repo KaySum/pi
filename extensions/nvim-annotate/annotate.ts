@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { relative } from 'node:path';
 import { useRemote, type Remote } from '../nvim-remote/api.ts';
+import { errorText, perAttachment, useCwd, withKit } from '../nvim-remote-kit/api.ts';
 import { Notes, type Kind, type NoteSpec, type Placed } from './notes.ts';
 
 // :PiNotes in Neovim, its argument sent to Pi; gone with the attachment.
@@ -9,12 +10,8 @@ const COMMAND = `vim.api.nvim_create_user_command('PiNotes', function(o) remote.
   complete = function() return { 'next', 'prev' } end,
 })
 remote.on_detach(function() pcall(vim.api.nvim_del_user_command, 'PiNotes') end)`;
-// One line, kept short where messages go: a longer one would stop the editor at "Press ENTER".
-const SAY = `vim.api.nvim_echo({ { vim.fn.strcharpart(..., 0, math.max(vim.v.echospace, 1)) } }, false, {})`;
 const USAGE = 'Usage: /nvim-annotate [next | prev | <number> | clear]';
 
-const errorText = (error: unknown) =>
-  (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^Lua: /, '');
 const where = (note: Placed, cwd: string) =>
   `${relative(cwd, note.path).startsWith('..') ? note.path : relative(cwd, note.path)}:${note.line === note.endLine ? note.line : `${note.line}-${note.endLine}`}`;
 // The code it is on, so that a match that found other code than meant shows.
@@ -27,21 +24,16 @@ const describe = (note: Placed, cwd: string) =>
 
 /** Everything nvim-annotate registers; `parameters`, the tool's schema, from index.ts. */
 export default function register(pi: ExtensionAPI, parameters: Parameters<ExtensionAPI['registerTool']>[0]['parameters']) {
-  const all = new WeakMap<Remote, Notes>();
-  const notesOf = (remote: Remote) => {
-    if (!all.has(remote)) all.set(remote, new Notes(remote));
-    return all.get(remote)!;
-  };
+  const notesOf = perAttachment(remote => new Notes(remote));
   // Pi's working directory, which notes' files are from.
-  let cwd = process.cwd();
-  pi.on('session_start', (_event, ctx) => { cwd = ctx.cwd; });
+  const cwd = useCwd(pi);
 
   // Step to `which`, saying how it went.
   async function step(remote: Remote, which: number | 'next' | 'prev', options: { focus?: boolean } = {}) {
-    const result = await notesOf(remote).show(which, cwd, options);
+    const result = await notesOf(remote).show(which, cwd(), options);
     if (!result) return typeof which === 'number' ? `No note ${which}` : `No ${which === 'next' ? 'next' : 'previous'} note`;
     if (!result.pointed.shown) return 'busy' in result.pointed ? `Not now: you are busy in Neovim (mode ${result.pointed.busy})` : 'Not shown';
-    return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd)}`;
+    return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
 
@@ -50,7 +42,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     remote.on('nvim-annotate:step', async (arg: string) => {
       const which = parse(arg.trim() || 'next');
       const said = which === undefined ? "Usage: :PiNotes [next | prev | <number>]" : await step(remote, which).catch(errorText);
-      await remote.lua(SAY, [said]).catch(() => {});
+      // Fitted to where messages go: a longer one would stop the editor at "Press ENTER".
+      await withKit(remote, 'kit.say(...)', [said]).catch(() => {});
     });
   });
 

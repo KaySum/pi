@@ -12,6 +12,17 @@ local SWEEP_MS = 500
 
 local function alive(chan) return next(vim.api.nvim_get_chan_info(chan)) ~= nil end
 
+-- Notify the Pi on `chan`. Once the editor has closed its channel, Neovim refuses at once,
+-- though the channel is still listed (`alive`) for a while: the Pi is then detached on the next
+-- tick, not at the next sweep, and nothing is raised at the user. Other errors are raised.
+local function send(chan, ...)
+  local ok, err = pcall(vim.rpcnotify, chan, ...)
+  if ok then return true end
+  if not tostring(err):find('Invalid channel', 1, true) then error(err, 0) end
+  vim.schedule(function() M.detach(chan) end)
+  return false
+end
+
 -- The terminal buffer whose job is Pi or one of its ancestors (a shell, sidekick's wrapper).
 local function terminal_of(pid)
   local jobs = {}
@@ -59,7 +70,7 @@ function M.attach(chan, info)
   --- Run `fn` when this Pi detaches, quits or crashes; the last registered runs first.
   function ctx.on_detach(fn) table.insert(ctx.cleanups, fn) end
   --- Send this Pi a notification, received with `on(name, handler)`.
-  function ctx.notify(name, ...) vim.rpcnotify(chan, name, ...) end
+  function ctx.notify(name, ...) send(chan, name, ...) end
   M.contexts[chan] = ctx
   if not M._timer then
     M._timer = vim.uv.new_timer()
@@ -106,8 +117,8 @@ function M.autocmd(chan, id, events, opts)
   opts.callback = function(ev)
     local event = { event = ev.event, buf = ev.buf, file = ev.file, match = ev.match, id = ev.id }
     -- Data that cannot cross the socket (functions, say) is left out rather than lost with the rest.
-    if not pcall(vim.rpcnotify, chan, 'nvim-remote:autocmd', id, vim.tbl_extend('force', event, { data = ev.data })) then
-      vim.rpcnotify(chan, 'nvim-remote:autocmd', id, event)
+    if not pcall(send, chan, 'nvim-remote:autocmd', id, vim.tbl_extend('force', event, { data = ev.data })) then
+      send(chan, 'nvim-remote:autocmd', id, event)
     end
   end
   return vim.api.nvim_create_autocmd(events, opts)

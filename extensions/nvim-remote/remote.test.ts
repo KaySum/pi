@@ -327,6 +327,27 @@ test('a Pi whose channel dies is cleaned up by the editor itself', async () => {
   assert.deepEqual(await lua('return _G.cleaned'), ['last', 'first']);
 });
 
+test('sending to a Pi whose channel died, before the editor sweeps it, raises nothing and detaches it at once', async () => {
+  const remote = await attach(socket);
+  await remote.autocmd('User', () => {}, { pattern: 'PiDead' });
+  const closed = new Promise(resolve => remote.onClose(resolve));
+  await lua('vim.cmd("messages clear")');
+  const present = await lua(`local chan = ...
+    local nvim_remote = require("${MODULE}")
+    vim.fn.chanclose(chan)
+    local present = nvim_remote.contexts[chan] ~= nil
+    -- An autocommand it subscribed to, and a notification sent later, as nvim-view sends views.
+    vim.api.nvim_exec_autocmds('User', { pattern = 'PiDead' })
+    local ctx = nvim_remote.contexts[chan]
+    vim.schedule(function() ctx.notify('nvim-remote:test', 1) end)
+    return present`, remote.channel);
+  assert.equal(present, true, 'still attached, as the sweep has not run');
+  await closed;
+  await delay(100); // Well before the next sweep, at 500 ms.
+  assert.equal(await lua(`return require("${MODULE}").contexts[...] ~= nil`, remote.channel), false);
+  assert.doesNotMatch(await lua('return vim.api.nvim_exec2("messages", { output = true }).output'), /Invalid channel/);
+});
+
 test('a Pi that is killed is cleaned up by the editor itself', async () => {
   // A real process, attached and then killed without a chance to detach.
   const script = `import { attach } from ${JSON.stringify(new URL('./remote.ts', import.meta.url).href)};

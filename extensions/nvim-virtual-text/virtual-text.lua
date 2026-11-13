@@ -336,6 +336,20 @@ local function wrap(chunks, limit, start, cont)
 	return lines
 end
 
+-- The characters of `text` as Neovim draws them: its bytes when it is ASCII, as most is, at no
+-- call to Vimscript; else as \\zs splits it, which keeps a grapheme (combining marks, joined
+-- emoji) whole.
+local function characters(text)
+	if not text:find("[\128-\255]") then
+		local found = {}
+		for i = 1, #text do
+			found[i] = text:sub(i, i)
+		end
+		return found
+	end
+	return vim.fn.split(text, "\\zs")
+end
+
 -- Rows of a line of chunks as Neovim wraps a line of code (plines.c, charsize_regular), the
 -- line starting at column `start`, those after it at `cont`, each `limit` wide. Each character
 -- has a size, from its column `vcol` in the whole line: a tab to its next stop; a wide one that
@@ -345,7 +359,7 @@ end
 local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
 	local chars = {}
 	for _, chunk in ipairs(chunks) do
-		for _, char in ipairs(vim.fn.split(chunk[1], "\\zs")) do
+		for _, char in ipairs(characters(chunk[1])) do
 			table.insert(chars, { char, chunk[2] })
 		end
 	end
@@ -358,7 +372,11 @@ local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
 		lead = lead + 1
 	end
 	local function width(char, vcol)
-		return char == "\t" and tab(vcol) or vim.api.nvim_strwidth(char)
+		if char == "\t" then
+			return tab(vcol)
+		end
+		-- An ASCII character is one cell (as nvim_strwidth() has it), without asking.
+		return #char == 1 and 1 or vim.api.nvim_strwidth(char)
 	end
 	local lines, col = { { {} } }, start
 	local function put(text, hl)

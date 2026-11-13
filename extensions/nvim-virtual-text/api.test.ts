@@ -1001,6 +1001,22 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     assert.ok(paragraphs.length > 3, paragraphs.join('|'));
     for (const row of paragraphs.slice(2)) assert.match(row, /^ {10}\S/, row);
     await lua("vim.wo.breakindent = false; vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // A gutter that grows narrows the text and wraps them again, though no event says so.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.wo.number = false; vim.wo.signcolumn = 'auto'");
+    const wide = await note('aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk');
+    // Redrawn, as a UI's screen is after any change: this editor has none.
+    await lua('vim.wo.number = true; vim.wo.numberwidth = 4; vim.cmd("redraw")');
+    await delay(100);
+    const numbered = await rows();
+    assert.ok(numbered.length > wide.length, `${wide.length} rows, then ${numbered.length} with numbers`);
+    await lua('vim.wo.number = false; vim.cmd("redraw")');
+    await delay(100);
+    assert.deepEqual(await rows(), wide);
+    // A sign appearing, with signcolumn=auto: no option set at all.
+    await lua("vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('sign-test'), 0, 0, { sign_text = 'E' }); vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > wide.length, 'the sign column narrows the text');
+    await lua("vim.api.nvim_buf_clear_namespace(0, vim.api.nvim_create_namespace('sign-test'), 0, -1)");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

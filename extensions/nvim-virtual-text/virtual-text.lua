@@ -23,7 +23,7 @@ if not state then
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come.
-	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {} }
+	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
 		state.closed = true
@@ -98,6 +98,42 @@ if not state then
 		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak", "tabstop", "vartabstop" },
 		callback = rewrap,
 	})
+	-- And once a window's text width changes as its gutter grows or shrinks (numbers, signs as
+	-- they come and go, folds), of which no event tells: looked at once each window showing marks
+	-- wrapped as their windows do has been drawn, as its gutter is only known by then.
+	local widths, looking = {}, false
+	local function look()
+		looking = false
+		if state.closed then
+			return
+		end
+		local now, changed = {}, false
+		for _, win in ipairs(vim.api.nvim_list_wins()) do
+			if state.windowed[vim.api.nvim_win_get_buf(win)] then
+				now[win] = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+				changed = changed or widths[win] ~= now[win]
+			end
+		end
+		widths = now
+		-- rewrap() redraws only marks whose layout is not as measured.
+		if changed then
+			rewrap()
+		end
+	end
+	-- Named apart from the groups' (nvim-virtual-text.<channel>.<group>): a group may be "widths".
+	local drawing = vim.api.nvim_create_namespace(("nvim-virtual-text-widths.%d"):format(remote.channel))
+	vim.api.nvim_set_decoration_provider(drawing, {
+		on_win = function(_, _, buf)
+			if not looking and not state.closed and state.windowed[buf] then
+				looking = true
+				vim.schedule(look)
+			end
+			return false
+		end,
+	})
+	remote.on_detach(function()
+		vim.api.nvim_set_decoration_provider(drawing, {})
+	end)
 end
 
 -- Forget `buf`'s marks and what is kept for them: it is wiped.
@@ -109,6 +145,7 @@ function state.forget(buf)
 	end
 	state.saved[buf] = nil
 	state.watched[buf] = nil
+	state.windowed[buf] = nil
 end
 
 -- Forget the buffers wiped with no BufWipeout reaching us (from a user's autocommand, one not
@@ -1030,6 +1067,9 @@ local function install(id, group, spec, resolve, moved)
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
 	-- Wrapped to the windows showing it, what it was wrapped to (see `rewrap`).
 	mark.measure = measure(spec)
+	if spec.wrap == "window" then
+		state.windowed[spec.buf] = true
+	end
 	-- What reloads look for is what it was placed on, not what edits have made of that since.
 	if old and not resolve then
 		mark.anchor = old.anchor

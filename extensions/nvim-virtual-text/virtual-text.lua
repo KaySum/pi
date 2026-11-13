@@ -360,15 +360,24 @@ local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
 	local chars = {}
 	for _, chunk in ipairs(chunks) do
 		for _, char in ipairs(characters(chunk[1])) do
-			table.insert(chars, { char, chunk[2] })
+			local byte = #char == 1 and char:byte()
+			local control = byte and char ~= "\t" and (byte < 32 or byte == 127)
+			if control or (not byte and vim.fn.strtrans(char) ~= char) then
+				-- As Neovim draws it (^A, <80>), in SpecialKey: cells like any, though no break.
+				for _, cell in ipairs(characters(vim.fn.strtrans(char))) do
+					table.insert(chars, { cell, "SpecialKey", shown = true })
+				end
+			else
+				table.insert(chars, { char, chunk[2] })
+			end
 		end
 	end
-	local function isbreak(char)
-		return breakat[char] == true
+	local function isbreak(entry)
+		return not entry.shown and breakat[entry[1]] == true
 	end
 	-- 'linebreak' does not apply in the line's leading whitespace.
 	local lead = 1
-	while chars[lead] and isbreak(chars[lead][1]) do
+	while chars[lead] and isbreak(chars[lead]) do
 		lead = lead + 1
 	end
 	local function width(char, vcol)
@@ -405,7 +414,7 @@ local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
 			marker, size = 1, size + 1 -- The '>' in the last cell.
 		end
 		local stretched = false
-		if linebreak and i >= lead and isbreak(char) and chars[i + 1] and not isbreak(chars[i + 1][1]) then
+		if linebreak and i >= lead and isbreak(entry) and chars[i + 1] and not isbreak(chars[i + 1]) then
 			-- Neovim's colmax: where the row this character ends in ends, less its extra cells.
 			local adj = size - 1
 			local colmax = limit - adj
@@ -416,7 +425,7 @@ local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
 			local vcol2, j = vcol, i
 			while true do
 				local next = chars[j + 1]
-				if not next or not (isbreak(next[1]) or vcol2 == vcol or not isbreak(chars[j][1])) then
+				if not next or not (isbreak(next) or vcol2 == vcol or not isbreak(chars[j])) then
 					break
 				end
 				j = j + 1
@@ -474,35 +483,48 @@ local function virtual_lines(buf, spec, row)
 	elseif type(spec.indent) == "number" then
 		indent = spec.indent
 	end
-	-- Lines after the first of each wrapped one: where they start, and what comes before them.
-	local cont, before = indent, nil
+	-- Where the rows after the first of a wrapped line start, and what comes before them.
+	local before = nil
 	local layout = spec.wrap == "window" and layout_of(buf)
 	if spec.wrap and not (layout and not layout.wrap) then
 		local limit, breakat = spec.wrap, {}
+		-- As the window wraps its code: 'breakindent' keeps a line's indent, shifted, so that at
+		-- least `min` columns are left; 'showbreak' goes before it with "sbr", else after it. In
+		-- Neovim's order: the indent and shift, less 'showbreak' with "sbr", at least 0 and
+		-- leaving `min` columns, then 'showbreak'. A line's indent is the code's and its own.
+		local function continuation(line)
+			if not layout then
+				return indent
+			end
+			local text = table.concat(vim.tbl_map(function(chunk)
+				return chunk[1]
+			end, line))
+			local own = indent + cells(text:match("^[ \t]*"), indent)
+			local mark = cells(layout.showbreak, 0)
+			local shown = layout.breakindent and math.max(0, own + layout.shift - (layout.sbr and mark or 0)) or 0
+			if shown > layout.width - layout.min then
+				shown = math.max(0, layout.width - layout.min)
+			end
+			return shown + mark
+		end
 		if layout then
-			-- As the window wraps its code: 'breakindent' keeps the indent, shifted, so that at
-			-- least `min` columns are left, and 'showbreak' goes before it with "sbr", else after.
 			limit = layout.width
 			for _, char in ipairs(vim.fn.split(layout.breakat, "\\zs")) do
 				breakat[char] = true
 			end
-			-- As Neovim: the indent and shift, less 'showbreak' with "sbr", at least 0 and leaving
-			-- `min` columns; 'showbreak' then comes before it with "sbr", else after it.
-			local mark = cells(layout.showbreak, 0)
-			local shown = layout.breakindent and math.max(0, indent + layout.shift - (layout.sbr and mark or 0)) or 0
-			if shown > layout.width - layout.min then
-				shown = math.max(0, layout.width - layout.min)
-			end
-			cont = shown + mark
 			before = layout.showbreak
 		elseif spec.wrap == true then
 			limit = text_width(buf)
 		end
 		local wrapped = {}
 		for _, line in ipairs(lines) do
-			limit = math.max(indent + 1, cont + 1, limit)
-			vim.list_extend(wrapped, layout and wrap_native(line, limit, indent, cont, layout.linebreak, breakat)
-				or wrap(line, limit, indent, cont))
+			local cont = continuation(line)
+			local width = math.max(indent + 1, cont + 1, limit)
+			for _, row in ipairs(layout and wrap_native(line, width, indent, cont, layout.linebreak, breakat)
+				or wrap(line, width, indent, cont)) do
+				row[3] = cont
+				table.insert(wrapped, row)
+			end
 		end
 		lines = wrapped
 	else
@@ -513,7 +535,7 @@ local function virtual_lines(buf, spec, row)
 	-- Filled, a line's background is `hl`'s from edge to edge: indentation, blank lines and all.
 	local background = spec.fill and default or nil
 	return vim.tbl_map(function(entry)
-		local line, continued = entry[1], entry[2]
+		local line, continued, cont = entry[1], entry[2], entry[3] or indent
 		local prefix = { { string.rep(" ", continued and cont or indent), background } }
 		if continued and before then
 			-- 'showbreak' as Neovim draws it, in NonText, before the indent with "sbr", else after.

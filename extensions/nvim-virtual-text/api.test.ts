@@ -989,6 +989,18 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     const tabbed = await note('1. alpha\tbeta gamma delta\tepsilon zeta eta\ttheta iota kappa');
     assert.deepEqual(tabbed, ['    1. alpha    beta gamma delta  ', '      epsilon zeta eta', 'theta iota kappa']);
     await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // A control character is its ^X form, two cells that, like any, may part across rows.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false");
+    assert.deepEqual(await note('A'.repeat(11) + '\x01TAIL'), ['A'.repeat(11) + '^', 'ATAIL']);
+    await lua("vim.o.columns = 13");
+    assert.deepEqual(await note('A'.repeat(11) + '\x01TAIL'), ['A'.repeat(11) + '^A', 'TAIL']);
+    // Each paragraph wraps by its own indent, as a line of code does: the code's and its own.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:2'; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    const paragraphs = await note('intro\n    alpha beta gamma delta epsilon zeta eta theta');
+    assert.match(paragraphs[1], /^ {8}alpha/);
+    assert.ok(paragraphs.length > 3, paragraphs.join('|'));
+    for (const row of paragraphs.slice(2)) assert.match(row, /^ {10}\S/, row);
+    await lua("vim.wo.breakindent = false; vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

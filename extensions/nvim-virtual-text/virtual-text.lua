@@ -95,13 +95,17 @@ if not state then
 	-- And once how the windows wrap text changes, for those wrapped as their windows do.
 	vim.api.nvim_create_autocmd("OptionSet", {
 		group = remote.group,
-		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak", "tabstop", "vartabstop", "ambiwidth", "emoji" },
+		pattern = {
+			"wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak",
+			"tabstop", "vartabstop", "ambiwidth", "emoji", "display", "isprint",
+		},
 		callback = rewrap,
 	})
 	-- And once a window's text width changes as its gutter grows or shrinks (numbers, signs as
-	-- they come and go, folds), of which no event tells: looked at once each window showing marks
-	-- wrapped as their windows do has been drawn, as its gutter is only known by then.
-	local widths, looking = {}, false
+	-- they come and go, folds), or characters' widths by setcellwidths(), of which no event tells:
+	-- looked at once each window showing marks wrapped as their windows do has been drawn, as its
+	-- gutter is only known by then.
+	local widths, cellwidths, looking = {}, nil, false
 	local function look()
 		looking = false
 		if state.closed then
@@ -115,6 +119,9 @@ if not state then
 			end
 		end
 		widths = now
+		local given = vim.inspect(vim.fn.getcellwidths())
+		changed = changed or cellwidths ~= given
+		cellwidths = given
 		-- rewrap() redraws only marks whose layout is not as measured.
 		if changed then
 			rewrap()
@@ -234,8 +241,11 @@ local function layout_of(buf)
 		local layout = { width = narrowest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
 		-- The buffer's tab stops, which tabs and the code's indent are measured by.
 		layout.tabstop, layout.vartabstop = vim.bo[buf].tabstop, vim.bo[buf].vartabstop
-		-- And how wide characters are: ambiguous ones, such as '·', and emoji.
+		-- And how characters are drawn and how wide: ambiguous ones, such as '·', and emoji; any
+		-- given widths by setcellwidths(); and as what ('display' "uhex", 'isprint').
 		layout.ambiwidth, layout.emoji = vim.o.ambiwidth, vim.o.emoji
+		layout.cellwidths = vim.inspect(vim.fn.getcellwidths())
+		layout.display, layout.isprint = vim.o.display, vim.o.isprint
 		local o = narrowest and vim.o or vim.go
 		layout.wrap, layout.linebreak, layout.showbreak = o.wrap, o.linebreak, o.showbreak
 		layout.breakindent = o.breakindent
@@ -1394,7 +1404,9 @@ function state.reanchor(buf)
 				if spec.columns and spec.match then
 					col, endCol = columns_of(buf, mark.anchor, found)
 				end
-				if found ~= spec.line or invalid or gone or col ~= spec.col or endCol ~= spec.endCol then
+				-- Re-indented in the file as reloaded, as when edited (see `state.sync`).
+				local reindented = mark.indented and mark.indented ~= indented(spec)
+				if found ~= spec.line or invalid or gone or reindented or col ~= spec.col or endCol ~= spec.endCol then
 					spec.endLine = spec.endLine and spec.endLine + found - spec.line
 					spec.line, spec.col, spec.endCol = found, col, endCol
 					install(id, mark.group, spec, false, true)

@@ -1034,6 +1034,34 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     await delay(100);
     assert.ok((await rows()).length > single.length, `${single.length} rows, then ${(await rows()).length}`);
     await lua("vim.o.ambiwidth = 'single'");
+    // What Neovim draws a character as, and how wide: 'display', 'isprint', setcellwidths().
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false; vim.o.display = 'lastline'");
+    await note('A'.repeat(11) + '\x01TAIL');
+    await lua("vim.o.display = 'lastline,uhex'; vim.cmd('redraw')");
+    await delay(100);
+    assert.deepEqual(await rows(), ['A'.repeat(11) + '<', '01>TAIL']);
+    await lua("vim.o.display = 'lastline'; vim.o.columns = 30");
+    const printable = await note('é'.repeat(20));
+    await lua("vim.o.isprint = '@,161-255,^233'; vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > printable.length, 'é as <e9>, four cells');
+    await lua("vim.o.isprint = '@,161-255'");
+    const narrow = await note('·'.repeat(40));
+    // No event says so: seen once the window is drawn.
+    await lua("vim.fn.setcellwidths({ { 0xB7, 0xB7, 2 } }); vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > narrow.length, '· two cells wide');
+    await lua("vim.fn.setcellwidths({})");
+    // Re-indented on disk and reloaded, the line where it was: as when edited.
+    await writeFile(path, '    x\n');
+    await lua("vim.cmd('edit!')");
+    await note('aaaa bbbb');
+    await writeFile(path, '            x\n');
+    await lua("vim.cmd('edit!')");
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
+    await writeFile(path, 'x\n');
+    await lua("vim.cmd('edit!')");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

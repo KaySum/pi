@@ -983,6 +983,12 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     await delay(50);
     assert.deepEqual(await rows(), ['        why']);
     await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' }); vim.wo.linebreak = true");
+    // With linebreak, around tabs too, rows break where Neovim breaks the same line of code: here
+    // 'delta' stays, its tab running on into the next row.
+    await lua("vim.o.columns = 34; vim.wo.linebreak = true; vim.bo.tabstop = 8; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    const tabbed = await note('1. alpha\tbeta gamma delta\tepsilon zeta eta\ttheta iota kappa');
+    assert.deepEqual(tabbed, ['    1. alpha    beta gamma delta  ', '      epsilon zeta eta', 'theta iota kappa']);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

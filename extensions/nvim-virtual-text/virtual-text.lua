@@ -101,29 +101,16 @@ if not state then
 		},
 		callback = rewrap,
 	})
-	-- And once a window's text width changes as its gutter grows or shrinks (numbers, signs as
-	-- they come and go, folds), or characters' widths by setcellwidths(), of which no event tells:
-	-- looked at once each window showing marks wrapped as their windows do has been drawn, as its
-	-- gutter is only known by then.
-	local widths, cellwidths, looking = {}, nil, false
+	-- And however else how they are laid out changes, of which no event tells: a gutter growing
+	-- (numbers, signs as they come and go, folds), setcellwidths(), an option set where no
+	-- OptionSet is fired (by an ftplugin, or any autocommand not nested). Looked at once each
+	-- window showing marks wrapped as their windows do has been drawn, as its gutter is only known
+	-- by then (see `state.relayout`).
+	local looking = false
 	local function look()
 		looking = false
-		if state.closed then
-			return
-		end
-		local now, changed = {}, false
-		for _, win in ipairs(vim.api.nvim_list_wins()) do
-			if state.windowed[vim.api.nvim_win_get_buf(win)] then
-				now[win] = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
-				changed = changed or widths[win] ~= now[win]
-			end
-		end
-		widths = now
-		local given = vim.inspect(vim.fn.getcellwidths())
-		changed = changed or cellwidths ~= given
-		cellwidths = given
 		-- rewrap() redraws only marks whose layout is not as measured.
-		if changed then
+		if not state.closed and state.relayout() then
 			rewrap()
 		end
 	end
@@ -260,6 +247,23 @@ local function layout_of(buf)
 		return layout
 	end
 	return narrowest and vim.api.nvim_win_call(narrowest, read) or read()
+end
+
+-- How each buffer with marks wrapped as their windows do was laid out when last looked at.
+local laid = {}
+
+-- Whether how any such buffer is laid out (see `layout_of`) has changed since last looked at,
+-- however it changed: its marks are then to be wrapped again.
+function state.relayout()
+	local now, changed = {}, false
+	for buf in pairs(state.windowed) do
+		if vim.api.nvim_buf_is_valid(buf) then
+			now[buf] = vim.inspect(layout_of(buf))
+			changed = changed or laid[buf] ~= now[buf]
+		end
+	end
+	laid = now
+	return changed
 end
 
 -- What a mark wrapped to its windows was measured against, to wrap it again once it changes.

@@ -1062,6 +1062,15 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     assert.match((await rows())[0], /^ {12}aaaa/);
     await writeFile(path, 'x\n');
     await lua("vim.cmd('edit!')");
+    // Set where Neovim fires no OptionSet, as by an ftplugin (an autocommand not nested).
+    await lua("vim.o.columns = 30; vim.wo.wrap = true; vim.wo.linebreak = true");
+    const wrapped = await note('aaaa bbbb cccc dddd eeee ffff gggg hhhh');
+    assert.ok(wrapped.length > 1);
+    await lua(`vim.api.nvim_create_autocmd('FileType', { pattern = 'layoutaudit', once = true, callback = function() vim.wo.wrap = false end })
+      vim.bo.filetype = 'layoutaudit'; vim.cmd('redraw')`);
+    await delay(100);
+    assert.equal((await rows()).length, 1);
+    await lua("vim.wo.wrap = true; vim.bo.filetype = ''");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

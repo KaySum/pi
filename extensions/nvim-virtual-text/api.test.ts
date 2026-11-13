@@ -971,6 +971,18 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     const prefix = '> ' + ' '.repeat(12);
     assert.deepEqual(await note('aaaa bbbb cccc dddd eeee ffff gggg'), ['aaaa bbbb cccc dddd ', `${prefix}eeee `, `${prefix}ffff `, `${prefix}gggg`]);
     await lua("vim.wo.breakindent = false; vim.wo.showbreak = ''");
+    // 'vartabstop' sets the stops when it is set: of note text, and of the code's indent.
+    await lua("vim.wo.linebreak = false; vim.bo.tabstop = 8; vim.bo.vartabstop = '4'");
+    assert.deepEqual(await note('A\tB'), ['A   B']);
+    await lua("vim.bo.vartabstop = '3,5'");
+    assert.deepEqual(await note('A\tB\tC\tD'), ['A  B    C    D']);
+    await lua("vim.bo.vartabstop = '4'; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '\tx' })");
+    assert.deepEqual(await note('why'), ['    why']);
+    // And a change of it wraps them again.
+    await lua("vim.bo.vartabstop = ''");
+    await delay(50);
+    assert.deepEqual(await rows(), ['        why']);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' }); vim.wo.linebreak = true");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

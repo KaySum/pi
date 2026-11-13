@@ -95,7 +95,7 @@ if not state then
 	-- And once how the windows wrap text changes, for those wrapped as their windows do.
 	vim.api.nvim_create_autocmd("OptionSet", {
 		group = remote.group,
-		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak" },
+		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak", "tabstop", "vartabstop" },
 		callback = rewrap,
 	})
 end
@@ -195,6 +195,8 @@ local function layout_of(buf)
 	end
 	local function read()
 		local layout = { width = narrowest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
+		-- The buffer's tab stops, which tabs and the code's indent are measured by.
+		layout.tabstop, layout.vartabstop = vim.bo[buf].tabstop, vim.bo[buf].vartabstop
 		local o = narrowest and vim.o or vim.go
 		layout.wrap, layout.linebreak, layout.showbreak = o.wrap, o.linebreak, o.showbreak
 		layout.breakindent = o.breakindent
@@ -220,16 +222,34 @@ local function measure(spec)
 	end
 end
 
--- Cells `text` takes from column `col`, as Neovim draws it: a tab to the next stop of the
--- current buffer's 'tabstop'. Not strdisplaywidth(), which near the current window's edge
--- counts that window's own wrapping in ('breakindent', 'showbreak').
+-- Cells a tab at column `col` takes in the current buffer: to its next stop, by 'vartabstop'
+-- when it is set (its widths in turn, then the last again and again), else 'tabstop'.
+local function tab(col)
+	local widths = vim.tbl_map(tonumber, vim.split(vim.bo.vartabstop, ",", { trimempty = true }))
+	if #widths == 0 then
+		return vim.bo.tabstop - col % vim.bo.tabstop
+	end
+	local stop = 0
+	for _, width in ipairs(widths) do
+		stop = stop + width
+		if stop > col then
+			return stop - col
+		end
+	end
+	local last = widths[#widths]
+	return last - (col - stop) % last
+end
+
+-- Cells `text` takes from column `col`, as Neovim draws it: a tab to its next stop (see `tab`).
+-- Not strdisplaywidth(), which near the current window's edge counts that window's own
+-- wrapping in ('breakindent', 'showbreak').
 local function cells(text, col)
 	if not text:find("\t", 1, true) then
 		return vim.api.nvim_strwidth(text)
 	end
-	local width, stop = 0, vim.bo.tabstop
+	local width = 0
 	for _, char in ipairs(vim.fn.split(text, "\\zs")) do
-		width = width + (char == "\t" and stop - (col + width) % stop or vim.api.nvim_strwidth(char))
+		width = width + (char == "\t" and tab(col + width) or vim.api.nvim_strwidth(char))
 	end
 	return width
 end
@@ -404,7 +424,7 @@ local function virtual_lines(buf, spec, row)
 	local lines = lines_of(spec.text, default)
 	local indent = 0
 	if spec.indent == true then
-		indent = cells(vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]:match("^%s*"), 0)
+		indent = vim.fn.indent(row + 1) -- As Neovim measures it, tab stops and all.
 	elseif type(spec.indent) == "number" then
 		indent = spec.indent
 	end

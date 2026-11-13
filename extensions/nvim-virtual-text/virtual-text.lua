@@ -95,7 +95,7 @@ if not state then
 	-- And once how the windows wrap text changes, for those wrapped as their windows do.
 	vim.api.nvim_create_autocmd("OptionSet", {
 		group = remote.group,
-		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak", "tabstop", "vartabstop" },
+		pattern = { "wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak", "tabstop", "vartabstop", "ambiwidth", "emoji" },
 		callback = rewrap,
 	})
 	-- And once a window's text width changes as its gutter grows or shrinks (numbers, signs as
@@ -234,6 +234,8 @@ local function layout_of(buf)
 		local layout = { width = narrowest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
 		-- The buffer's tab stops, which tabs and the code's indent are measured by.
 		layout.tabstop, layout.vartabstop = vim.bo[buf].tabstop, vim.bo[buf].vartabstop
+		-- And how wide characters are: ambiguous ones, such as '·', and emoji.
+		layout.ambiwidth, layout.emoji = vim.o.ambiwidth, vim.o.emoji
 		local o = narrowest and vim.o or vim.go
 		layout.wrap, layout.linebreak, layout.showbreak = o.wrap, o.linebreak, o.showbreak
 		layout.breakindent = o.breakindent
@@ -1055,6 +1057,18 @@ local function watch(buf)
 end
 
 -- Draw `spec` as mark `id`, over what it was. `moved`: only moved, so a `ttl` runs on as it was.
+-- The indent a mark's lines above or below its code are drawn at, with `indent = true`: that of
+-- the line they go by, as Neovim measures it. Nil for any other mark.
+local function indented(spec)
+	if spec.indent ~= true or not (spec.position == "above" or spec.position == "below") then
+		return nil
+	end
+	local line = spec.position == "below" and (spec.endLine or spec.line) or spec.line
+	return vim.api.nvim_buf_call(spec.buf, function()
+		return vim.fn.indent(line)
+	end)
+end
+
 local function install(id, group, spec, resolve, moved)
 	local old = state.marks[id]
 	if old and not moved then
@@ -1066,7 +1080,7 @@ local function install(id, group, spec, resolve, moved)
 	local mark = { group = group, spec = spec, given = old and old.given, generation = old and old.generation }
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
 	-- Wrapped to the windows showing it, what it was wrapped to (see `rewrap`).
-	mark.measure = measure(spec)
+	mark.measure, mark.indented = measure(spec), indented(spec)
 	if spec.wrap == "window" then
 		state.windowed[spec.buf] = true
 	end
@@ -1223,7 +1237,9 @@ function state.sync(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
-			if not invalid and (mark.stale or astray(mark, spec)) then
+			-- Its code re-indented (>>, a formatter) moves it with it, and wraps it anew.
+			local reindented = mark.indented and mark.indented ~= indented(spec)
+			if not invalid and (mark.stale or reindented or astray(mark, spec)) then
 				pcall(install, id, mark.group, spec, false, true)
 			end
 		end

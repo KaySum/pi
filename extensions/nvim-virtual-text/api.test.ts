@@ -1017,6 +1017,23 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     await delay(100);
     assert.ok((await rows()).length > wide.length, 'the sign column narrows the text');
     await lua("vim.api.nvim_buf_clear_namespace(0, vim.api.nvim_create_namespace('sign-test'), 0, -1)");
+    // The code re-indented after it was placed: indented and wrapped by its new indent.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    await note('aaaa bbbb cccc dddd');
+    await lua("vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '        ' })");
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
+    await lua("vim.bo.shiftwidth = 4; vim.bo.expandtab = true; vim.cmd('1normal! <<')");
+    await delay(100);
+    assert.match((await rows())[0], /^ {8}aaaa/);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // 'ambiwidth' makes such characters as '·' two cells: wrapped again by their new width.
+    await lua("vim.o.fillchars = 'vert:|,fold:-,eob:~'; vim.o.listchars = 'tab:> ,trail:-,nbsp:+'; vim.o.ambiwidth = 'single'");
+    const single = await note('·'.repeat(40));
+    await lua("vim.o.ambiwidth = 'double'");
+    await delay(100);
+    assert.ok((await rows()).length > single.length, `${single.length} rows, then ${(await rows()).length}`);
+    await lua("vim.o.ambiwidth = 'single'");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

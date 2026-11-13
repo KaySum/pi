@@ -960,6 +960,17 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     // A tab across the edge: what fits stays, and its other cells start the next row.
     await lua("vim.wo.linebreak = false; vim.bo.tabstop = 8");
     assert.deepEqual(await note('abcdefghij\tz'), ['abcdefghij  ', '    z']);
+    // A tab on a later row reaches its stop counted along the whole line, not the row: one cell.
+    await lua("vim.o.columns = 20; vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ''; vim.bo.tabstop = 8");
+    assert.deepEqual(await note('A'.repeat(23) + '\tB'), ['A'.repeat(20), 'AAA B']);
+    // A wide character that does not fit the last cell leaves '>' there, as Neovim draws it.
+    await lua("vim.o.columns = 12");
+    assert.deepEqual(await note('a' + '雪'.repeat(7)), ['a' + '雪'.repeat(5) + '>', '雪'.repeat(2)]);
+    // "sbr": the shift less 'showbreak', clamped by min, then 'showbreak' before it.
+    await lua("vim.o.columns = 20; vim.wo.linebreak = true; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:16,min:8,sbr'; vim.wo.showbreak = '> '");
+    const prefix = '> ' + ' '.repeat(12);
+    assert.deepEqual(await note('aaaa bbbb cccc dddd eeee ffff gggg'), ['aaaa bbbb cccc dddd ', `${prefix}eeee `, `${prefix}ffff `, `${prefix}gggg`]);
+    await lua("vim.wo.breakindent = false; vim.wo.showbreak = ''");
     // In two windows, wrapped for the narrower: whole in both.
     await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
     assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);

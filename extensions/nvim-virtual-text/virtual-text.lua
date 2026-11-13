@@ -234,6 +234,20 @@ local function cells(text, col)
 	return width
 end
 
+-- `text` with its tabs as the spaces they take from column `col`.
+local function expand(text, col)
+	if not text:find("\t", 1, true) then
+		return text
+	end
+	local out = {}
+	for _, char in ipairs(vim.fn.split(text, "\\zs")) do
+		local width = cells(char, col)
+		table.insert(out, char == "\t" and string.rep(" ", width) or char)
+		col = col + width
+	end
+	return table.concat(out)
+end
+
 -- Measured in sequence: a tab's width depends on the column it starts at.
 local function width_of(chunks)
 	local width = 0
@@ -313,15 +327,20 @@ local function wrap(chunks, limit, start, cont, breaks, native)
 			word.ended = word.ended or token.space or token.ends
 		end
 	end
+	local lines, col = { { {} } }, start
+	-- Where column `col` of this row is in the whole line, which tabs are aligned along: as
+	-- Neovim, each row before it counted whole, its continuation prefix too.
+	local function at(col)
+		return native and (#lines - 1) * limit + col or col
+	end
 	local function after(pieces, col, spaces)
 		for _, piece in ipairs(pieces) do
 			if spaces or not piece.space then
-				col = col + cells(piece[1], col)
+				col = col + cells(piece[1], at(col))
 			end
 		end
 		return col
 	end
-	local lines, col = { { {} } }, start
 	local function row_start()
 		return #lines == 1 and start or cont
 	end
@@ -338,11 +357,15 @@ local function wrap(chunks, limit, start, cont, breaks, native)
 	-- that do not fit starting the next row.
 	local function fill(piece)
 		for _, char in ipairs(vim.fn.split(piece[1], "\\zs")) do
-			local width = cells(char, col)
-			local cells = char == "\t" and vim.split(string.rep(" ", width), "") or { char }
-			for _, cell in ipairs(cells) do
+			local width = cells(char, at(col))
+			local parts = char == "\t" and vim.split(string.rep(" ", width), "") or { char }
+			for _, cell in ipairs(parts) do
 				local w = char == "\t" and 1 or width
 				if col + w > limit and col > row_start() then
+					-- A wide character that does not fit leaves '>' in the cells left, as Neovim.
+					if col < limit then
+						put(string.rep(">", limit - col), "NonText")
+					end
 					table.insert(lines, { {}, true })
 					col = cont
 				end
@@ -366,9 +389,11 @@ local function wrap(chunks, limit, start, cont, breaks, native)
 			end
 		else
 			for _, piece in ipairs(word.pieces) do
-				put(piece[1], piece[2])
+				local width = cells(piece[1], at(col))
+				-- Tabs as the spaces they take here: drawn, they would count from the row's start.
+				put(native and expand(piece[1], at(col)) or piece[1], piece[2])
+				col = col + width
 			end
-			col = after(word.pieces, col, true)
 		end
 	end
 	return lines
@@ -397,10 +422,14 @@ local function virtual_lines(buf, spec, row)
 					breaks[char] = not char:match("^%s$") or nil
 				end
 			end
-			local shown = layout.breakindent and math.max(0, math.min(indent + layout.shift, layout.width - layout.min)) or 0
+			-- As Neovim: the indent and shift, less 'showbreak' with "sbr", at least 0 and leaving
+			-- `min` columns; 'showbreak' then comes before it with "sbr", else after it.
 			local mark = cells(layout.showbreak, 0)
-			-- With "sbr" it takes the indent's first columns; else it comes after it.
-			cont = layout.sbr and math.max(shown, mark) or shown + mark
+			local shown = layout.breakindent and math.max(0, indent + layout.shift - (layout.sbr and mark or 0)) or 0
+			if shown > layout.width - layout.min then
+				shown = math.max(0, layout.width - layout.min)
+			end
+			cont = shown + mark
 			before = layout.showbreak
 		elseif spec.wrap == true then
 			limit = text_width(buf)

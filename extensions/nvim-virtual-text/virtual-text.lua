@@ -1048,10 +1048,20 @@ local function watch(buf)
 				end)
 			end
 		end,
+		-- Reloaded, however: from an autocommand not nested too, where no BufReadPost reanchors.
+		-- After it, as BufReadPost would have; then nothing to do if it did.
+		on_reload = function()
+			vim.schedule(function()
+				if not state.closed and vim.api.nvim_buf_is_loaded(buf) then
+					state.reanchor(buf)
+				end
+			end)
+		end,
 		on_detach = function()
 			state.watched[buf] = nil
-			-- A reload by :checktime (autoread) detaches it after BufReadPost, when it was still
-			-- watched: watched again, next, if still loaded with marks (unloaded, it is not).
+			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: watched again,
+			-- next, if it has marks. Reanchored too, as BufReadPost does, which a reload from an
+			-- autocommand not nested never fires; nothing to do if it did.
 			vim.schedule(function()
 				if state.closed then
 					return
@@ -1062,7 +1072,8 @@ local function watch(buf)
 				end
 				for _, mark in pairs(state.marks) do
 					if mark.spec.buf == buf then
-						return watch(buf)
+						watch(buf)
+						return state.reanchor(buf)
 					end
 				end
 			end)

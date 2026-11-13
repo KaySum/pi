@@ -1060,6 +1060,15 @@ test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr,
     await lua("vim.cmd('edit!')");
     await delay(100);
     assert.match((await rows())[0], /^ {12}aaaa/);
+    // Reloaded from an autocommand not nested, with no BufReadPost: as when reloaded.
+    await writeFile(path, '    x\n');
+    await lua("vim.cmd('edit!')");
+    await note('aaaa bbbb');
+    await writeFile(path, '            x\n');
+    await lua(`vim.api.nvim_create_autocmd('User', { pattern = 'ReloadLayout', once = true, callback = function() vim.cmd('edit!') end })
+      vim.cmd('doautocmd User ReloadLayout')`);
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
     await writeFile(path, 'x\n');
     await lua("vim.cmd('edit!')");
     // Set where Neovim fires no OptionSet, as by an ftplugin (an autocommand not nested).

@@ -46,7 +46,7 @@ async function pi({ remote = true } = {}) {
   const nvim = remote ? await ready : undefined;
   const annotate = async (params: object) => (await tools.nvim_annotate.execute('1', params, undefined, undefined, ctx)).content[0].text;
   const run = async (args: string) => { await commands['nvim-annotate'].handler(args, ctx); return notes.at(-1)!; };
-  return { nvim, annotate, run, tools, shutdown: () => fire('session_shutdown') };
+  return { nvim, annotate, run, tools, commands, ctx, notes, shutdown: () => fire('session_shutdown') };
 }
 
 const running = new Set<{ shutdown(): Promise<unknown> }>();
@@ -441,23 +441,24 @@ test('note numbers are numbers and ranges, either way round, by spaces or commas
   for (const bad of ['', ' ', 'x', '0', '2-', '-3', '1-2-3', '2 x', '1.5']) assert.equal(ranges(bad), undefined, bad);
 });
 
-test('/nvim-annotate and :PiNotes remove notes by numbers and ranges, mixed, in any order', async () => {
-  const { nvim, annotate, run } = await attached();
+test('/nvim-annotate-remove and :PiNotesRemove remove notes by numbers and ranges, mixed, in any order', async () => {
+  const { nvim, annotate, commands, ctx, notes } = await attached();
+  const remove = async (args: string) => { await commands['nvim-annotate-remove'].handler(args, ctx); return notes.at(-1)!; };
   const path = await file();
   await layout(path);
   await annotate({ action: 'add', notes: Array.from({ length: 8 }, (_, i) => ({ file: name(path), line: 10 + i * 10, text: `n${i + 1}` })) });
-  assert.deepEqual(await run('remove 7-5 2,8 12 20-30'), ['Removed notes 2, 5, 6, 7, 8; no notes 12, 20-30; the others keep their numbers', 'info']);
+  assert.deepEqual(await remove('7-5 2,8 12 20-30'), ['Removed notes 2, 5, 6, 7, 8; no notes 12, 20-30; the others keep their numbers', 'info']);
   assert.deepEqual((await drawn(nvim!, path)).map(([, text]) => text), ['1. n1', '3. n3', '4. n4']);
-  assert.deepEqual(await run('remove 2 x'), ['Usage: /nvim-annotate [next | prev | <number> | remove <numbers> | clear]', 'warning']);
-  assert.deepEqual(await run('remove 9'), ['No note 9', 'info']);
+  assert.deepEqual(await remove('2 x'), ['Usage: /nvim-annotate-remove <numbers and ranges, as 2 5-7,10>', 'warning']);
+  assert.deepEqual(await remove('9'), ['No note 9', 'info']);
   const said = () => lua('return vim.api.nvim_exec2("messages", { output = true }).output') as Promise<string>;
   await lua('vim.cmd("messages clear")');
-  await editor.request('nvim_command', ['PiNotes delete 4, 1']);
+  await editor.request('nvim_command', ['PiNotesRemove 4, 1']);
   await eventually(async () => (await said()).includes('Removed notes 1, 4'));
   assert.deepEqual((await drawn(nvim!, path)).map(([, text]) => text), ['3. n3']);
-  await editor.request('nvim_command', ['PiNotes remove']);
-  await eventually(async () => (await said()).includes('Usage: :PiNotes'));
-  assert.deepEqual(await run('remove 1-1000000'), ['Removed note 3', 'info']);
+  await editor.request('nvim_command', ['PiNotesRemove x']);
+  await eventually(async () => (await said()).includes('Usage: :PiNotesRemove'));
+  assert.deepEqual(await remove('1-1000000'), ['Removed note 3', 'info']);
 });
 
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {
@@ -469,7 +470,7 @@ test('/nvim-annotate lists the notes, goes to one with your focus, and clears th
   assert.deepEqual(await run(''), [`1. ${name(path)}:40 \`function f40() {}\`: here`, 'info']);
   assert.deepEqual(await run('next'), [`Note 1 of 1: ${name(path)}:40`, 'info']);
   assert.deepEqual([(await cursor(yours))[0], await current()], [40, yours]);
-  assert.deepEqual(await run('wat'), ['Usage: /nvim-annotate [next | prev | <number> | remove <numbers> | clear]', 'warning']);
+  assert.deepEqual(await run('wat'), ['Usage: /nvim-annotate [next | prev | <number> | clear]', 'warning']);
   assert.deepEqual(await run('clear'), ['Removed 1 note', 'info']);
   assert.deepEqual(await drawn(nvim!, path), []);
 });
@@ -490,8 +491,10 @@ test('once Pi detaches, its notes and :PiNotes go; without Neovim the tool and c
   await layout(path);
   await p.annotate({ action: 'add', notes: [{ file: name(path), line: 5, text: 'a' }] });
   assert.equal(await lua('return vim.fn.exists(":PiNotes")'), 2);
+  assert.equal(await lua('return vim.fn.exists(":PiNotesRemove")'), 2);
   await p.shutdown();
   await eventually(async () => await lua('return vim.fn.exists(":PiNotes")') === 0);
+  assert.equal(await lua('return vim.fn.exists(":PiNotesRemove")'), 0);
   assert.deepEqual(await drawn(p.nvim!, path), []);
   const detached = await pi({ remote: false });
   await assert.rejects(detached.annotate({ action: 'list' }), /Pi is not attached to Neovim/);

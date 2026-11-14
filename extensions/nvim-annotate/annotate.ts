@@ -70,22 +70,19 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
-  // What the agent knows of the notes of each attachment, as of its last nvim_annotate call or the
-  // last message telling it: each note's file and whether it was hidden. And those the user has
-  // removed since, to tell them apart from those whose code went.
+  // Of each attachment: the notes as last observed, each note's file and whether it was hidden; those
+  // the user has removed since, to tell them apart from those whose code went; and what changed
+  // before, not yet told the agent.
   type Seen = Map<number, { path: string; hidden: boolean }>;
-  const known = perAttachment((): { seen: Seen; removed: Set<number> } => ({ seen: new Map(), removed: new Set() }));
+  const known = perAttachment((): { seen: Seen; removed: Set<number>; facts: string[] } =>
+    ({ seen: new Map(), removed: new Set(), facts: [] }));
   const state = async (remote: Remote): Promise<Seen> =>
     new Map((await notesOf(remote).list()).map(note => [note.number, { path: note.path, hidden: !!note.hidden }]));
 
-  // How the notes changed since the agent last knew, said for it: removed by the user, gone with
-  // their code, hidden with their lines deleted or back; and the notes there now. Undefined if
-  // none did, or the agent has had no notes.
-  async function changes() {
-    const remote = nvim();
-    const was = remote && known(remote);
-    if (!remote || !was || (!was.seen.size && !was.removed.size)) return undefined;
-    const now = await state(remote);
+  // Add to the facts how the notes changed since last observed: removed by the user, gone with
+  // their code, hidden with their lines deleted or back. Resolves to the notes now.
+  async function observe(remote: Remote) {
+    const was = known(remote), now = await state(remote);
     const notes = (numbers: number[], at: Seen) =>
       `${numbers.length === 1 ? 'note' : 'notes'} ${numbers.map(n => `${n} (${file(at.get(n)!.path, cwd())})`).join(', ')}`;
     const be = (numbers: number[]) => numbers.length === 1 ? 'is' : 'are', its = (numbers: number[]) => numbers.length === 1 ? 'its' : 'their';
@@ -93,17 +90,29 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     const removed = went.filter(n => was.removed.has(n)), lost = went.filter(n => !was.removed.has(n));
     const hidden = [...now].filter(([n, note]) => note.hidden && was.seen.get(n)?.hidden === false).map(([n]) => n);
     const back = [...now].filter(([n, note]) => !note.hidden && was.seen.get(n)?.hidden).map(([n]) => n);
-    const parts = [
+    was.facts.push(...[
       removed.length && `the user removed ${notes(removed, was.seen)}`,
       lost.length && `${notes(lost, was.seen)} ${be(lost)} gone, ${its(lost)} code no longer in the file`,
       hidden.length && `${notes(hidden, now)} ${be(hidden)} hidden, ${its(hidden)} lines deleted (back if that is undone)`,
       back.length && `${notes(back, now)} ${be(back)} back, ${its(back)} lines restored`,
-    ].filter(Boolean);
+    ].filter(part => typeof part === 'string'));
     was.seen = now;
     was.removed.clear();
-    if (!parts.length) return undefined;
+    return now;
+  }
+
+  // The facts not yet told the agent, said for it with the notes there now, once. Undefined if
+  // there are none, or the agent has had no notes.
+  async function changes() {
+    const remote = nvim();
+    const was = remote && known(remote);
+    if (!remote || !was || (!was.seen.size && !was.removed.size && !was.facts.length)) return undefined;
+    const now = await observe(remote);
+    if (!was.facts.length) return undefined;
     const left = [...now].map(([n, note]) => note.hidden ? `${n} (hidden)` : String(n)).join(', ');
-    return `Pi's notes in the editor changed: ${parts.join('; ')}. Notes now: ${left || 'none'}.`;
+    const text = `Pi's notes in the editor changed: ${was.facts.join('; ')}. Notes now: ${left || 'none'}.`;
+    was.facts = [];
+    return text;
   }
 
   // Remove every note, as the user asked: saying how many.
@@ -166,6 +175,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
       const remote = nvim();
       if (!remote) throw new Error('Pi is not attached to Neovim');
       const notes = notesOf(remote);
+      // What changed before this call is kept to be told: its reply says only what it did.
+      const observed = await observe(remote).then(() => true, () => false);
       if (Array.isArray(params.note) && params.action !== 'remove') throw new Error(`${params.action} takes one note number`);
       const text = await (async () => {
         switch (params.action) {
@@ -212,10 +223,13 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
           }
         }
       })();
-      // What it knows of them now, told by its own call.
+      // What it did, it knows. Facts of notes it has replaced or cleared no longer matter.
       const was = known(remote);
-      was.seen = await state(remote);
-      was.removed.clear();
+      if (observed) {
+        was.seen = await state(remote);
+        was.removed.clear();
+      }
+      if (params.action === 'clear' || params.replace) was.facts = [];
       return { content: [{ type: 'text', text }], details: {} };
     },
   });

@@ -18,7 +18,7 @@ In Pi, `/nvim-annotate` lists the notes, where their code is now; `/nvim-annotat
 
 `:PiNotesRemove` in Neovim, or `/nvim-annotate-remove` in Pi, removes some by number:
 `:PiNotesRemove 2 5-7,10`. Numbers and ranges, either way round, by spaces or commas, in any
-order; it says which it removed and which numbers had no note. The others keep their numbers.
+order; it says which it removed, and any number or range with no note at all. The others keep their numbers.
 With no numbers, it removes them all, as `clear`.
 
 Notes last until cleared or removed, and go when Pi detaches from Neovim.

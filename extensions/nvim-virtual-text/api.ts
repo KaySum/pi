@@ -55,8 +55,12 @@ export type Mark = {
   sign?: string | Chunk;
   /** `above` and `below`: start at the indentation of the line they go by (`true`) or this many columns. */
   indent?: boolean | number;
-  /** `above` and `below`: break lines at spaces to fit the window showing the buffer (`true`) or this many columns. */
-  wrap?: boolean | number;
+  /**
+   * `above` and `below`: break lines at spaces to fit the window showing the buffer (`true`) or
+   * this many columns; or (`'window'`) as the narrowest window showing it wraps its code, by its 'wrap', 'linebreak',
+   * 'breakindent' and 'showbreak', scrolling sideways with it when it does not wrap.
+   */
+  wrap?: boolean | number | 'window';
   /** `above` and `below`: give each line's background the whole window's width. */
   fill?: boolean;
   /**

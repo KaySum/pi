@@ -890,6 +890,202 @@ test('positions saved for a buffer go once it is wiped, even with its marks clea
   assert.equal(await remote.lua('return remote.nvim_virtual_text.saved[...] ~= nil', [buf]), false);
 });
 
+test('wrapped as the window wraps its code: linebreak, breakindent, showbreak; and not, with nowrap', async () => {
+  const path = await file('    code();\n');
+  await lua(`vim.o.columns = 40; vim.cmd.edit(...)
+    vim.wo.wrap = true; vim.wo.linebreak = true; vim.wo.breakindent = true
+    vim.wo.breakindentopt = 'shift:4'; vim.wo.showbreak = '> '`, path);
+  const sentence = 'Waits for the server/client handshake, then retries with back-off until the deadline, logging each attempt.';
+  try {
+    await text.place({ path, line: 1, text: sentence, position: 'above', wrap: 'window', indent: true });
+    const lines = async () => (await shown(path))[0][2].virt_lines.map(words) as string[];
+    const width = (line: string) => lua('return vim.fn.strdisplaywidth(...)', line) as Promise<number>;
+    // The code's indent first; then that and the shift, and the showbreak.
+    const strip = (line: string, i: number) => line.slice(i === 0 ? 4 : 10);
+    let got = await lines();
+    assert.ok(got.length > 2, got.join('|'));
+    assert.ok(got[0].startsWith('    W'));
+    for (const line of got.slice(1)) assert.ok(line.startsWith('        > '), line);
+    for (const line of got) assert.ok(await width(line) <= 40, line);
+    assert.equal(got.map(strip).join(''), sentence);
+    // Each ends where 'breakat' lets a line break: a space, or one of its characters.
+    for (const line of got.slice(0, -1)) assert.match(line, /[ \-/,.]$/, line);
+
+    // Not at word boundaries: cut at the edge, mid-word if need be.
+    await lua('vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ""');
+    await delay(50);
+    got = await lines();
+    assert.equal(got[0].slice(4) + got.slice(1).join(''), sentence);
+    for (const line of got.slice(0, -1)) assert.equal(await width(line), 40, line);
+
+    // Not wrapped: one line, scrolling sideways with the code.
+    await lua('vim.wo.wrap = false');
+    await delay(50);
+    got = await lines();
+    assert.deepEqual(got, [`    ${sentence}`]);
+    assert.equal((await shown(path))[0][2].virt_lines_overflow, 'scroll');
+    await lua('vim.wo.wrap = true');
+    await delay(50);
+    assert.ok((await lines()).length > 2);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
+test('wrapped as the window wraps code, row for row: a break\'s space fits, sbr, mid-word, the narrowest window', async () => {
+  const path = await file('x\n');
+  await lua(`vim.o.columns = 20; vim.cmd.edit(...)
+    vim.wo.wrap = true; vim.wo.linebreak = true; vim.wo.breakindent = false; vim.wo.showbreak = ''`, path);
+  const rows = async () => (await shown(path))[0][2].virt_lines.map(words) as string[];
+  const note = async (text: string) => {
+    await text_.clear();
+    await text_.place({ path, line: 1, text, position: 'above', wrap: 'window', indent: true });
+    return rows();
+  };
+  const text_ = text;
+  try {
+    // "ddddd" ends at the edge, but the space after it, where it may break, does not fit.
+    assert.deepEqual(await note('aaaa bbbb cccc ddddd eeee'), ['aaaa bbbb cccc ', 'ddddd eeee']);
+    // With "sbr", 'showbreak' takes the first columns of the indent, not columns before it.
+    await lua("vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:4,min:8,sbr'; vim.wo.showbreak = '> '");
+    assert.deepEqual(await note('aaaa bbbb cccc dddd eeee ffff'), ['aaaa bbbb cccc dddd ', '>   eeee ffff']);
+    // Anywhere: a row is full to the edge, and a space that does not fit starts the next.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ''");
+    assert.deepEqual(await note('abcdefghijkl mno'), ['abcdefghijkl', ' mno']);
+    // A word longer than a row is broken at the edge, as Neovim does, rather than cut off.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = true");
+    assert.deepEqual(await note('ab ' + 'x'.repeat(30)), ['ab ', 'x'.repeat(12), 'x'.repeat(12), 'x'.repeat(6)]);
+    // Measured as cells, whatever the window's own wrapping: a row after a break is full too.
+    await lua("vim.wo.linebreak = false; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:2,min:4'");
+    assert.deepEqual(await note('abcdefghijklmnopqrstuvwxyz'), ['abcdefghijkl', '  mnopqrstuv', '  wxyz']);
+    await lua("vim.wo.breakindent = false");
+    // A tab across the edge: what fits stays, and its other cells start the next row.
+    await lua("vim.wo.linebreak = false; vim.bo.tabstop = 8");
+    assert.deepEqual(await note('abcdefghij\tz'), ['abcdefghij  ', '    z']);
+    // A tab on a later row reaches its stop counted along the whole line, not the row: one cell.
+    await lua("vim.o.columns = 20; vim.wo.linebreak = false; vim.wo.breakindent = false; vim.wo.showbreak = ''; vim.bo.tabstop = 8");
+    assert.deepEqual(await note('A'.repeat(23) + '\tB'), ['A'.repeat(20), 'AAA B']);
+    // A wide character that does not fit the last cell leaves '>' there, as Neovim draws it.
+    await lua("vim.o.columns = 12");
+    assert.deepEqual(await note('a' + '雪'.repeat(7)), ['a' + '雪'.repeat(5) + '>', '雪'.repeat(2)]);
+    // "sbr": the shift less 'showbreak', clamped by min, then 'showbreak' before it.
+    await lua("vim.o.columns = 20; vim.wo.linebreak = true; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:16,min:8,sbr'; vim.wo.showbreak = '> '");
+    const prefix = '> ' + ' '.repeat(12);
+    assert.deepEqual(await note('aaaa bbbb cccc dddd eeee ffff gggg'), ['aaaa bbbb cccc dddd ', `${prefix}eeee `, `${prefix}ffff `, `${prefix}gggg`]);
+    await lua("vim.wo.breakindent = false; vim.wo.showbreak = ''");
+    // 'vartabstop' sets the stops when it is set: of note text, and of the code's indent.
+    await lua("vim.wo.linebreak = false; vim.bo.tabstop = 8; vim.bo.vartabstop = '4'");
+    assert.deepEqual(await note('A\tB'), ['A   B']);
+    await lua("vim.bo.vartabstop = '3,5'");
+    assert.deepEqual(await note('A\tB\tC\tD'), ['A  B    C    D']);
+    await lua("vim.bo.vartabstop = '4'; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '\tx' })");
+    assert.deepEqual(await note('why'), ['    why']);
+    // And a change of it wraps them again.
+    await lua("vim.bo.vartabstop = ''");
+    await delay(50);
+    assert.deepEqual(await rows(), ['        why']);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' }); vim.wo.linebreak = true");
+    // With linebreak, around tabs too, rows break where Neovim breaks the same line of code: here
+    // 'delta' stays, its tab running on into the next row.
+    await lua("vim.o.columns = 34; vim.wo.linebreak = true; vim.bo.tabstop = 8; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    const tabbed = await note('1. alpha\tbeta gamma delta\tepsilon zeta eta\ttheta iota kappa');
+    assert.deepEqual(tabbed, ['    1. alpha    beta gamma delta  ', '      epsilon zeta eta', 'theta iota kappa']);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // A control character is its ^X form, two cells that, like any, may part across rows.
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false");
+    assert.deepEqual(await note('A'.repeat(11) + '\x01TAIL'), ['A'.repeat(11) + '^', 'ATAIL']);
+    await lua("vim.o.columns = 13");
+    assert.deepEqual(await note('A'.repeat(11) + '\x01TAIL'), ['A'.repeat(11) + '^A', 'TAIL']);
+    // Each paragraph wraps by its own indent, as a line of code does: the code's and its own.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.wo.breakindent = true; vim.wo.breakindentopt = 'shift:2'; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    const paragraphs = await note('intro\n    alpha beta gamma delta epsilon zeta eta theta');
+    assert.match(paragraphs[1], /^ {8}alpha/);
+    assert.ok(paragraphs.length > 3, paragraphs.join('|'));
+    for (const row of paragraphs.slice(2)) assert.match(row, /^ {10}\S/, row);
+    await lua("vim.wo.breakindent = false; vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // A gutter that grows narrows the text and wraps them again, though no event says so.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.wo.number = false; vim.wo.signcolumn = 'auto'");
+    const wide = await note('aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk');
+    // Redrawn, as a UI's screen is after any change: this editor has none.
+    await lua('vim.wo.number = true; vim.wo.numberwidth = 4; vim.cmd("redraw")');
+    await delay(100);
+    const numbered = await rows();
+    assert.ok(numbered.length > wide.length, `${wide.length} rows, then ${numbered.length} with numbers`);
+    await lua('vim.wo.number = false; vim.cmd("redraw")');
+    await delay(100);
+    assert.deepEqual(await rows(), wide);
+    // A sign appearing, with signcolumn=auto: no option set at all.
+    await lua("vim.api.nvim_buf_set_extmark(0, vim.api.nvim_create_namespace('sign-test'), 0, 0, { sign_text = 'E' }); vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > wide.length, 'the sign column narrows the text');
+    await lua("vim.api.nvim_buf_clear_namespace(0, vim.api.nvim_create_namespace('sign-test'), 0, -1)");
+    // The code re-indented after it was placed: indented and wrapped by its new indent.
+    await lua("vim.o.columns = 30; vim.wo.linebreak = true; vim.api.nvim_buf_set_lines(0, 0, 1, true, { '    x' })");
+    await note('aaaa bbbb cccc dddd');
+    await lua("vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '        ' })");
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
+    await lua("vim.bo.shiftwidth = 4; vim.bo.expandtab = true; vim.cmd('1normal! <<')");
+    await delay(100);
+    assert.match((await rows())[0], /^ {8}aaaa/);
+    await lua("vim.api.nvim_buf_set_lines(0, 0, 1, true, { 'x' })");
+    // 'ambiwidth' makes such characters as '·' two cells: wrapped again by their new width.
+    await lua("vim.o.fillchars = 'vert:|,fold:-,eob:~'; vim.o.listchars = 'tab:> ,trail:-,nbsp:+'; vim.o.ambiwidth = 'single'");
+    const single = await note('·'.repeat(40));
+    await lua("vim.o.ambiwidth = 'double'");
+    await delay(100);
+    assert.ok((await rows()).length > single.length, `${single.length} rows, then ${(await rows()).length}`);
+    await lua("vim.o.ambiwidth = 'single'");
+    // What Neovim draws a character as, and how wide: 'display', 'isprint', setcellwidths().
+    await lua("vim.o.columns = 12; vim.wo.linebreak = false; vim.o.display = 'lastline'");
+    await note('A'.repeat(11) + '\x01TAIL');
+    await lua("vim.o.display = 'lastline,uhex'; vim.cmd('redraw')");
+    await delay(100);
+    assert.deepEqual(await rows(), ['A'.repeat(11) + '<', '01>TAIL']);
+    await lua("vim.o.display = 'lastline'; vim.o.columns = 30");
+    const printable = await note('é'.repeat(20));
+    await lua("vim.o.isprint = '@,161-255,^233'; vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > printable.length, 'é as <e9>, four cells');
+    await lua("vim.o.isprint = '@,161-255'");
+    const narrow = await note('·'.repeat(40));
+    // No event says so: seen once the window is drawn.
+    await lua("vim.fn.setcellwidths({ { 0xB7, 0xB7, 2 } }); vim.cmd('redraw')");
+    await delay(100);
+    assert.ok((await rows()).length > narrow.length, '· two cells wide');
+    await lua("vim.fn.setcellwidths({})");
+    // Re-indented on disk and reloaded, the line where it was: as when edited.
+    await writeFile(path, '    x\n');
+    await lua("vim.cmd('edit!')");
+    await note('aaaa bbbb');
+    await writeFile(path, '            x\n');
+    await lua("vim.cmd('edit!')");
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
+    // Reloaded from an autocommand not nested, with no BufReadPost: as when reloaded.
+    await writeFile(path, '    x\n');
+    await lua("vim.cmd('edit!')");
+    await note('aaaa bbbb');
+    await writeFile(path, '            x\n');
+    await lua(`vim.api.nvim_create_autocmd('User', { pattern = 'ReloadLayout', once = true, callback = function() vim.cmd('edit!') end })
+      vim.cmd('doautocmd User ReloadLayout')`);
+    await delay(100);
+    assert.match((await rows())[0], /^ {12}aaaa/);
+    await writeFile(path, 'x\n');
+    await lua("vim.cmd('edit!')");
+    // Set where Neovim fires no OptionSet, as by an ftplugin (an autocommand not nested).
+    await lua("vim.o.columns = 30; vim.wo.wrap = true; vim.wo.linebreak = true");
+    const wrapped = await note('aaaa bbbb cccc dddd eeee ffff gggg hhhh');
+    assert.ok(wrapped.length > 1);
+    await lua(`vim.api.nvim_create_autocmd('FileType', { pattern = 'layoutaudit', once = true, callback = function() vim.wo.wrap = false end })
+      vim.bo.filetype = 'layoutaudit'; vim.cmd('redraw')`);
+    await delay(100);
+    assert.equal((await rows()).length, 1);
+    await lua("vim.wo.wrap = true; vim.bo.filetype = ''");
+    // In two windows, wrapped for the narrower: whole in both.
+    await lua("vim.o.columns = 40; vim.wo.linebreak = true; vim.cmd('vsplit'); vim.cmd('vertical resize 12')");
+    assert.deepEqual(await note('aaaa bbbb cccc dddd'), ['aaaa bbbb ', 'cccc dddd']);
+  } finally { await lua('vim.o.columns = 80'); }
+});
+
 /** Wait, up to 3 s, until `check` holds. */
 async function eventually(check: () => Promise<boolean>) {
   for (const end = Date.now() + 3000; !(await check()); await delay(20)) {

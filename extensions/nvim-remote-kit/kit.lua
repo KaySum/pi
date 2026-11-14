@@ -24,7 +24,9 @@ end
 --- (`v:echospace`, less with 'ruler' and 'showcmd'), else the last cut to fit: a longer one
 --- would stop the editor at "Press ENTER". `level`: a `vim.log.levels`, INFO if not given.
 function kit.say(texts, level)
-	texts = type(texts) == "table" and texts or { texts }
+	-- As Neovim shows what is not printable (^@ for a newline, ^I for a tab): a newline would make
+	-- two lines, which stop the editor too.
+	texts = vim.tbl_map(vim.fn.strtrans, type(texts) == "table" and texts or { texts })
 	local room = vim.v.echospace
 	local text = vim.iter(texts):find(function(text)
 		return vim.fn.strdisplaywidth(text) <= room
@@ -182,8 +184,7 @@ function kit.guarded(buf, fn)
 				end
 				vim.v.fcs_choice = reason == "changed" and autoread and "reload" or ""
 				if vim.v.fcs_choice == "" then
-					-- As Neovim shows what is not printable (^@ for a newline, ^I): a newline would start a line.
-					local name = vim.fn.strtrans(vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"))
+					local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
 					local how = reason == "conflict" and " and here" or (" (%s)"):format(reason)
 					vim.schedule(function()
 						kit.say({ ("%s changed on disk%s: :e! loads it"):format(name, how), ("%s changed on disk%s"):format(name, how) }, vim.log.levels.WARN)

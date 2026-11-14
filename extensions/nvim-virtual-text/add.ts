@@ -19,7 +19,7 @@ const DESCRIPTIONS: Record<string, string> = {
   highlight: 'Highlight group, or #rrggbb background, for the lines marked',
   numberHl: 'Highlight group, or #rrggbb color, for their line numbers',
   lineHl: 'Highlight group, or #rrggbb background, for the whole lines', sign: 'Sign column text', indent: 'true or columns',
-  wrap: 'true or columns', fill: 'Background across the window', ttl: 'Milliseconds before it goes',
+  wrap: 'true, columns, or window: as your window wraps code', fill: 'Background across the window', ttl: 'Milliseconds before it goes',
   invalidate: 'Hide while its lines are deleted', priority: 'Extmark priority', fg: 'Text color, #rrggbb',
   bg: 'Background color, #rrggbb', bold: 'true', italic: 'true', underline: 'true',
 };
@@ -30,6 +30,7 @@ function value(key: string, raw: string): unknown {
   const flag = text === 'true' ? true : text === 'false' ? false : undefined;
   const result = (NUMBERS as readonly string[]).includes(key) ? number
     : (FLAGS as readonly string[]).includes(key) ? flag
+    : key === 'wrap' && text === 'window' ? text
     : (FLAGS_OR_NUMBERS as readonly string[]).includes(key) ? flag ?? number
     : key === 'position' ? (POSITIONS.includes(text) ? text : number)
     : text;
@@ -83,6 +84,7 @@ export function completeAdd(prefix: string) {
   const [key, typed] = last.split('=', 2);
   const values = typed === undefined ? undefined
     : key === 'position' ? POSITIONS
+    : key === 'wrap' ? ['true', 'false', 'window']
     : [...FLAGS, ...FLAGS_OR_NUMBERS].includes(key as never) ? ['true', 'false']
     : null;
   const items = values === undefined

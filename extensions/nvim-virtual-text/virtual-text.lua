@@ -23,7 +23,7 @@ if not state then
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come.
-	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {} }
+	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
 		state.closed = true
@@ -77,20 +77,57 @@ if not state then
 	})
 	-- Lines wrapped to the windows showing their buffer are wrapped again once those change:
 	-- after the event, when a closed window is gone, and once for several.
+	local function rewrap()
+		if not state.rewrapping then
+			state.rewrapping = true
+			vim.schedule(function()
+				state.rewrapping = false
+				if not state.closed then
+					state.rewrap()
+				end
+			end)
+		end
+	end
 	vim.api.nvim_create_autocmd({ "WinResized", "VimResized", "WinClosed", "BufWinEnter" }, {
 		group = remote.group,
-		callback = function()
-			if not state.rewrapping then
-				state.rewrapping = true
-				vim.schedule(function()
-					state.rewrapping = false
-					if not state.closed then
-						state.rewrap()
-					end
-				end)
+		callback = rewrap,
+	})
+	-- And once how the windows wrap text changes, for those wrapped as their windows do.
+	vim.api.nvim_create_autocmd("OptionSet", {
+		group = remote.group,
+		pattern = {
+			"wrap", "linebreak", "breakat", "breakindent", "breakindentopt", "showbreak",
+			"tabstop", "vartabstop", "ambiwidth", "emoji", "display", "isprint",
+		},
+		callback = rewrap,
+	})
+	-- And however else how they are laid out changes, of which no event tells: a gutter growing
+	-- (numbers, signs as they come and go, folds), setcellwidths(), an option set where no
+	-- OptionSet is fired (by an ftplugin, or any autocommand not nested). Looked at once each
+	-- window showing marks wrapped as their windows do has been drawn, as its gutter is only known
+	-- by then (see `state.relayout`).
+	local looking = false
+	local function look()
+		looking = false
+		-- rewrap() redraws only marks whose layout is not as measured.
+		if not state.closed and state.relayout() then
+			rewrap()
+		end
+	end
+	-- Named apart from the groups' (nvim-virtual-text.<channel>.<group>): a group may be "widths".
+	local drawing = vim.api.nvim_create_namespace(("nvim-virtual-text-widths.%d"):format(remote.channel))
+	vim.api.nvim_set_decoration_provider(drawing, {
+		on_win = function(_, _, buf)
+			if not looking and not state.closed and state.windowed[buf] then
+				looking = true
+				vim.schedule(look)
 			end
+			return false
 		end,
 	})
+	remote.on_detach(function()
+		vim.api.nvim_set_decoration_provider(drawing, {})
+	end)
 end
 
 -- Forget `buf`'s marks and what is kept for them: it is wiped.
@@ -102,6 +139,7 @@ function state.forget(buf)
 	end
 	state.saved[buf] = nil
 	state.watched[buf] = nil
+	state.windowed[buf] = nil
 end
 
 -- Forget the buffers wiped with no BufWipeout reaching us (from a user's autocommand, one not
@@ -164,7 +202,7 @@ local function buffer(spec)
 	return vim.api.nvim_buf_is_valid(spec.buf) and spec.buf or error(("no buffer %d"):format(spec.buf), 0)
 end
 
--- Columns of text in the widest window showing `buf`, else in the editor.
+-- Columns of text in the narrowest window showing `buf`, else in the editor.
 local function text_width(buf)
 	local width = 0
 	for _, win in ipairs(vim.fn.win_findbuf(buf)) do
@@ -173,11 +211,107 @@ local function text_width(buf)
 	return width > 0 and width or vim.o.columns
 end
 
+-- How the narrowest window showing `buf` wraps its text (with none, the global options): its
+-- width and 'wrap', 'linebreak' at 'breakat', 'breakindent' with 'breakindentopt' and
+-- 'showbreak', each as that window has it. Virtual lines are the buffer's, the same in every
+-- window: wrapped for the narrowest, they are whole in each, where for a wider one they would
+-- be cut off in the rest.
+local function layout_of(buf)
+	local narrowest, width = nil, math.huge
+	for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+		local w = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+		if w < width then
+			narrowest, width = win, w
+		end
+	end
+	local function read()
+		local layout = { width = narrowest and width or vim.o.columns, breakat = vim.o.breakat, shift = 0, min = 20 }
+		-- The buffer's tab stops, which tabs and the code's indent are measured by.
+		layout.tabstop, layout.vartabstop = vim.bo[buf].tabstop, vim.bo[buf].vartabstop
+		-- And how characters are drawn and how wide: ambiguous ones, such as '·', and emoji; any
+		-- given widths by setcellwidths(); and as what ('display' "uhex", 'isprint').
+		layout.ambiwidth, layout.emoji = vim.o.ambiwidth, vim.o.emoji
+		layout.cellwidths = vim.inspect(vim.fn.getcellwidths())
+		layout.display, layout.isprint = vim.o.display, vim.o.isprint
+		local o = narrowest and vim.o or vim.go
+		layout.wrap, layout.linebreak, layout.showbreak = o.wrap, o.linebreak, o.showbreak
+		layout.breakindent = o.breakindent
+		for _, item in ipairs(vim.split(o.breakindentopt, ",", { trimempty = true })) do
+			local key, value = item:match("^(%a+):?(-?%d*)$")
+			if key == "shift" or key == "min" then
+				layout[key] = tonumber(value) or layout[key]
+			elseif key == "sbr" then
+				layout.sbr = true
+			end
+		end
+		return layout
+	end
+	return narrowest and vim.api.nvim_win_call(narrowest, read) or read()
+end
+
+-- How each buffer with marks wrapped as their windows do was laid out when last looked at.
+local laid = {}
+
+-- Whether how any such buffer is laid out (see `layout_of`) has changed since last looked at,
+-- however it changed: its marks are then to be wrapped again.
+function state.relayout()
+	local now, changed = {}, false
+	for buf in pairs(state.windowed) do
+		if vim.api.nvim_buf_is_valid(buf) then
+			now[buf] = vim.inspect(layout_of(buf))
+			changed = changed or laid[buf] ~= now[buf]
+		end
+	end
+	laid = now
+	return changed
+end
+
+-- What a mark wrapped to its windows was measured against, to wrap it again once it changes.
+local function measure(spec)
+	if spec.wrap == true then
+		return tostring(text_width(spec.buf))
+	elseif spec.wrap == "window" then
+		return vim.inspect(layout_of(spec.buf))
+	end
+end
+
+-- Cells a tab at column `col` takes in the current buffer: to its next stop, by 'vartabstop'
+-- when it is set (its widths in turn, then the last again and again), else 'tabstop'.
+local function tab(col)
+	local widths = vim.tbl_map(tonumber, vim.split(vim.bo.vartabstop, ",", { trimempty = true }))
+	if #widths == 0 then
+		return vim.bo.tabstop - col % vim.bo.tabstop
+	end
+	local stop = 0
+	for _, width in ipairs(widths) do
+		stop = stop + width
+		if stop > col then
+			return stop - col
+		end
+	end
+	local last = widths[#widths]
+	return last - (col - stop) % last
+end
+
+-- Cells `text` takes from column `col`, as Neovim draws it: a tab to its next stop (see `tab`).
+-- Not strdisplaywidth(), which near the current window's edge counts that window's own
+-- wrapping in ('breakindent', 'showbreak').
+local function cells(text, col)
+	if not text:find("\t", 1, true) then
+		return vim.api.nvim_strwidth(text)
+	end
+	local width = 0
+	for _, char in ipairs(vim.fn.split(text, "\\zs")) do
+		width = width + (char == "\t" and tab(col + width) or vim.api.nvim_strwidth(char))
+	end
+	return width
+end
+
 -- Measured in sequence: a tab's width depends on the column it starts at.
 local function width_of(chunks)
 	local width = 0
 	for _, chunk in ipairs(chunks) do
-		width = width + vim.fn.strdisplaywidth(chunk[1], width)
+		width = width + cells(chunk[1], width)
 	end
 	return width
 end
@@ -202,10 +336,11 @@ local function lines_of(text, default)
 	return lines
 end
 
--- Break a line of chunks at spaces so that none ends past column `limit`, where it can be,
--- the line starting at column `start`. A word is whole across chunks: a change of highlight
--- is no place to break. Widths are measured where the text falls, for tabs.
-local function wrap(chunks, limit, start)
+-- Break a line of chunks at spaces so that none ends past column `limit`, where it can be, the
+-- line starting at column `start`, those after it at `cont`. A word is whole across chunks: a
+-- change of highlight is no place to break. Widths are measured where the text falls, for tabs.
+-- Each line as { chunks, continued }.
+local function wrap(chunks, limit, start, cont)
 	local words = {}
 	for _, chunk in ipairs(chunks) do
 		local text, at = chunk[1], 1
@@ -228,19 +363,19 @@ local function wrap(chunks, limit, start)
 	local function after(pieces, col, spaces)
 		for _, piece in ipairs(pieces) do
 			if spaces or not piece.space then
-				col = col + vim.fn.strdisplaywidth(piece[1], col)
+				col = col + cells(piece[1], col)
 			end
 		end
 		return col
 	end
-	local lines, col = { {} }, start
+	local lines, col = { { {} } }, start
 	for _, word in ipairs(words) do
 		local ends = after(word.pieces, col, false)
-		if col > start and ends > col and ends > limit then
-			table.insert(lines, {})
-			col = start
+		if col > (#lines == 1 and start or cont) and ends > col and ends > limit then
+			table.insert(lines, { {}, true })
+			col = cont
 		end
-		local line = lines[#lines]
+		local line = lines[#lines][1]
 		for _, piece in ipairs(word.pieces) do
 			local last = line[#line]
 			if last and last[2] == piece[2] then
@@ -254,28 +389,217 @@ local function wrap(chunks, limit, start)
 	return lines
 end
 
+-- The characters of `text` as Neovim draws them: its bytes when it is ASCII, as most is, at no
+-- call to Vimscript; else as \\zs splits it, which keeps a grapheme (combining marks, joined
+-- emoji) whole.
+local function characters(text)
+	if not text:find("[\128-\255]") then
+		local found = {}
+		for i = 1, #text do
+			found[i] = text:sub(i, i)
+		end
+		return found
+	end
+	return vim.fn.split(text, "\\zs")
+end
+
+-- Rows of a line of chunks as Neovim wraps a line of code (plines.c, charsize_regular), the
+-- line starting at column `start`, those after it at `cont`, each `limit` wide. Each character
+-- has a size, from its column `vcol` in the whole line: a tab to its next stop; a wide one that
+-- would start in a row's last cell, one more for the '>' left there; and with `linebreak`, a
+-- break character before a word that would not fit is stretched to the row's end. Each line as
+-- { chunks, continued }, a tab drawn as its spaces.
+local function wrap_native(chunks, limit, start, cont, linebreak, breakat)
+	local chars = {}
+	for _, chunk in ipairs(chunks) do
+		for _, char in ipairs(characters(chunk[1])) do
+			local byte = #char == 1 and char:byte()
+			local control = byte and char ~= "\t" and (byte < 32 or byte == 127)
+			if control or (not byte and vim.fn.strtrans(char) ~= char) then
+				-- As Neovim draws it (^A, <80>), in SpecialKey: cells like any, though no break.
+				for _, cell in ipairs(characters(vim.fn.strtrans(char))) do
+					table.insert(chars, { cell, "SpecialKey", shown = true })
+				end
+			else
+				table.insert(chars, { char, chunk[2] })
+			end
+		end
+	end
+	local function isbreak(entry)
+		return not entry.shown and breakat[entry[1]] == true
+	end
+	-- 'linebreak' does not apply in the line's leading whitespace.
+	local lead = 1
+	while chars[lead] and isbreak(chars[lead]) do
+		lead = lead + 1
+	end
+	local function width(char, vcol)
+		if char == "\t" then
+			return tab(vcol)
+		end
+		-- An ASCII character is one cell (as nvim_strwidth() has it), without asking.
+		return #char == 1 and 1 or vim.api.nvim_strwidth(char)
+	end
+	local lines, col = { { {} } }, start
+	local function put(text, hl)
+		local line = lines[#lines][1]
+		local last = line[#line]
+		if last and last[2] == hl then
+			last[1] = last[1] .. text
+		else
+			table.insert(line, { text, hl })
+		end
+	end
+	local function newrow()
+		table.insert(lines, { {}, true })
+		col = cont
+	end
+	for i, entry in ipairs(chars) do
+		local char, hl = entry[1], entry[2]
+		-- Its column in the whole line, before the next row's prefix if it starts that row:
+		-- Neovim counts the prefix in the size of the character it comes before.
+		local head = col >= limit and cont or 0
+		local vcol = (#lines - 1) * limit + col
+		local base = width(char, vcol)
+		local size = base + head
+		local marker = 0
+		if base == 2 and (col >= limit and cont or col) == limit - 1 then
+			marker, size = 1, size + 1 -- The '>' in the last cell.
+		end
+		local stretched = false
+		if linebreak and i >= lead and isbreak(entry) and chars[i + 1] and not isbreak(chars[i + 1]) then
+			-- Neovim's colmax: where the row this character ends in ends, less its extra cells.
+			local adj = size - 1
+			local colmax = limit - adj
+			if vcol >= colmax then
+				colmax = limit + (math.floor((vcol + adj - limit) / limit) + 1) * limit - adj
+			end
+			-- The word after it and the break characters after that, as if from its own column.
+			local vcol2, j = vcol, i
+			while true do
+				local next = chars[j + 1]
+				if not next or not (isbreak(next) or vcol2 == vcol or not isbreak(chars[j])) then
+					break
+				end
+				j = j + 1
+				vcol2 = vcol2 + width(next[1], vcol2)
+				if vcol2 >= colmax then
+					size, stretched = colmax - vcol + adj, true
+					break
+				end
+			end
+		end
+		-- Laid out: the prefix of a new row, then the character, then what stretches it.
+		if col >= limit then
+			newrow()
+		end
+		if marker == 1 then
+			put(">", "NonText")
+			newrow()
+		end
+		local shown = size - head - marker
+		if stretched then
+			-- To the row's end, left blank as Neovim leaves it: the character, a tab being blank.
+			if char ~= "\t" then
+				put(char, hl)
+			end
+			col = col + shown
+		elseif char == "\t" or base == 0 then
+			for _ = 1, shown do
+				if col >= limit then
+					newrow()
+				end
+				put(" ", hl)
+				col = col + 1
+			end
+		else
+			put(char, hl)
+			col = col + base
+			for _ = 1, shown - base do
+				if col >= limit then
+					newrow()
+				end
+				put(" ", hl)
+				col = col + 1
+			end
+		end
+	end
+	return lines
+end
+
 local function virtual_lines(buf, spec, row)
 	local default = highlight(spec.hl) or "PiVirtualText"
 	local lines = lines_of(spec.text, default)
 	local indent = 0
 	if spec.indent == true then
-		indent = vim.fn.strdisplaywidth(vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]:match("^%s*"))
+		indent = vim.fn.indent(row + 1) -- As Neovim measures it, tab stops and all.
 	elseif type(spec.indent) == "number" then
 		indent = spec.indent
 	end
-	if spec.wrap then
+	-- Where the rows after the first of a wrapped line start, and what comes before them.
+	local before = nil
+	local layout = spec.wrap == "window" and layout_of(buf)
+	if spec.wrap and not (layout and not layout.wrap) then
+		local limit, breakat = spec.wrap, {}
+		-- As the window wraps its code: 'breakindent' keeps a line's indent, shifted, so that at
+		-- least `min` columns are left; 'showbreak' goes before it with "sbr", else after it. In
+		-- Neovim's order: the indent and shift, less 'showbreak' with "sbr", at least 0 and
+		-- leaving `min` columns, then 'showbreak'. A line's indent is the code's and its own.
+		local function continuation(line)
+			if not layout then
+				return indent
+			end
+			local text = table.concat(vim.tbl_map(function(chunk)
+				return chunk[1]
+			end, line))
+			local own = indent + cells(text:match("^[ \t]*"), indent)
+			local mark = cells(layout.showbreak, 0)
+			local shown = layout.breakindent and math.max(0, own + layout.shift - (layout.sbr and mark or 0)) or 0
+			if shown > layout.width - layout.min then
+				shown = math.max(0, layout.width - layout.min)
+			end
+			return shown + mark
+		end
+		if layout then
+			limit = layout.width
+			for _, char in ipairs(vim.fn.split(layout.breakat, "\\zs")) do
+				breakat[char] = true
+			end
+			before = layout.showbreak
+		elseif spec.wrap == true then
+			limit = text_width(buf)
+		end
 		local wrapped = {}
-		local limit = math.max(indent + 1, spec.wrap == true and text_width(buf) or spec.wrap)
 		for _, line in ipairs(lines) do
-			vim.list_extend(wrapped, wrap(line, limit, indent))
+			local cont = continuation(line)
+			local width = math.max(indent + 1, cont + 1, limit)
+			for _, row in ipairs(layout and wrap_native(line, width, indent, cont, layout.linebreak, breakat)
+				or wrap(line, width, indent, cont)) do
+				row[3] = cont
+				table.insert(wrapped, row)
+			end
 		end
 		lines = wrapped
+	else
+		lines = vim.tbl_map(function(line)
+			return { line }
+		end, lines)
 	end
 	-- Filled, a line's background is `hl`'s from edge to edge: indentation, blank lines and all.
 	local background = spec.fill and default or nil
-	return vim.tbl_map(function(line)
-		if indent > 0 then
-			table.insert(line, 1, { string.rep(" ", indent), background })
+	return vim.tbl_map(function(entry)
+		local line, continued, cont = entry[1], entry[2], entry[3] or indent
+		local prefix = { { string.rep(" ", continued and cont or indent), background } }
+		if continued and before then
+			-- 'showbreak' as Neovim draws it, in NonText, before the indent with "sbr", else after.
+			local pad = { string.rep(" ", cont - cells(layout.showbreak, 0)), background }
+			local mark = { layout.showbreak, "NonText" }
+			prefix = layout.sbr and { mark, pad } or { pad, mark }
+		end
+		for k = #prefix, 1, -1 do
+			if prefix[k][1] ~= "" then
+				table.insert(line, 1, prefix[k])
+			end
 		end
 		-- Virtual lines take no hl_eol. Padded to the editor's width, which is cut to the
 		-- window's, the background fills any window showing them, however it is resized.
@@ -586,6 +910,10 @@ local function render(buf, ns, spec, resolve, extmarks, reuse)
 				return virtual_lines(buf, spec, at)
 			end)
 			opts = { virt_lines = lines, virt_lines_above = position == "above" }
+			-- Not wrapped as its window does not wrap: it scrolls sideways with the code.
+			if spec.wrap == "window" and not layout_of(buf).wrap then
+				opts.virt_lines_overflow = "scroll"
+			end
 		else
 			local line = {}
 			for i, chunks in ipairs(lines_of(spec.text, highlight(spec.hl) or "PiVirtualText")) do
@@ -720,10 +1048,20 @@ local function watch(buf)
 				end)
 			end
 		end,
+		-- Reloaded, however: from an autocommand not nested too, where no BufReadPost reanchors.
+		-- After it, as BufReadPost would have; then nothing to do if it did.
+		on_reload = function()
+			vim.schedule(function()
+				if not state.closed and vim.api.nvim_buf_is_loaded(buf) then
+					state.reanchor(buf)
+				end
+			end)
+		end,
 		on_detach = function()
 			state.watched[buf] = nil
-			-- A reload by :checktime (autoread) detaches it after BufReadPost, when it was still
-			-- watched: watched again, next, if still loaded with marks (unloaded, it is not).
+			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: watched again,
+			-- next, if it has marks. Reanchored too, as BufReadPost does, which a reload from an
+			-- autocommand not nested never fires; nothing to do if it did.
 			vim.schedule(function()
 				if state.closed then
 					return
@@ -734,7 +1072,8 @@ local function watch(buf)
 				end
 				for _, mark in pairs(state.marks) do
 					if mark.spec.buf == buf then
-						return watch(buf)
+						watch(buf)
+						return state.reanchor(buf)
 					end
 				end
 			end)
@@ -743,6 +1082,18 @@ local function watch(buf)
 end
 
 -- Draw `spec` as mark `id`, over what it was. `moved`: only moved, so a `ttl` runs on as it was.
+-- The indent a mark's lines above or below its code are drawn at, with `indent = true`: that of
+-- the line they go by, as Neovim measures it. Nil for any other mark.
+local function indented(spec)
+	if spec.indent ~= true or not (spec.position == "above" or spec.position == "below") then
+		return nil
+	end
+	local line = spec.position == "below" and (spec.endLine or spec.line) or spec.line
+	return vim.api.nvim_buf_call(spec.buf, function()
+		return vim.fn.indent(line)
+	end)
+end
+
 local function install(id, group, spec, resolve, moved)
 	local old = state.marks[id]
 	if old and not moved then
@@ -753,8 +1104,11 @@ local function install(id, group, spec, resolve, moved)
 	end
 	local mark = { group = group, spec = spec, given = old and old.given, generation = old and old.generation }
 	mark.ns, mark.extmarks, mark.anchor = draw(group, spec, resolve, old)
-	-- Wrapped to the windows showing it, the width it was wrapped to (see `rewrap`).
-	mark.width = spec.wrap == true and text_width(spec.buf) or nil
+	-- Wrapped to the windows showing it, what it was wrapped to (see `rewrap`).
+	mark.measure, mark.indented = measure(spec), indented(spec)
+	if spec.wrap == "window" then
+		state.windowed[spec.buf] = true
+	end
 	-- What reloads look for is what it was placed on, not what edits have made of that since.
 	if old and not resolve then
 		mark.anchor = old.anchor
@@ -908,7 +1262,9 @@ function state.sync(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
-			if not invalid and (mark.stale or astray(mark, spec)) then
+			-- Its code re-indented (>>, a formatter) moves it with it, and wraps it anew.
+			local reindented = mark.indented and mark.indented ~= indented(spec)
+			if not invalid and (mark.stale or reindented or astray(mark, spec)) then
 				pcall(install, id, mark.group, spec, false, true)
 			end
 		end
@@ -921,7 +1277,7 @@ end
 function state.rewrap()
 	state.prune()
 	for id, mark in pairs(state.marks) do
-		if mark.width and not mark.stale and vim.api.nvim_buf_is_valid(mark.spec.buf) and text_width(mark.spec.buf) ~= mark.width then
+		if mark.measure and not mark.stale and vim.api.nvim_buf_is_valid(mark.spec.buf) and measure(mark.spec) ~= mark.measure then
 			local spec, invalid = current(mark)
 			if not invalid then
 				pcall(install, id, mark.group, spec, false, true)
@@ -1063,7 +1419,9 @@ function state.reanchor(buf)
 				if spec.columns and spec.match then
 					col, endCol = columns_of(buf, mark.anchor, found)
 				end
-				if found ~= spec.line or invalid or gone or col ~= spec.col or endCol ~= spec.endCol then
+				-- Re-indented in the file as reloaded, as when edited (see `state.sync`).
+				local reindented = mark.indented and mark.indented ~= indented(spec)
+				if found ~= spec.line or invalid or gone or reindented or col ~= spec.col or endCol ~= spec.endCol then
 					spec.endLine = spec.endLine and spec.endLine + found - spec.line
 					spec.line, spec.col, spec.endCol = found, col, endCol
 					install(id, mark.group, spec, false, true)

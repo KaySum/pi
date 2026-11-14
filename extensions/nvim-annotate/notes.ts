@@ -139,6 +139,19 @@ export class Notes {
     return this.queued(() => this.removing(numbers));
   }
 
+  /**
+   * Remove the notes numbered within any of `spans` ([first, last]), chosen and removed in one
+   * step: of the notes there then, as nothing else runs between. Resolves to the numbers removed.
+   */
+  removeWithin(spans: [number, number][]): Promise<number[]> {
+    return this.queued(async () => {
+      await this.marks();
+      const within = (n: number) => spans.some(([first, last]) => n >= first && n <= last);
+      const numbers = this.notes.map(note => note.number).filter(within);
+      return numbers.length ? this.removing(numbers) : [];
+    });
+  }
+
   private async removing(numbers: number[]) {
     const marks = await this.marks();
     const found = this.notes.filter(note => numbers.includes(note.number));

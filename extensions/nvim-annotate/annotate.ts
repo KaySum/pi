@@ -81,8 +81,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
   async function remove(remote: Remote, spans: [number, number][]) {
     const notes = notesOf(remote);
     const within = (n: number, [first, last]: [number, number]) => n >= first && n <= last;
-    const there = (await notes.list()).map(note => note.number).filter(n => spans.some(span => within(n, span)));
-    const removed = there.length ? await notes.remove(there) : [];
+    // Chosen and removed in one step: a replace between could not have its notes taken for these.
+    const removed = await notes.removeWithin(spans);
     const missing = spans.filter(span => !removed.some(n => within(n, span)))
       .map(([first, last]) => first === last ? String(first) : `${first}-${last}`);
     return removal(removed, missing, notes.size > 0);

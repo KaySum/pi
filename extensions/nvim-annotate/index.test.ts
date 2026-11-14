@@ -470,6 +470,17 @@ test('/nvim-annotate-remove and :PiNotesRemove remove notes by numbers and range
   assert.deepEqual(await drawn(nvim!, path), []);
 });
 
+test('removing by numbers is one step: a replace that comes in meanwhile is removed whole or kept whole', async () => {
+  const { nvim, annotate, commands, ctx } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `old ${line}` })) });
+  const removing = commands['nvim-annotate-remove'].handler('1-10', ctx);
+  const replacing = annotate({ action: 'add', replace: true, notes: [50, 60, 70, 80, 90].map(line => ({ file: name(path), line, text: `new ${line}` })) });
+  await Promise.all([removing, replacing]);
+  assert.ok([0, 5].includes((await drawn(nvim!, path)).length));
+});
+
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {
   const { nvim, annotate, run } = await attached();
   const path = await file();

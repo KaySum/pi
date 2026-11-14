@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, test } from 'node:test';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -38,7 +38,7 @@ async function pi({ remote = true } = {}) {
     registerCommand: (name: string, command: Command) => { commands[name] = command; },
   } as unknown as ExtensionAPI;
   const ctx = { cwd: dir, hasUI: true, ui: { setStatus() {}, notify: (text: string, type?: string) => notes.push([text, type]) } };
-  const fire = (event: string) => Promise.all(hooks.listeners(event).map(handler => handler({}, ctx)));
+  const fire = (event: string, data: object = {}) => Promise.all(hooks.listeners(event).map(handler => handler(data, ctx)));
   const ready = new Promise<Remote>(resolve => bus.once('nvim-remote:ready', resolve));
   if (remote) registerRemote(api);
   registerAnnotate(api, {} as never);
@@ -46,7 +46,7 @@ async function pi({ remote = true } = {}) {
   const nvim = remote ? await ready : undefined;
   const annotate = async (params: object) => (await tools.nvim_annotate.execute('1', params, undefined, undefined, ctx)).content[0].text;
   const run = async (args: string) => { await commands['nvim-annotate'].handler(args, ctx); return notes.at(-1)!; };
-  return { nvim, annotate, run, tools, commands, ctx, notes, shutdown: () => fire('session_shutdown') };
+  return { nvim, annotate, run, tools, commands, ctx, notes, fire, shutdown: () => fire('session_shutdown') };
 }
 
 const running = new Set<{ shutdown(): Promise<unknown> }>();
@@ -479,6 +479,32 @@ test('removing by numbers is one step: a replace that comes in meanwhile is remo
   const replacing = annotate({ action: 'add', replace: true, notes: [50, 60, 70, 80, 90].map(line => ({ file: name(path), line, text: `new ${line}` })) });
   await Promise.all([removing, replacing]);
   assert.ok([0, 5].includes((await drawn(nvim!, path)).length));
+});
+
+test('the agent is told how its notes changed in the editor, once, before it next thinks', async () => {
+  const { annotate, commands, ctx, fire } = await attached();
+  const path = await file();
+  await layout(path);
+  // Its message, if any: at a run's start, and after a turn with tool calls.
+  const told = async () => (await fire('before_agent_start', { messageType: 'user', prompt: 'go on' }))
+    .map(result => (result as { message?: { content: string } } | undefined)?.message?.content).find(Boolean);
+  const between = async () => (await fire('turn_end', { toolResults: [{}], entries: [] }))
+    .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
+  await annotate({ action: 'add', notes: [10, 20, 30, 40].map(line => ({ file: name(path), match: `function f${line}`, text: `at ${line}` })) });
+  assert.equal(await told(), undefined, 'nothing changed since the agent added them');
+  await commands['nvim-annotate-remove'].handler('2', ctx);
+  await lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 29, 30, true, {})', path); // Note 3's code.
+  assert.equal(await told(), `Pi's notes in the editor changed: the user removed note 2 (${name(path)}); note 3 (${name(path)}) is hidden, its lines deleted (back if that is undone). Notes now: 1, 3 (hidden), 4.`);
+  assert.equal(await told(), undefined, 'told once');
+  // While it works: reloaded from disk, where note 4's code is gone and note 3's never was.
+  await writeFile(path, (await readFile(path)).toString().replace('function f40() {}', 'x'));
+  await lua('vim.api.nvim_buf_call(vim.fn.bufnr(...), function() vim.cmd("edit!") end)', path);
+  assert.deepEqual(await between(), [`Pi's notes in the editor changed: note 4 (${name(path)}) is gone, its code no longer in the file; note 3 (${name(path)}) is back, its lines restored. Notes now: 1, 3.`]);
+  // Its own changes it knows already; the user clearing it is told.
+  await annotate({ action: 'remove', note: 1 });
+  assert.deepEqual(await between(), []);
+  await commands['nvim-annotate-remove'].handler('', ctx);
+  assert.equal(await told(), `Pi's notes in the editor changed: the user removed note 3 (${name(path)}). Notes now: none.`);
 });
 
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {

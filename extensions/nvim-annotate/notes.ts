@@ -203,16 +203,16 @@ export class Notes {
     return { note, total: notes.length, pointed };
   }
 
-  /** Remove every note. Resolves to how many there were. */
-  clear(): Promise<number> {
+  /** Remove every note. Resolves to the numbers they had. */
+  clear(): Promise<number[]> {
     return this.queued(() => this.clearing());
   }
 
   private async clearing() {
-    const count = this.notes.length;
+    const numbers = this.notes.map(note => note.number);
     await this.text.clear();
     this.notes = [];
     this.at = this.last = 0;
-    return count;
+    return numbers;
   }
 }

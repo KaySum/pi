@@ -43,8 +43,11 @@ function removal(removed: number[], missing: string[], left: boolean) {
   return `Removed ${numbers(removed)}${none && `; ${none}`}${left ? '; the others keep their numbers' : ''}`;
 }
 
+const file = (path: string, cwd: string) => relative(cwd, path).startsWith('..') ? path : relative(cwd, path);
 const where = (note: Placed, cwd: string) =>
-  `${relative(cwd, note.path).startsWith('..') ? note.path : relative(cwd, note.path)}:${note.line === note.endLine ? note.line : `${note.line}-${note.endLine}`}`;
+  `${file(note.path, cwd)}:${note.line === note.endLine ? note.line : `${note.line}-${note.endLine}`}`;
+// Of the agent's messages, those that tell it how its notes changed in the editor.
+const CHANGED = 'nvim-annotate';
 // The code it is on, so that a match that found other code than meant shows.
 const code = (note: Placed) => {
   const line = note.code.trim();
@@ -67,12 +70,54 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
+  // What the agent knows of the notes of each attachment, as of its last nvim_annotate call or the
+  // last message telling it: each note's file and whether it was hidden. And those the user has
+  // removed since, to tell them apart from those whose code went.
+  type Seen = Map<number, { path: string; hidden: boolean }>;
+  const known = perAttachment((): { seen: Seen; removed: Set<number> } => ({ seen: new Map(), removed: new Set() }));
+  const state = async (remote: Remote): Promise<Seen> =>
+    new Map((await notesOf(remote).list()).map(note => [note.number, { path: note.path, hidden: !!note.hidden }]));
+
+  // How the notes changed since the agent last knew, said for it: removed by the user, gone with
+  // their code, hidden with their lines deleted or back; and the notes there now. Undefined if
+  // none did, or the agent has had no notes.
+  async function changes() {
+    const remote = nvim();
+    const was = remote && known(remote);
+    if (!remote || !was || (!was.seen.size && !was.removed.size)) return undefined;
+    const now = await state(remote);
+    const notes = (numbers: number[], at: Seen) =>
+      `${numbers.length === 1 ? 'note' : 'notes'} ${numbers.map(n => `${n} (${file(at.get(n)!.path, cwd())})`).join(', ')}`;
+    const be = (numbers: number[]) => numbers.length === 1 ? 'is' : 'are', its = (numbers: number[]) => numbers.length === 1 ? 'its' : 'their';
+    const went = [...was.seen.keys()].filter(n => !now.has(n));
+    const removed = went.filter(n => was.removed.has(n)), lost = went.filter(n => !was.removed.has(n));
+    const hidden = [...now].filter(([n, note]) => note.hidden && was.seen.get(n)?.hidden === false).map(([n]) => n);
+    const back = [...now].filter(([n, note]) => !note.hidden && was.seen.get(n)?.hidden).map(([n]) => n);
+    const parts = [
+      removed.length && `the user removed ${notes(removed, was.seen)}`,
+      lost.length && `${notes(lost, was.seen)} ${be(lost)} gone, ${its(lost)} code no longer in the file`,
+      hidden.length && `${notes(hidden, now)} ${be(hidden)} hidden, ${its(hidden)} lines deleted (back if that is undone)`,
+      back.length && `${notes(back, now)} ${be(back)} back, ${its(back)} lines restored`,
+    ].filter(Boolean);
+    was.seen = now;
+    was.removed.clear();
+    if (!parts.length) return undefined;
+    const left = [...now].map(([n, note]) => note.hidden ? `${n} (hidden)` : String(n)).join(', ');
+    return `Pi's notes in the editor changed: ${parts.join('; ')}. Notes now: ${left || 'none'}.`;
+  }
+
+  // Remove every note, as the user asked: saying how many.
+  async function clearing(remote: Remote) {
+    const cleared = await notesOf(remote).clear();
+    for (const n of cleared) known(remote).removed.add(n);
+    return `Removed ${cleared.length} ${cleared.length === 1 ? 'note' : 'notes'}`;
+  }
+
   // Remove the notes `text` numbers (see `ranges`), or with none, all; saying how it went.
   // Undefined if it is neither.
   async function removing(remote: Remote, text: string) {
     if (!text.trim()) {
-      const count = await notesOf(remote).clear();
-      return `Removed ${count} ${count === 1 ? 'note' : 'notes'}`;
+      return clearing(remote);
     }
     const spans = ranges(text);
     return spans && remove(remote, spans);
@@ -83,6 +128,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     const within = (n: number, [first, last]: [number, number]) => n >= first && n <= last;
     // Chosen and removed in one step: a replace between could not have its notes taken for these.
     const removed = await notes.removeWithin(spans);
+    for (const n of removed) known(remote).removed.add(n);
     const missing = spans.filter(span => !removed.some(n => within(n, span)))
       .map(([first, last]) => first === last ? String(first) : `${first}-${last}`);
     return removal(removed, missing, notes.size > 0);
@@ -108,7 +154,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     promptSnippet: 'Explain code with notes in the user\'s Neovim, and walk them through it',
     description: 'Put notes on code in the Neovim Pi runs inside, where the user reads it: above the lines, numbered in the order added, anchored to the code so they move with edits. add places notes on code by match (the code itself, which is better than a line number) or a line; list says where they are now and the code they are on, to check the right code was found; show takes the user to note N; update changes the text or kind of one, and remove removes one or several, the others keeping their numbers; clear removes them all. The user steps through them with :PiNotes next and :PiNotes prev.',
     promptGuidelines: [
-      'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them with show: true, which takes the user to the first. Keep each note to a sentence or two about that code. Give a kind only for what it means: warn for a real risk, error for a bug, never for emphasis. Anchor notes by match, a distinctive line of the code. For a new explanation add with replace: true, which swaps the old notes for the new; clear notes once they no longer apply.',
+      'Use nvim_annotate to explain code where the user reads it, rather than quoting it in chat: for a walkthrough, add the notes in the order to read them with show: true, which takes the user to the first. Keep each note to a sentence or two about that code. Give a kind only for what it means: warn for a real risk, error for a bug, never for emphasis. Anchor notes by match, a distinctive line of the code. For a new explanation add with replace: true, which swaps the old notes for the new; clear notes once they no longer apply. A message that the notes changed reports what happened in the editor: the user may remove notes for any reason, so do not guess why, and do not add them back unless asked.',
     ],
     executionMode: 'sequential',
     parameters,
@@ -161,11 +207,15 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             return removal(removed, missing.map(String), notes.size > 0);
           }
           case 'clear': {
-            const count = await notes.clear();
+            const count = (await notes.clear()).length;
             return `Removed ${count} ${count === 1 ? 'note' : 'notes'}`;
           }
         }
       })();
+      // What it knows of them now, told by its own call.
+      const was = known(remote);
+      was.seen = await state(remote);
+      was.removed.clear();
       return { content: [{ type: 'text', text }], details: {} };
     },
   });
@@ -183,8 +233,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
           return ctx.ui.notify(placed.length ? placed.map(note => describe(note, ctx.cwd)).join('\n') : 'No notes', 'info');
         }
         if (arg === 'clear') {
-          const count = await notesOf(remote).clear();
-          return ctx.ui.notify(`Removed ${count} ${count === 1 ? 'note' : 'notes'}`, 'info');
+          return ctx.ui.notify(await clearing(remote), 'info');
         }
         const which = parse(arg);
         if (which === undefined) return ctx.ui.notify(USAGE, 'warning');
@@ -204,5 +253,17 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
         ctx.ui.notify(said ?? `Usage: /nvim-annotate-remove [${NUMBERS}; none for all]`, said ? 'info' : 'warning');
       } catch (error) { ctx.ui.notify(errorText(error), 'warning'); }
     },
+  });
+
+  // The agent told how its notes changed in the editor before it next thinks: as a run starts,
+  // and between the turns of one, once each time.
+  pi.on('before_agent_start', async () => {
+    const text = await changes().catch(() => undefined);
+    return text ? { message: { customType: CHANGED, content: text, display: true } } : undefined;
+  });
+  pi.on('turn_end', async event => {
+    if (!event.toolResults.length) return undefined;
+    const text = await changes().catch(() => undefined);
+    return text ? { entries: [...event.entries, { type: 'custom_message', customType: CHANGED, content: text, display: true }] } : undefined;
   });
 }

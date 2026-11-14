@@ -15,7 +15,12 @@ the note's code in your window, your cursor on it, and says which it is.
 
 In Pi, `/nvim-annotate` lists the notes, where their code is now; `/nvim-annotate next`,
 `prev` or a number goes to one, focusing your window; `/nvim-annotate clear` removes them all.
-Notes last until cleared, and go when Pi detaches from Neovim.
+
+`remove` (or `delete`) removes some, in Pi or Neovim: `/nvim-annotate remove 2 5-7,10`,
+`:PiNotes remove 9-4 1`. Numbers and ranges, either way round, by spaces or commas, in any order;
+it says which it removed and which numbers had no note. The others keep their numbers.
+
+Notes last until cleared or removed, and go when Pi detaches from Neovim.
 
 ## The tool
 

@@ -4,15 +4,40 @@ import { useRemote, type Remote } from '../nvim-remote/api.ts';
 import { errorText, perAttachment, useCwd, withKit } from '../nvim-remote-kit/api.ts';
 import { Notes, type Kind, type NoteSpec, type Placed } from './notes.ts';
 
-// :PiNotes in Neovim, its argument sent to Pi; gone with the attachment.
+// :PiNotes in Neovim, its arguments sent to Pi; gone with the attachment.
 const COMMAND = `vim.api.nvim_create_user_command('PiNotes', function(o) remote.notify('nvim-annotate:step', o.args) end, {
-  nargs = '?', desc = "Go to Pi's notes: next, prev, or a number",
-  complete = function() return { 'next', 'prev' } end,
+  nargs = '*', desc = "Go to Pi's notes: next, prev, a number; or remove some",
+  complete = function() return { 'next', 'prev', 'remove' } end,
 })
 remote.on_detach(function() pcall(vim.api.nvim_del_user_command, 'PiNotes') end)`;
 // A note whose code a reload took since it was placed or changed.
 const GONE = 'gone: its code is no longer in the file';
-const USAGE = 'Usage: /nvim-annotate [next | prev | <number> | clear]';
+const USAGE = 'Usage: /nvim-annotate [next | prev | <number> | remove <numbers> | clear]';
+const PINOTES = 'Usage: :PiNotes [next | prev | <number> | remove <numbers>]';
+// remove (or delete) and the note numbers after it.
+const REMOVE = /^(?:remove|delete)\b(.*)$/s;
+
+/**
+ * Note numbers as written: numbers and ranges (`5-7`, or `7-5`), by spaces or commas, in any
+ * order. Each as [first, last]; undefined if there are none, or anything else.
+ */
+export function ranges(text: string): [number, number][] | undefined {
+  const parts = text.replace(/\s*-\s*/g, '-').split(/[\s,]+/).filter(Boolean);
+  const found = parts.map(part => /^([1-9]\d*)(?:-([1-9]\d*))?$/.exec(part));
+  if (!found.length || found.some(match => !match)) return undefined;
+  return found.map(match => {
+    const a = Number(match![1]), b = Number(match![2] ?? match![1]);
+    return a <= b ? [a, b] : [b, a];
+  });
+}
+
+// What removing said: those removed, those asked for that were not there, and whether others are left.
+function removal(removed: number[], missing: string[], left: boolean) {
+  const numbers = (list: (number | string)[]) => `${list.length === 1 && !String(list[0]).includes('-') ? 'note' : 'notes'} ${list.join(', ')}`;
+  const none = missing.length ? `no ${numbers(missing)}` : '';
+  if (!removed.length) return none.replace(/^n/, 'N');
+  return `Removed ${numbers(removed)}${none && `; ${none}`}${left ? '; the others keep their numbers' : ''}`;
+}
 
 const where = (note: Placed, cwd: string) =>
   `${relative(cwd, note.path).startsWith('..') ? note.path : relative(cwd, note.path)}:${note.line === note.endLine ? note.line : `${note.line}-${note.endLine}`}`;
@@ -38,12 +63,24 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
+  // Remove the notes `spans` take in (of those there: a range is never counted out), saying how it went.
+  async function remove(remote: Remote, spans: [number, number][]) {
+    const notes = notesOf(remote);
+    const within = (n: number, [first, last]: [number, number]) => n >= first && n <= last;
+    const there = (await notes.list()).map(note => note.number).filter(n => spans.some(span => within(n, span)));
+    const removed = there.length ? await notes.remove(there) : [];
+    const missing = spans.filter(span => !removed.some(n => within(n, span)))
+      .map(([first, last]) => first === last ? String(first) : `${first}-${last}`);
+    return removal(removed, missing, notes.size > 0);
+  }
 
   const nvim = useRemote(pi, remote => {
     void remote.lua(COMMAND).catch(() => {});
     remote.on('nvim-annotate:step', async (arg: string) => {
+      const asked = REMOVE.exec(arg.trim()), spans = asked && ranges(asked[1]);
       const which = parse(arg.trim() || 'next');
-      const said = which === undefined ? "Usage: :PiNotes [next | prev | <number>]" : await step(remote, which).catch(errorText);
+      const said = asked ? (spans ? await remove(remote, spans).catch(errorText) : PINOTES)
+        : which === undefined ? PINOTES : await step(remote, which).catch(errorText);
       // Fitted to where messages go: a longer one would stop the editor at "Press ENTER".
       await withKit(remote, 'kit.say(...)', [said]).catch(() => {});
     });
@@ -105,10 +142,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             if (params.note === undefined) throw new Error('remove needs a note number');
             const asked = [...new Set([params.note].flat())];
             const removed = await notes.remove(asked), missing = asked.filter(number => !removed.includes(number));
-            const numbers = (list: number[]) => `${list.length === 1 ? 'note' : 'notes'} ${list.join(', ')}`;
-            const none = missing.length ? `no ${numbers(missing)}` : '';
-            if (!removed.length) return none.replace(/^n/, 'N');
-            return `Removed ${numbers(removed)}${none && `; ${none}`}${notes.size ? '; the others keep their numbers' : ''}`;
+            return removal(removed, missing.map(String), notes.size > 0);
           }
           case 'clear': {
             const count = await notes.clear();
@@ -121,8 +155,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
   });
 
   pi.registerCommand('nvim-annotate', {
-    description: "Show Pi's notes in Neovim, go to one (next, prev, a number), or clear them",
-    getArgumentCompletions: prefix => ['next', 'prev', 'clear'].filter(word => word.startsWith(prefix.trim())).map(word => ({ value: word, label: word })),
+    description: "Show Pi's notes in Neovim, go to one (next, prev, a number), remove some (remove 2 5-7), or clear them",
+    getArgumentCompletions: prefix => ['next', 'prev', 'remove', 'clear'].filter(word => word.startsWith(prefix.trim())).map(word => ({ value: word, label: word })),
     handler: async (args, ctx) => {
       const remote = nvim();
       if (!remote) return ctx.ui.notify('Pi is not attached to Neovim', 'warning');
@@ -135,6 +169,11 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
         if (arg === 'clear') {
           const count = await notesOf(remote).clear();
           return ctx.ui.notify(`Removed ${count} ${count === 1 ? 'note' : 'notes'}`, 'info');
+        }
+        const asked = REMOVE.exec(arg);
+        if (asked) {
+          const spans = ranges(asked[1]);
+          return ctx.ui.notify(spans ? await remove(remote, spans) : USAGE, spans ? 'info' : 'warning');
         }
         const which = parse(arg);
         if (which === undefined) return ctx.ui.notify(USAGE, 'warning');

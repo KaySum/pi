@@ -449,7 +449,7 @@ test('/nvim-annotate-remove and :PiNotesRemove remove notes by numbers and range
   await annotate({ action: 'add', notes: Array.from({ length: 8 }, (_, i) => ({ file: name(path), line: 10 + i * 10, text: `n${i + 1}` })) });
   assert.deepEqual(await remove('7-5 2,8 12 20-30'), ['Removed notes 2, 5, 6, 7, 8; no notes 12, 20-30; the others keep their numbers', 'info']);
   assert.deepEqual((await drawn(nvim!, path)).map(([, text]) => text), ['1. n1', '3. n3', '4. n4']);
-  assert.deepEqual(await remove('2 x'), ['Usage: /nvim-annotate-remove <numbers and ranges, as 2 5-7,10>', 'warning']);
+  assert.deepEqual(await remove('2 x'), ['Usage: /nvim-annotate-remove [numbers and ranges, as 2 5-7,10; none for all]', 'warning']);
   assert.deepEqual(await remove('9'), ['No note 9', 'info']);
   const said = () => lua('return vim.api.nvim_exec2("messages", { output = true }).output') as Promise<string>;
   await lua('vim.cmd("messages clear")');
@@ -459,6 +459,15 @@ test('/nvim-annotate-remove and :PiNotesRemove remove notes by numbers and range
   await editor.request('nvim_command', ['PiNotesRemove x']);
   await eventually(async () => (await said()).includes('Usage: :PiNotesRemove'));
   assert.deepEqual(await remove('1-1000000'), ['Removed note 3', 'info']);
+  // With none: all of them, as clear.
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 5, text: 'a' }, { file: name(path), line: 6, text: 'b' }] });
+  assert.deepEqual(await remove('  '), ['Removed 2 notes', 'info']);
+  assert.deepEqual(await drawn(nvim!, path), []);
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 5, text: 'c' }] });
+  await lua('vim.cmd("messages clear")');
+  await editor.request('nvim_command', ['PiNotesRemove']);
+  await eventually(async () => (await said()).includes('Removed 1 note'));
+  assert.deepEqual(await drawn(nvim!, path), []);
 });
 
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {

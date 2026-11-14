@@ -10,7 +10,7 @@ const COMMAND = `vim.api.nvim_create_user_command('PiNotes', function(o) remote.
   complete = function() return { 'next', 'prev' } end,
 })
 vim.api.nvim_create_user_command('PiNotesRemove', function(o) remote.notify('nvim-annotate:remove', o.args) end, {
-  nargs = '+', desc = "Remove Pi's notes by numbers and ranges: 2 5-7,10",
+  nargs = '*', desc = "Remove Pi's notes by numbers and ranges (2 5-7,10); all of them, with none",
 })
 remote.on_detach(function()
   pcall(vim.api.nvim_del_user_command, 'PiNotes')
@@ -67,6 +67,16 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
+  // Remove the notes `text` numbers (see `ranges`), or with none, all; saying how it went.
+  // Undefined if it is neither.
+  async function removing(remote: Remote, text: string) {
+    if (!text.trim()) {
+      const count = await notesOf(remote).clear();
+      return `Removed ${count} ${count === 1 ? 'note' : 'notes'}`;
+    }
+    const spans = ranges(text);
+    return spans && remove(remote, spans);
+  }
   // Remove the notes `spans` take in (of those there: a range is never counted out), saying how it went.
   async function remove(remote: Remote, spans: [number, number][]) {
     const notes = notesOf(remote);
@@ -87,8 +97,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
       await say(which === undefined ? 'Usage: :PiNotes [next | prev | <number>]' : await step(remote, which).catch(errorText));
     });
     remote.on('nvim-annotate:remove', async (arg: string) => {
-      const spans = ranges(arg);
-      await say(spans ? await remove(remote, spans).catch(errorText) : `Usage: :PiNotesRemove <${NUMBERS}>`);
+      const said = await removing(remote, arg).catch(errorText);
+      await say(said ?? `Usage: :PiNotesRemove [${NUMBERS}; none for all]`);
     });
   });
 
@@ -185,14 +195,13 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
   });
 
   pi.registerCommand('nvim-annotate-remove', {
-    description: "Remove Pi's notes in Neovim by numbers and ranges, in any order: 2 5-7,10",
+    description: "Remove Pi's notes in Neovim by numbers and ranges, in any order (2 5-7,10); all of them, with none",
     handler: async (args, ctx) => {
       const remote = nvim();
       if (!remote) return ctx.ui.notify('Pi is not attached to Neovim', 'warning');
-      const spans = ranges(args);
-      if (!spans) return ctx.ui.notify(`Usage: /nvim-annotate-remove <${NUMBERS}>`, 'warning');
       try {
-        ctx.ui.notify(await remove(remote, spans), 'info');
+        const said = await removing(remote, args);
+        ctx.ui.notify(said ?? `Usage: /nvim-annotate-remove [${NUMBERS}; none for all]`, said ? 'info' : 'warning');
       } catch (error) { ctx.ui.notify(errorText(error), 'warning'); }
     },
   });

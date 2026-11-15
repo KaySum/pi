@@ -486,6 +486,29 @@ test('changes the agent has not been told outlast its own calls on other notes, 
   assert.deepEqual(await between(), []);
 });
 
+test('a removal by the user while an agent call runs is told; the agent\'s own removals never are', async () => {
+  const { annotate, commands, ctx, fire } = await attached();
+  const path = await file();
+  await layout(path);
+  const between = async () => (await fire('turn_end', { toolResults: [{}], entries: [] }))
+    .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
+  const add = (lines: number[], replace = false) =>
+    annotate({ action: 'add', replace, notes: lines.map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  await add([10, 20, 30]);
+  for (const action of ['update', 'show']) {
+    const calling = annotate(action === 'update' ? { action, note: 3, text: 'changed' } : { action, note: 3 });
+    const removing = commands['nvim-annotate-remove'].handler(action === 'update' ? '1' : '2', ctx);
+    await Promise.all([calling, removing]);
+  }
+  assert.deepEqual(await between(), [`Pi's notes in the editor changed: the user removed notes 1 (${name(path)}), 2 (${name(path)}). Notes now: 3.`]);
+  await add([40, 50]);
+  await annotate({ action: 'remove', note: 4 });
+  await annotate({ action: 'clear' });
+  await add([60, 70]);
+  await add([80], true);
+  assert.deepEqual(await between(), []);
+});
+
 test('removing by numbers is one step: a replace that comes in meanwhile is removed whole or kept whole', async () => {
   const { nvim, annotate, commands, ctx } = await attached();
   const path = await file();

@@ -11,8 +11,13 @@ export type Kind = typeof KINDS[number];
  * Always above its code, indented to it, and wrapped as the user's window wraps code.
  */
 export type NoteSpec = { file: string; match?: string; line?: number; text: string; kind?: Kind };
-/** A note as placed, numbered in the order notes were added. */
-export type Note = { number: number; path: string; text: string; kind: Kind; mark: Mark };
+/** A note as placed, numbered in the order notes were added; `id` is never given again, unlike numbers. */
+export type Note = { id: number; number: number; path: string; text: string; kind: Kind; mark: Mark };
+/** Who removed a note: the user, or Pi with its tool. */
+export type By = 'user' | 'pi';
+export type Removed = { id: number; number: number; path: string; by: By };
+/** What happened to the notes since last observed: those added, and those removed and by whom. */
+export type Changes = { added: Note[]; removed: Removed[] };
 /** Where a note is now, its code moved by edits, and the first line of that code; `hidden` while it is deleted. */
 export type Placed = Note & { line: number; endLine: number; code: string; hidden?: true };
 
@@ -44,6 +49,10 @@ export class Notes {
   private at = 0;
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
+  /** The last id given. */
+  private ids = 0;
+  /** What happened to the notes since `observe` last said, in order. */
+  private changes: Changes = { added: [], removed: [] };
   /** What the notes are doing, each after the one before: see `queued`. */
   private queue: Promise<unknown> = Promise.resolve();
   private remote: Remote;
@@ -96,7 +105,7 @@ export class Notes {
         indent: true, wrap: 'window', invalidate: true,
         ...(spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line }),
       };
-      return { number, path: mark.path!, text: spec.text, kind, mark };
+      return { id: this.ids + i + 1, number, path: mark.path!, text: spec.text, kind, mark };
     });
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
@@ -104,6 +113,9 @@ export class Notes {
     } catch (error) {
       throw await this.why(added.map(note => note.mark)) ?? error;
     }
+    this.ids += added.length;
+    if (replace) this.retire(this.notes);
+    this.changes.added.push(...added);
     this.notes = [...kept, ...added];
     this.last = after + added.length;
     if (replace) this.at = 0;
@@ -135,29 +147,52 @@ export class Notes {
   }
 
   /** Remove the notes `numbers`, the others keeping theirs. Resolves to the numbers there were. */
-  remove(numbers: number[]): Promise<number[]> {
-    return this.queued(() => this.removing(numbers));
+  remove(numbers: number[], by: By): Promise<number[]> {
+    return this.queued(() => this.removing(numbers, by));
   }
 
   /**
    * Remove the notes numbered within any of `spans` ([first, last]), chosen and removed in one
    * step: of the notes there then, as nothing else runs between. Resolves to the numbers removed.
    */
-  removeWithin(spans: [number, number][]): Promise<number[]> {
+  removeWithin(spans: [number, number][], by: By): Promise<number[]> {
     return this.queued(async () => {
       await this.marks();
       const within = (n: number) => spans.some(([first, last]) => n >= first && n <= last);
       const numbers = this.notes.map(note => note.number).filter(within);
-      return numbers.length ? this.removing(numbers) : [];
+      return numbers.length ? this.removing(numbers, by) : [];
     });
   }
 
-  private async removing(numbers: number[]) {
+  private async removing(numbers: number[], by: By) {
     const marks = await this.marks();
     const found = this.notes.filter(note => numbers.includes(note.number));
     if (found.length) await this.text.remove(found.map(note => marks.get(note.mark.key)!.id));
     this.notes = this.notes.filter(note => !found.includes(note));
+    this.journal(found, by);
     return found.map(note => note.number);
+  }
+
+  private journal(notes: Note[], by: By) {
+    this.changes.removed.push(...notes.map(({ id, number, path }) => ({ id, number, path, by })));
+  }
+
+  /** Pi has done with `notes`, all it had: those the user removed before are now as if Pi had. */
+  private retire(notes: Note[]) {
+    for (const removed of this.changes.removed) removed.by = 'pi';
+    this.journal(notes, 'pi');
+  }
+
+  /**
+   * The notes, where their code is now, and what happened to them since last asked: read in one
+   * step, so each change is either among those or already in the notes.
+   */
+  observe(): Promise<Changes & { notes: Placed[] }> {
+    return this.queued(async () => {
+      const notes = await this.listing(), changes = this.changes;
+      this.changes = { added: [], removed: [] };
+      return { notes, ...changes };
+    });
   }
 
   /** Why each of `marks` that cannot be placed cannot, or undefined if each can alone. */
@@ -204,13 +239,15 @@ export class Notes {
   }
 
   /** Remove every note. Resolves to the numbers they had. */
-  clear(): Promise<number[]> {
-    return this.queued(() => this.clearing());
+  clear(by: By): Promise<number[]> {
+    return this.queued(() => this.clearing(by));
   }
 
-  private async clearing() {
+  private async clearing(by: By) {
     const numbers = this.notes.map(note => note.number);
     await this.text.clear();
+    if (by === 'pi') this.retire(this.notes);
+    else this.journal(this.notes, by);
     this.notes = [];
     this.at = this.last = 0;
     return numbers;

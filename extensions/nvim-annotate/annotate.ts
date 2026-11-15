@@ -70,55 +70,44 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;
-  // Of each attachment: the notes as last observed, each note's file and whether it was hidden; those
-  // the user has removed since, to tell them apart from those whose code went; and what changed
-  // before, not yet told the agent.
-  type Seen = Map<number, { path: string; hidden: boolean }>;
-  const known = perAttachment((): { seen: Seen; removed: Set<number>; facts: string[] } =>
-    ({ seen: new Map(), removed: new Set(), facts: [] }));
-  const state = async (remote: Remote): Promise<Seen> =>
-    new Map((await notesOf(remote).list()).map(note => [note.number, { path: note.path, hidden: !!note.hidden }]));
+  // The notes of each attachment as the agent last knew them, by id: each one's number, file and
+  // whether it was hidden. What it added or removed itself it knows from its tool's replies.
+  type Known = { number: number; path: string; hidden: boolean };
+  const known = perAttachment(() => new Map<number, Known>());
 
-  // Add to the facts how the notes changed since last observed: removed by the user, gone with
-  // their code, hidden with their lines deleted or back. Resolves to the notes now.
-  async function observe(remote: Remote) {
-    const was = known(remote), now = await state(remote);
-    const notes = (numbers: number[], at: Seen) =>
-      `${numbers.length === 1 ? 'note' : 'notes'} ${numbers.map(n => `${n} (${file(at.get(n)!.path, cwd())})`).join(', ')}`;
-    const be = (numbers: number[]) => numbers.length === 1 ? 'is' : 'are', its = (numbers: number[]) => numbers.length === 1 ? 'its' : 'their';
-    const went = [...was.seen.keys()].filter(n => !now.has(n));
-    const removed = went.filter(n => was.removed.has(n)), lost = went.filter(n => !was.removed.has(n));
-    const hidden = [...now].filter(([n, note]) => note.hidden && was.seen.get(n)?.hidden === false).map(([n]) => n);
-    const back = [...now].filter(([n, note]) => !note.hidden && was.seen.get(n)?.hidden).map(([n]) => n);
-    was.facts.push(...[
-      removed.length && `the user removed ${notes(removed, was.seen)}`,
-      lost.length && `${notes(lost, was.seen)} ${be(lost)} gone, ${its(lost)} code no longer in the file`,
-      hidden.length && `${notes(hidden, now)} ${be(hidden)} hidden, ${its(hidden)} lines deleted (back if that is undone)`,
-      back.length && `${notes(back, now)} ${be(back)} back, ${its(back)} lines restored`,
-    ].filter(part => typeof part === 'string'));
-    was.seen = now;
-    was.removed.clear();
-    return now;
-  }
-
-  // The facts not yet told the agent, said for it with the notes there now, once. Undefined if
-  // there are none, or the agent has had no notes.
+  // How the notes changed since the agent last knew, said for it once: removed by the user, gone
+  // with their code, hidden with their lines deleted or back; and the notes there now. Undefined
+  // if none did.
   async function changes() {
     const remote = nvim();
-    const was = remote && known(remote);
-    if (!remote || !was || (!was.seen.size && !was.removed.size && !was.facts.length)) return undefined;
-    const now = await observe(remote);
-    if (!was.facts.length) return undefined;
-    const left = [...now].map(([n, note]) => note.hidden ? `${n} (hidden)` : String(n)).join(', ');
-    const text = `Pi's notes in the editor changed: ${was.facts.join('; ')}. Notes now: ${left || 'none'}.`;
-    was.facts = [];
-    return text;
+    if (!remote) return undefined;
+    const seen = known(remote), { notes: placed, added, removed } = await notesOf(remote).observe();
+    // Those the agent added it knew as it added them.
+    for (const note of added) seen.set(note.id, { number: note.number, path: note.path, hidden: false });
+    const now = new Map(placed.map(note => [note.id, { number: note.number, path: note.path, hidden: !!note.hidden }]));
+    const said = (notes: { number: number; path: string }[]) =>
+      `${notes.length === 1 ? 'note' : 'notes'} ${notes.map(note => `${note.number} (${file(note.path, cwd())})`).join(', ')}`;
+    const be = (notes: Known[]) => notes.length === 1 ? 'is' : 'are', its = (notes: Known[]) => notes.length === 1 ? 'its' : 'their';
+    const byUser = removed.filter(note => note.by === 'user');
+    const lost = [...seen].filter(([id]) => !now.has(id) && !removed.some(note => note.id === id)).map(([, note]) => note);
+    const hidden = [...now].filter(([id, note]) => note.hidden && !seen.get(id)?.hidden).map(([, note]) => note);
+    const back = [...now].filter(([id, note]) => !note.hidden && seen.get(id)?.hidden).map(([, note]) => note);
+    const facts = [
+      byUser.length && `the user removed ${said(byUser)}`,
+      lost.length && `${said(lost)} ${be(lost)} gone, ${its(lost)} code no longer in the file`,
+      hidden.length && `${said(hidden)} ${be(hidden)} hidden, ${its(hidden)} lines deleted (back if that is undone)`,
+      back.length && `${said(back)} ${be(back)} back, ${its(back)} lines restored`,
+    ].filter(fact => typeof fact === 'string');
+    seen.clear();
+    for (const [id, note] of now) seen.set(id, note);
+    if (!facts.length) return undefined;
+    const left = [...now.values()].map(note => note.hidden ? `${note.number} (hidden)` : String(note.number)).join(', ');
+    return `Pi's notes in the editor changed: ${facts.join('; ')}. Notes now: ${left || 'none'}.`;
   }
 
   // Remove every note, as the user asked: saying how many.
   async function clearing(remote: Remote) {
-    const cleared = await notesOf(remote).clear();
-    for (const n of cleared) known(remote).removed.add(n);
+    const cleared = await notesOf(remote).clear('user');
     return `Removed ${cleared.length} ${cleared.length === 1 ? 'note' : 'notes'}`;
   }
 
@@ -136,8 +125,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     const notes = notesOf(remote);
     const within = (n: number, [first, last]: [number, number]) => n >= first && n <= last;
     // Chosen and removed in one step: a replace between could not have its notes taken for these.
-    const removed = await notes.removeWithin(spans);
-    for (const n of removed) known(remote).removed.add(n);
+    const removed = await notes.removeWithin(spans, 'user');
     const missing = spans.filter(span => !removed.some(n => within(n, span)))
       .map(([first, last]) => first === last ? String(first) : `${first}-${last}`);
     return removal(removed, missing, notes.size > 0);
@@ -175,8 +163,6 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
       const remote = nvim();
       if (!remote) throw new Error('Pi is not attached to Neovim');
       const notes = notesOf(remote);
-      // What changed before this call is kept to be told: its reply says only what it did.
-      const observed = await observe(remote).then(() => true, () => false);
       if (Array.isArray(params.note) && params.action !== 'remove') throw new Error(`${params.action} takes one note number`);
       const text = await (async () => {
         switch (params.action) {
@@ -214,22 +200,15 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
           case 'remove': {
             if (params.note === undefined) throw new Error('remove needs a note number');
             const asked = [...new Set([params.note].flat())];
-            const removed = await notes.remove(asked), missing = asked.filter(number => !removed.includes(number));
+            const removed = await notes.remove(asked, 'pi'), missing = asked.filter(number => !removed.includes(number));
             return removal(removed, missing.map(String), notes.size > 0);
           }
           case 'clear': {
-            const count = (await notes.clear()).length;
+            const count = (await notes.clear('pi')).length;
             return `Removed ${count} ${count === 1 ? 'note' : 'notes'}`;
           }
         }
       })();
-      // What it did, it knows. Facts of notes it has replaced or cleared no longer matter.
-      const was = known(remote);
-      if (observed) {
-        was.seen = await state(remote);
-        was.removed.clear();
-      }
-      if (params.action === 'clear' || params.replace) was.facts = [];
       return { content: [{ type: 'text', text }], details: {} };
     },
   });

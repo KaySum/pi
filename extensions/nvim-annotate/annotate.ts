@@ -174,9 +174,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             const bad = params.notes.flatMap((note, i) => note.match === undefined && note.line === undefined ? [`notes[${i}]`] : []);
             if (bad.length) throw new Error(`A note needs a match or a line: ${bad.join(', ')}`);
             const before = notes.size;
-            const added = await notes.add(params.notes, ctx.cwd, { replace: params.replace });
-            // Read again, where they are now: one whose code a reload took meanwhile is gone.
-            const placed = await notes.list();
+            const { added, placed } = await notes.add(params.notes, ctx.cwd, { replace: params.replace });
             const lines = added.map(a => {
               const note = placed.find(note => note.number === a.number);
               return note ? describe(note, ctx.cwd) : `${a.number}. ${GONE}`;
@@ -196,9 +194,9 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
             if (params.note === undefined) throw new Error('update needs a note number');
             if (params.text === undefined && params.kind === undefined) throw new Error('update needs a text or a kind');
             const number = params.note as number;
-            if (!await notes.update(number, { text: params.text, kind: params.kind })) return `No note ${number}`;
-            const note = (await notes.list()).find(note => note.number === number);
-            return note ? `Updated:\n${describe(note, ctx.cwd)}` : `Note ${number} is ${GONE}`;
+            const updated = await notes.update(number, { text: params.text, kind: params.kind });
+            if (!updated) return `No note ${number}`;
+            return updated.placed ? `Updated:\n${describe(updated.placed, ctx.cwd)}` : `Note ${number} is ${GONE}`;
           }
           case 'remove': {
             if (params.note === undefined) throw new Error('remove needs a note number');

@@ -89,9 +89,14 @@ export class Notes {
   /**
    * Add notes after those there, or with `replace` instead of them, numbered from 1 again: all
    * placed, or none if one cannot be (its file or code missing), those there left as they were.
+   * Resolves to those added, and the notes where they are then: read in the same step, so one
+   * added is missing only if the editor took it (its code deleted, or its buffer wiped).
    */
-  add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<Note[]> {
-    return this.queued(() => this.adding(specs, cwd, replace));
+  add(specs: NoteSpec[], cwd: string, { replace = false } = {}): Promise<{ added: Note[]; placed: Placed[] }> {
+    return this.queued(async () => {
+      const added = await this.adding(specs, cwd, replace);
+      return { added, placed: await this.listing() };
+    });
   }
 
   private async adding(specs: NoteSpec[], cwd: string, replace: boolean) {
@@ -129,9 +134,15 @@ export class Notes {
     return note && { note, id: marks.get(note.mark.key)!.id };
   }
 
-  /** Change note `number`'s text or kind, where it is now. Resolves to whether there was one. */
-  update(number: number, change: { text?: string; kind?: Kind }): Promise<boolean> {
-    return this.queued(() => this.updating(number, change));
+  /**
+   * Change note `number`'s text or kind, where it is now. Resolves to undefined if there was none,
+   * else to it as placed then, read in the same step: none if the editor took it meanwhile.
+   */
+  update(number: number, change: { text?: string; kind?: Kind }): Promise<{ placed?: Placed } | undefined> {
+    return this.queued(async () => {
+      if (!await this.updating(number, change)) return undefined;
+      return { placed: (await this.listing()).find(note => note.number === number) };
+    });
   }
 
   private async updating(number: number, change: { text?: string; kind?: Kind }) {

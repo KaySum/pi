@@ -509,6 +509,22 @@ test('a removal by the user while an agent call runs is told; the agent\'s own r
   assert.deepEqual(await between(), []);
 });
 
+test('the tool says what it did as it did it: a note the user removes after is told as theirs, not as gone', async () => {
+  const { annotate, commands, ctx, fire } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  const adding = annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'new' }] });
+  await commands['nvim-annotate-remove'].handler('4', ctx);
+  assert.equal(await adding, `Added note 4:\n4. ${name(path)}:40 \`function f40() {}\`: new`);
+  const updating = annotate({ action: 'update', note: 2, text: 'changed' });
+  await commands['nvim-annotate-remove'].handler('2', ctx);
+  assert.equal(await updating, `Updated:\n2. ${name(path)}:20 \`function f20() {}\`: changed`);
+  const told = (await fire('turn_end', { toolResults: [{}], entries: [] }))
+    .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
+  assert.deepEqual(told, [`Pi's notes in the editor changed: the user removed notes 4 (${name(path)}), 2 (${name(path)}). Notes now: 1, 3.`]);
+});
+
 test('removing by numbers is one step: a replace that comes in meanwhile is removed whole or kept whole', async () => {
   const { nvim, annotate, commands, ctx } = await attached();
   const path = await file();

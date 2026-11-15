@@ -117,6 +117,9 @@ function check(place: Place, cwd: string): Record<string, unknown> {
 }
 
 /** Pointing in the editor of `remote`, relative paths from `cwd`. */
+/** Install point.lua in this attachment, for another extension's Lua to call `remote.nvim_point.show` itself. */
+export const installPoint = (remote: Lua, options?: CallOptions) => install(remote, MODULE, options);
+
 export function point(remote: Lua, cwd = process.cwd()): Point {
   async function once(spec: Record<string, unknown>, options?: CallOptions): Promise<Pointed> {
     try {

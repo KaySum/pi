@@ -429,8 +429,8 @@ for (const action of ['add', 'update'] as const) {
     await lua('vim.api.nvim_buf_call(vim.fn.bufnr(...), function() vim.cmd("edit!") end)', path);
     release();
     assert.equal(await doing, action === 'add'
-      ? 'Added note 1:\n1. gone: its code is no longer in the file'
-      : 'Note 1 is gone: its code is no longer in the file');
+      ? 'Added note 1:\n1. gone from the editor: its code deleted, or its buffer wiped'
+      : 'Note 1 is gone from the editor: its code deleted, or its buffer wiped');
   });
 }
 

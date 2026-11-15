@@ -17,7 +17,7 @@ remote.on_detach(function()
   pcall(vim.api.nvim_del_user_command, 'PiNotesRemove')
 end)`;
 // A note whose code a reload took since it was placed or changed.
-const GONE = 'gone: its code is no longer in the file';
+const GONE = 'gone from the editor: its code deleted, or its buffer wiped';
 const USAGE = 'Usage: /nvim-annotate [next | prev | <number> | clear]';
 const NUMBERS = 'numbers and ranges, as 2 5-7,10';
 

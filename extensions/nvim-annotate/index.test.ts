@@ -354,6 +354,18 @@ test('edits as the notes are read: each note is told with its own code, and show
   gate.release();
   assert.match(await showing, new RegExp(`^Note 1 of 1: ${name(path)}:26`));
   assert.equal((await cursor(yours))[0], 26);
+  // An edit just before each call that moves the cursor, three of them.
+  const lua_ = nvim!.lua;
+  let edits = 3;
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (edits > 0 && code.includes('remote.nvim_point')) { edits--; await insert(); }
+    return lua_(code, args);
+  }) as Remote['lua'];
+  const shown = await annotate({ action: 'show', note: 1 });
+  nvim!.lua = lua_;
+  const line = (await cursor(yours))[0];
+  assert.equal(await lua('local path, line = ...; return vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), line - 1, line, true)[1]', path, line), 'function f20() {}');
+  assert.match(shown, new RegExp(`^Note 1 of 1: ${name(path)}:${line}$`));
 });
 
 test('a note added while a step is reading the notes is kept', async () => {
@@ -377,7 +389,7 @@ for (const reset of ['replace', 'clear'] as const) {
     const path = await file();
     const [yours] = await layout(path);
     await annotate({ action: 'add', notes: [20, 40, 60].map(line => ({ file: name(path), line, text: `at ${line}` })) });
-    const { held, release } = hold(nvim!, code => code.includes('remote.nvim_point.show'));
+    const { held, release } = hold(nvim!, code => code.includes('pt.show(spec)'));
     await editor.request('nvim_command', ['PiNotes 3']);
     await held;
     const notes = [10, 30].map(line => ({ file: name(path), line, text: `new ${line}` }));

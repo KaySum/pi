@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type { Remote } from '../nvim-remote/api.ts';
-import { point, type Pointed } from '../nvim-point/api.ts';
+import { blocked } from '../nvim-remote-kit/api.ts';
+import { installPoint, type Pointed } from '../nvim-point/api.ts';
 import { virtualText, type Mark, type Placed as VirtualPlaced } from '../nvim-virtual-text/api.ts';
 
 export const KINDS = ['info', 'hint', 'warn', 'error'] as const;
@@ -32,6 +33,21 @@ for _, mark in ipairs(marks) do
   mark.code = ok and lines[1] or ''
 end
 return marks`;
+// Show the note whose mark has key `key` where it is then, both in this one call: an edit cannot
+// come between. nvim-point's result, with the lines shown; nil if the note is gone or hidden;
+// false if nvim-point is not installed yet.
+const SHOW = `local vt, pt, group, key, spec = remote.nvim_virtual_text, remote.nvim_point, ...
+if not pt then return false end
+for _, mark in ipairs(vt and vt.list(group, {}) or {}) do
+  if mark.key == key then
+    if mark.invalid then return nil end
+    spec.line, spec.endLine = mark.line, mark.endLine or mark.line
+    local pointed = pt.show(spec)
+    pointed.line, pointed.endLine = spec.line, spec.endLine
+    return pointed
+  end
+end
+return nil`;
 // Each mark tried alone, in a group of its own, all in one call so none is ever drawn: why it
 // cannot be placed, '' if it can.
 const CHECK = `local vt, group, marks = remote.nvim_virtual_text, ...
@@ -243,26 +259,40 @@ export class Notes {
    * Show the user note `which` (a number, or the next or previous of the one last shown, passing
    * over hidden ones): its code on screen, the cursor on it. Undefined if there is no such note.
    */
-  show(which: number | 'next' | 'prev', cwd: string, options: { focus?: boolean } = {}) {
-    return this.queued(() => this.step(which, cwd, options));
+  show(which: number | 'next' | 'prev', options: { focus?: boolean } = {}) {
+    return this.queued(() => this.step(which, options));
   }
 
-  private async step(which: number | 'next' | 'prev', cwd: string, options: { focus?: boolean }): Promise<{ note: Placed; total: number; pointed: Pointed } | undefined> {
+  private async step(which: number | 'next' | 'prev', options: { focus?: boolean }): Promise<{ note: Placed; total: number; pointed: Pointed } | undefined> {
     const notes = (await this.listing()).filter(note => !note.hidden);
     const note = typeof which === 'number' ? notes.find(note => note.number === which)
       : which === 'next' ? notes.find(note => note.number > this.at)
       : notes.findLast(note => note.number < this.at);
     if (!note) return undefined;
-    let at = note, pointed: Pointed;
-    // Where it is as it is shown: an edit meanwhile moves it, and the cursor goes there again.
-    for (let tries = 1; ; tries++) {
-      pointed = await point(this.remote, cwd).show({ path: at.path, line: at.line, endLine: at.endLine }, options);
-      const now = pointed.shown ? (await this.listing()).find(placed => placed.number === note.number) : undefined;
-      if (!now || now.hidden || (now.line === at.line && now.endLine === at.endLine) || tries === 3) break;
-      at = now;
-    }
+    const result = await this.point(note, options);
+    if (!result) return undefined;
+    const { line = note.line, endLine = note.endLine, ...pointed } = result;
     if (pointed.shown) this.at = note.number;
-    return { note: at, total: notes.length, pointed };
+    return { note: { ...note, line, endLine }, total: notes.length, pointed: pointed as Pointed };
+  }
+
+  /** Show `note` where it is (see SHOW). Undefined if it is gone or hidden by then. */
+  private async point(note: Note, options: { focus?: boolean }) {
+    type Result = (Pointed & { line?: number; endLine?: number }) | null | false;
+    const args = [GROUP, note.mark.key, { path: note.path, ...(options.focus ? { focus: true } : {}) }];
+    try {
+      let result: Result = await this.remote.lua(SHOW, args);
+      if (result === false) {
+        await installPoint(this.remote);
+        result = await this.remote.lua(SHOW, args);
+      }
+      return result || undefined;
+    } catch (error) {
+      // At a prompt, nvim-remote fails every call at once: the user is busy.
+      const busy = blocked(error);
+      if (busy !== undefined) return { shown: false as const, busy };
+      throw error;
+    }
   }
 
   /** Remove every note. Resolves to the numbers they had. */

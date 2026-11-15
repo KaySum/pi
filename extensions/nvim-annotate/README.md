@@ -23,8 +23,8 @@ With no numbers, it removes them all, as `clear`.
 
 Notes last until cleared or removed, and go when Pi detaches from Neovim.
 
-Pi is told when its notes change in the editor without it: removed by you, gone because their
-code left the file, hidden while their lines are deleted, or back. Once, before it next thinks
+Pi is told when its notes change in the editor without it: removed by you, gone otherwise (their
+code deleted, or their buffer wiped), hidden while their lines are deleted, or back. Once, before it next thinks
 (as a run starts, or between its steps), in one short message with the notes there now, shown in
 the chat too. It is told only what happened, never why; nor of its own changes, which it knows.
 

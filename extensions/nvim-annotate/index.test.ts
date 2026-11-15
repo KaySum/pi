@@ -538,12 +538,18 @@ test('the agent is told how its notes changed in the editor, once, before it nex
   // While it works: reloaded from disk, where note 4's code is gone and note 3's never was.
   await writeFile(path, (await readFile(path)).toString().replace('function f40() {}', 'x'));
   await lua('vim.api.nvim_buf_call(vim.fn.bufnr(...), function() vim.cmd("edit!") end)', path);
-  assert.deepEqual(await between(), [`Pi's notes in the editor changed: note 4 (${name(path)}) is gone, its code no longer in the file; note 3 (${name(path)}) is back, its lines restored. Notes now: 1, 3.`]);
+  assert.deepEqual(await between(), [`Pi's notes in the editor changed: note 4 (${name(path)}) is gone from the editor, removed by neither the user nor Pi; note 3 (${name(path)}) is back, its lines restored. Notes now: 1, 3.`]);
+  // A buffer wiped and opened again, its code all there: its notes are gone, but not their code.
+  await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f20', text: 'wiped' }] });
+  await between();
+  await lua('local path = ...; vim.cmd("enew"); vim.cmd("bwipeout! " .. vim.fn.bufnr(path)); vim.cmd.edit(vim.fn.fnameescape(path))', path);
+  assert.deepEqual(await between(), [`Pi's notes in the editor changed: notes 1 (${name(path)}), 3 (${name(path)}), 5 (${name(path)}) are gone from the editor, removed by neither the user nor Pi. Notes now: none.`]);
+  await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f20', text: 'again' }] });
   // Its own changes it knows already; the user clearing it is told.
   await annotate({ action: 'remove', note: 1 });
   assert.deepEqual(await between(), []);
   await commands['nvim-annotate-remove'].handler('', ctx);
-  assert.equal(await told(), `Pi's notes in the editor changed: the user removed note 3 (${name(path)}). Notes now: none.`);
+  assert.equal(await told(), `Pi's notes in the editor changed: the user removed note 6 (${name(path)}). Notes now: none.`);
 });
 
 test('/nvim-annotate lists the notes, goes to one with your focus, and clears them', async () => {

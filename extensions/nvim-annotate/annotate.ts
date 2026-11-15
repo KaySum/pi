@@ -76,7 +76,7 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
   const known = perAttachment(() => new Map<number, Known>());
 
   // How the notes changed since the agent last knew, said for it once: removed by the user, gone
-  // with their code, hidden with their lines deleted or back; and the notes there now. Undefined
+  // otherwise, hidden with their lines deleted or back; and the notes there now. Undefined
   // if none did.
   async function changes() {
     const remote = nvim();
@@ -94,7 +94,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     const back = [...now].filter(([id, note]) => !note.hidden && seen.get(id)?.hidden).map(([, note]) => note);
     const facts = [
       byUser.length && `the user removed ${said(byUser)}`,
-      lost.length && `${said(lost)} ${be(lost)} gone, ${its(lost)} code no longer in the file`,
+      // Gone with its code, or its buffer wiped: the editor does not say which.
+      lost.length && `${said(lost)} ${be(lost)} gone from the editor, removed by neither the user nor Pi`,
       hidden.length && `${said(hidden)} ${be(hidden)} hidden, ${its(hidden)} lines deleted (back if that is undone)`,
       back.length && `${said(back)} ${be(back)} back, ${its(back)} lines restored`,
     ].filter(fact => typeof fact === 'string');

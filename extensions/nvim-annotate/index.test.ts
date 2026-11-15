@@ -333,12 +333,35 @@ test('two :PiNotes next at once go two notes on, not one', async () => {
   assert.equal((await cursor(yours))[0], 40);
 });
 
+test('edits as the notes are read: each note is told with its own code, and shown where it is', async () => {
+  const { nvim, annotate } = await attached();
+  const path = await file();
+  const [yours] = await layout(path);
+  await annotate({ action: 'add', notes: [{ file: name(path), match: 'function f20() {}', text: 'one' }] });
+  const insert = () => lua('vim.api.nvim_buf_set_lines(vim.fn.bufnr(...), 0, 0, true, { "a", "b", "c" })', path);
+  // Read before the lines went in: where it was, and the code there then.
+  let gate = hold(nvim!, code => code.includes('vt.list(group'));
+  const listing = annotate({ action: 'list' });
+  await gate.held;
+  await insert();
+  gate.release();
+  assert.equal(await listing, `1. ${name(path)}:20 \`function f20() {}\`: one`);
+  // Shown after more went in: where it is now.
+  gate = hold(nvim!, code => code.includes('vt.list(group'));
+  const showing = annotate({ action: 'show', note: 1 });
+  await gate.held;
+  await insert();
+  gate.release();
+  assert.match(await showing, new RegExp(`^Note 1 of 1: ${name(path)}:26`));
+  assert.equal((await cursor(yours))[0], 26);
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();
   await layout(path);
   await annotate({ action: 'add', notes: [{ file: name(path), line: 20, text: 'one' }] });
-  const { held, release } = hold(nvim!, (_code, args) => args[0] === 'list');
+  const { held, release } = hold(nvim!, code => code.includes('vt.list(group'));
   await editor.request('nvim_command', ['PiNotes next']);
   await held;
   const adding = annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'two' }] });

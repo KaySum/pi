@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import type { Remote } from '../nvim-remote/api.ts';
 import { point, type Pointed } from '../nvim-point/api.ts';
-import { virtualText, type Mark } from '../nvim-virtual-text/api.ts';
+import { virtualText, type Mark, type Placed as VirtualPlaced } from '../nvim-virtual-text/api.ts';
 
 export const KINDS = ['info', 'hint', 'warn', 'error'] as const;
 export type Kind = typeof KINDS[number];
@@ -22,11 +22,16 @@ export type Changes = { added: Note[]; removed: Removed[] };
 export type Placed = Note & { line: number; endLine: number; code: string; hidden?: true };
 
 const GROUP = 'nvim-annotate';
-// The line of each [buffer, line], '' where there is none.
-const LINES = `return vim.tbl_map(function(at)
-  local ok, lines = pcall(vim.api.nvim_buf_get_lines, at[1], at[2] - 1, at[2], false)
-  return ok and lines[1] or ''
-end, ...)`;
+// The group's marks, each with the code on its line, all read in one call: an edit cannot come
+// between where a mark is and what is there. False if nvim-virtual-text is not installed yet.
+const MARKS = `local vt, group = remote.nvim_virtual_text, ...
+if not vt then return false end
+local marks = vt.list(group, {})
+for _, mark in ipairs(marks) do
+  local ok, lines = pcall(vim.api.nvim_buf_get_lines, mark.buf, mark.line - 1, mark.line, false)
+  mark.code = ok and lines[1] or ''
+end
+return marks`;
 // Each mark tried alone, in a group of its own, all in one call so none is ever drawn: why it
 // cannot be placed, '' if it can.
 const CHECK = `local vt, group, marks = remote.nvim_virtual_text, ...
@@ -81,7 +86,13 @@ export class Notes {
    * read again, is forgotten: it would otherwise be given again, and fail, with every add.
    */
   private async marks() {
-    const marks = new Map((await this.text.list()).map(mark => [mark.key, mark]));
+    type Read = (VirtualPlaced & { code: string })[] | false;
+    let read: Read = await this.remote.lua(MARKS, [GROUP]);
+    if (read === false) {
+      await this.text.list();
+      read = await this.remote.lua(MARKS, [GROUP]) as Read;
+    }
+    const marks = new Map((read || []).map(mark => [mark.key, mark]));
     this.notes = this.notes.filter(note => marks.has(note.mark.key));
     return marks;
   }
@@ -222,12 +233,10 @@ export class Notes {
 
   private async listing(): Promise<Placed[]> {
     const marks = await this.marks();
-    const found = this.notes.map(note => ({ note, mark: marks.get(note.mark.key)! }));
-    if (!found.length) return [];
-    const code: string[] = await this.remote.lua(LINES, [found.map(({ mark }) => [mark.buf, mark.line])]);
-    return found.map(({ note, mark }, i) => ({
-      ...note, line: mark.line, endLine: mark.endLine ?? mark.line, code: code[i] ?? '', ...(mark.invalid ? { hidden: true as const } : {}),
-    }));
+    return this.notes.map(note => {
+      const mark = marks.get(note.mark.key)!;
+      return { ...note, line: mark.line, endLine: mark.endLine ?? mark.line, code: mark.code ?? '', ...(mark.invalid ? { hidden: true as const } : {}) };
+    });
   }
 
   /**
@@ -244,9 +253,16 @@ export class Notes {
       : which === 'next' ? notes.find(note => note.number > this.at)
       : notes.findLast(note => note.number < this.at);
     if (!note) return undefined;
-    const pointed = await point(this.remote, cwd).show({ path: note.path, line: note.line, endLine: note.endLine }, options);
+    let at = note, pointed: Pointed;
+    // Where it is as it is shown: an edit meanwhile moves it, and the cursor goes there again.
+    for (let tries = 1; ; tries++) {
+      pointed = await point(this.remote, cwd).show({ path: at.path, line: at.line, endLine: at.endLine }, options);
+      const now = pointed.shown ? (await this.listing()).find(placed => placed.number === note.number) : undefined;
+      if (!now || now.hidden || (now.line === at.line && now.endLine === at.endLine) || tries === 3) break;
+      at = now;
+    }
     if (pointed.shown) this.at = note.number;
-    return { note, total: notes.length, pointed };
+    return { note: at, total: notes.length, pointed };
   }
 
   /** Remove every note. Resolves to the numbers they had. */

@@ -82,6 +82,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
     const remote = nvim();
     if (!remote) return undefined;
     const seen = known(remote), { notes: placed, added, removed } = await notesOf(remote).observe();
+    // Pi detached or attached anew meanwhile: these are of notes no longer there.
+    if (nvim() !== remote) return undefined;
     // Those the agent added it knew as it added them.
     for (const note of added) seen.set(note.id, { number: note.number, path: note.path, hidden: false });
     const now = new Map(placed.map(note => [note.id, { number: note.number, path: note.path, hidden: !!note.hidden }]));

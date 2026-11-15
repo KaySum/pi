@@ -576,6 +576,28 @@ test('clear removes every note; the tool says how many', async () => {
   assert.equal(await annotate({ action: 'list' }), 'No notes');
 });
 
+test('a change found as Pi detaches is not told: it is of notes no longer there', async () => {
+  const p = await pi();
+  const path = await file();
+  await layout(path);
+  await p.annotate({ action: 'add', notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  await p.commands['nvim-annotate-remove'].handler('1', p.ctx);
+  // Its last read done, held while Pi detaches.
+  const real = p.nvim!.lua.bind(p.nvim!);
+  let reached!: () => void, release!: () => void;
+  const reading = new Promise<void>(resolve => { reached = resolve; }), held = new Promise<void>(resolve => { release = resolve; });
+  p.nvim!.lua = (async (code: string, args?: unknown[]) => {
+    const result = await real(code, args);
+    if (code.includes('nvim_buf_get_lines')) { reached(); await held; }
+    return result;
+  }) as Remote["lua"];
+  const told = p.fire('before_agent_start', { messageType: 'user', prompt: 'go on' });
+  await reading;
+  await p.shutdown();
+  release();
+  assert.deepEqual((await told).filter(Boolean), []);
+});
+
 test('once Pi detaches, its notes and :PiNotes go; without Neovim the tool and command say so', async () => {
   const p = await pi();
   const path = await file();

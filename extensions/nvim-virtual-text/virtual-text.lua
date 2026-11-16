@@ -1059,11 +1059,12 @@ local function watch(buf)
 		end,
 		on_detach = function()
 			state.watched[buf] = nil
-			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: watched again,
-			-- next, if it has marks, and reanchored as above.
+			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: reanchored as
+			-- above, and watched again, next, if it has marks; BufReadPost reanchoring it first too.
 			state.unanchored[buf] = true
 			vim.schedule(function()
 				state.settle(buf)
+				state.rewatch(buf)
 			end)
 		end,
 	})
@@ -1422,6 +1423,18 @@ function state.reanchor(buf)
 	state.save(buf, false)
 end
 
+-- Watch `buf` again, as a reload stops it being (see `watch`), if it is loaded and has marks.
+function state.rewatch(buf)
+	if state.closed or not vim.api.nvim_buf_is_loaded(buf) then
+		return
+	end
+	for _, mark in pairs(state.marks) do
+		if mark.spec.buf == buf then
+			return watch(buf)
+		end
+	end
+end
+
 -- Reanchor `buf` if a reload left it waiting to be (see `watch`), watched again if it has marks.
 function state.settle(buf)
 	if not state.unanchored[buf] then
@@ -1435,12 +1448,7 @@ function state.settle(buf)
 	elseif not vim.api.nvim_buf_is_loaded(buf) then
 		return
 	end
-	for _, mark in pairs(state.marks) do
-		if mark.spec.buf == buf then
-			watch(buf)
-			break
-		end
-	end
+	state.rewatch(buf)
 	state.reanchor(buf)
 end
 

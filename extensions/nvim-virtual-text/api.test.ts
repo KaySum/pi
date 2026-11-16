@@ -463,6 +463,17 @@ test('reloaded from an autocommand not nested, its marks are listed where the re
   assert.deepEqual(listed, [[id, 10, 12]]);
 });
 
+test('reloaded unchanged, a buffer is still watched: its marks follow later edits', async () => {
+  const path = await file('top\ncode\n');
+  await open(path);
+  await text.place([{ path, line: 2, text: 'about code', position: 'above', indent: true }]);
+  const pad = async () => (await shown(path))[0][2].virt_lines[0].length === 1 ? '' : (await shown(path))[0][2].virt_lines[0][0][0];
+  // BufReadPost reanchors it at once, with nothing to move.
+  await lua('vim.cmd("edit!")');
+  await lua('vim.api.nvim_buf_set_text(0, 1, 0, 1, 0, { "    " })');
+  await eventually(async () => await pad() === '    ');
+});
+
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

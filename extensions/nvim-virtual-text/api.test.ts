@@ -472,6 +472,12 @@ test('reloaded unchanged, a buffer is still watched: its marks follow later edit
   await lua('vim.cmd("edit!")');
   await lua('vim.api.nvim_buf_set_text(0, 1, 0, 1, 0, { "    " })');
   await eventually(async () => await pad() === '    ');
+  // Back as on disk; then reloaded unchanged and edited in the same call, before it is watched
+  // again: caught up on once it is.
+  await lua('vim.cmd("edit!")');
+  await eventually(async () => await pad() === '');
+  await lua('vim.cmd("edit!"); vim.api.nvim_buf_set_text(0, 1, 0, 1, 0, { "  " })');
+  await eventually(async () => await pad() === '  ');
 });
 
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {

@@ -1061,10 +1061,14 @@ local function watch(buf)
 			state.watched[buf] = nil
 			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: reanchored as
 			-- above, and watched again, next, if it has marks; BufReadPost reanchoring it first too.
+			-- Synced then, for the edits made unwatched since (a formatter as it is read, say).
 			state.unanchored[buf] = true
 			vim.schedule(function()
 				state.settle(buf)
 				state.rewatch(buf)
+				if state.watched[buf] then
+					state.sync(buf)
+				end
 			end)
 		end,
 	})

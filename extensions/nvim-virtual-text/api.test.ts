@@ -430,6 +430,26 @@ test('reloaded from disk, marks move back onto their text', async () => {
   assert.deepEqual(await lines(), { [byLine]: [4, 4], [byMatch]: [5, 5], [span]: [3, 4] });
 });
 
+test('reloaded shorter, a mark keeps all of its lines, where its old ones were past the end', async () => {
+  const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `row ${from + i}`).join('\n') + '\n';
+  const path = await file(rows(1, 100));
+  await open(path);
+  const [byMatch, span] = await text.place([
+    { path, match: 'row 40\nrow 41\nrow 42', text: 'on 40-42' },
+    { path, line: 40, endLine: 42, highlight: 'Visual' },
+  ]);
+  const lines = async () => Object.fromEntries((await text.list()).map(m => [m.id, [m.line, m.endLine]]));
+  // 20 lines then, all its old ones past the end; 41, its last one: they were cut to fit.
+  for (const last of [50, 71]) {
+    await writeFile(path, rows(31, last));
+    await lua('vim.cmd.edit()');
+    assert.deepEqual(await lines(), { [byMatch]: [10, 12], [span]: [10, 12] }, `rows 31-${last}`);
+    await writeFile(path, rows(1, 100));
+    await lua('vim.cmd.edit()');
+    assert.deepEqual(await lines(), { [byMatch]: [40, 42], [span]: [40, 42] });
+  }
+});
+
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

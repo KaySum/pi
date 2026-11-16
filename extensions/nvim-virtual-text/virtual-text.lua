@@ -1421,9 +1421,10 @@ function state.reanchor(buf)
 				end
 				-- Re-indented in the file as reloaded, as when edited (see `state.sync`).
 				local reindented = mark.indented and mark.indented ~= indented(spec)
-				if found ~= spec.line or invalid or gone or reindented or col ~= spec.col or endCol ~= spec.endCol then
-					spec.endLine = spec.endLine and spec.endLine + found - spec.line
-					spec.line, spec.col, spec.endCol = found, col, endCol
+				-- All its text found, it spans all of it: where it was, a file now shorter cut it off.
+				local endLine = found + #mark.anchor - 1
+				if found ~= spec.line or endLine ~= spec.endLine or invalid or gone or reindented or col ~= spec.col or endCol ~= spec.endCol then
+					spec.line, spec.endLine, spec.col, spec.endCol = found, endLine, col, endCol
 					install(id, mark.group, spec, false, true)
 				end
 			end

@@ -388,6 +388,17 @@ test('a note moved by showing it, its file reloaded or an autocommand as its buf
   assert.deepEqual(await at(), [b, 'function f40() {}']);
 });
 
+test('a note whose file is reloaded shorter as it is shown, its old lines past the end, is shown whole where it went', async () => {
+  const { annotate } = await attached();
+  const [a, b] = [await file(), await file(100)];
+  const [yours] = await layout(a);
+  await annotate({ action: 'add', notes: [{ file: name(b), match: 'function f40() {}\nline 41\nline 42', text: 'three lines' }] });
+  await writeFile(b, (await readFile(b, 'utf8')).split('\n').slice(30, 50).join('\n') + '\n');
+  await lua('vim.o.autoread = true');
+  assert.equal(await annotate({ action: 'show', note: 1 }), `Note 1 of 1: ${name(b)}:10-12`);
+  assert.equal(await lua('local win = ...; return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1]', yours), 'function f40() {}');
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();
@@ -409,7 +420,7 @@ for (const reset of ['replace', 'clear'] as const) {
     const path = await file();
     const [yours] = await layout(path);
     await annotate({ action: 'add', notes: [20, 40, 60].map(line => ({ file: name(path), line, text: `at ${line}` })) });
-    const { held, release } = hold(nvim!, code => code.includes('pt.show(spec)'));
+    const { held, release } = hold(nvim!, code => code.includes('local vt, pt, group, key, spec'));
     await editor.request('nvim_command', ['PiNotes 3']);
     await held;
     const notes = [10, 30].map(line => ({ file: name(path), line, text: `new ${line}` }));

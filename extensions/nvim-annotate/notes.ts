@@ -33,21 +33,31 @@ for _, mark in ipairs(marks) do
   mark.code = ok and lines[1] or ''
 end
 return marks`;
-// Show the note whose mark has key `key` where it is then, both in this one call: an edit cannot
-// come between. nvim-point's result, with the lines shown; nil if the note is gone or hidden;
-// false if nvim-point is not installed yet.
+// Show the note whose mark has key `key` where it is, both in this one call: no other call comes
+// between. Showing can move it all the same (a reload of its file, the user's autocommands as
+// its buffer is entered), so it is found again after, and shown again where it went, a few times
+// at most. nvim-point's result, with the lines shown; not shown if it kept moving; nil if the
+// note is gone or hidden; false if nvim-point is not installed yet.
 const SHOW = `local vt, pt, group, key, spec = remote.nvim_virtual_text, remote.nvim_point, ...
 if not pt then return false end
-for _, mark in ipairs(vt and vt.list(group, {}) or {}) do
-  if mark.key == key then
-    if mark.invalid then return nil end
-    spec.line, spec.endLine = mark.line, mark.endLine or mark.line
-    local pointed = pt.show(spec)
+local function find()
+  for _, mark in ipairs(vt and vt.list(group, {}) or {}) do
+    if mark.key == key then return not mark.invalid and mark or nil end
+  end
+end
+local mark = find()
+for _ = 1, 3 do
+  if not mark then return nil end
+  spec.line, spec.endLine = mark.line, mark.endLine or mark.line
+  local pointed = pt.show(spec)
+  if not pointed.shown then return pointed end
+  mark = find()
+  if mark and mark.line == spec.line and (mark.endLine or mark.line) == spec.endLine then
     pointed.line, pointed.endLine = spec.line, spec.endLine
     return pointed
   end
 end
-return nil`;
+return mark and { shown = false, moved = true } or nil`;
 // Each mark tried alone, in a group of its own, all in one call so none is ever drawn: why it
 // cannot be placed, '' if it can.
 const CHECK = `local vt, group, marks = remote.nvim_virtual_text, ...

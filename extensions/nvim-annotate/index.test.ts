@@ -368,6 +368,26 @@ test('edits as the notes are read: each note is told with its own code, and show
   assert.match(shown, new RegExp(`^Note 1 of 1: ${name(path)}:${line}$`));
 });
 
+test('a note moved by showing it, its file reloaded or an autocommand as its buffer is entered, is shown where it went', async () => {
+  const { annotate } = await attached();
+  const [a, b] = [await file(), await file()];
+  const [yours] = await layout(a);
+  await annotate({ action: 'add', notes: [{ file: name(a), match: 'function f20() {}', text: 'here' }, { file: name(b), match: 'function f40() {}', text: 'there' }] });
+  const at = async () => lua('local win = ...; return { vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)), vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1] }', yours);
+  // Changed on disk while hidden: showing it reloads it, three lines down.
+  await writeFile(b, 'a\nb\nc\n' + await readFile(b, 'utf8'));
+  await lua('vim.o.autoread = true');
+  assert.equal(await annotate({ action: 'show', note: 2 }), `Note 2 of 2: ${name(b)}:43`);
+  assert.deepEqual(await at(), [b, 'function f40() {}']);
+  // Hidden again, and entering it inserts three more lines, once.
+  await annotate({ action: 'show', note: 1 });
+  await lua(`vim.api.nvim_create_autocmd('BufEnter', { buffer = vim.fn.bufnr(...), once = true, callback = function(ev)
+    vim.api.nvim_buf_set_lines(ev.buf, 0, 0, true, { 'x', 'y', 'z' })
+  end })`, b);
+  assert.equal(await annotate({ action: 'show', note: 2 }), `Note 2 of 2: ${name(b)}:46`);
+  assert.deepEqual(await at(), [b, 'function f40() {}']);
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();

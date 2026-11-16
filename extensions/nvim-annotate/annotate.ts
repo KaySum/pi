@@ -66,7 +66,8 @@ export default function register(pi: ExtensionAPI, parameters: Parameters<Extens
   async function step(remote: Remote, which: number | 'next' | 'prev', options: { focus?: boolean } = {}) {
     const result = await notesOf(remote).show(which, options);
     if (!result) return typeof which === 'number' ? `No note ${which}` : `No ${which === 'next' ? 'next' : 'previous'} note`;
-    if (!result.pointed.shown) return 'busy' in result.pointed ? `Not now: you are busy in Neovim (mode ${result.pointed.busy})` : 'Not shown';
+    if (!result.pointed.shown) return 'busy' in result.pointed ? `Not now: you are busy in Neovim (mode ${result.pointed.busy})`
+      : 'moved' in result.pointed ? 'Not shown: it kept moving as it was shown' : 'Not shown';
     return `Note ${result.note.number} of ${result.total}: ${where(result.note, cwd())}`;
   }
   const parse = (arg: string) => arg === 'next' || arg === 'prev' ? arg : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined;

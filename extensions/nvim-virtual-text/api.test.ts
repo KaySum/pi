@@ -450,6 +450,19 @@ test('reloaded shorter, a mark keeps all of its lines, where its old ones were p
   }
 });
 
+test('reloaded from an autocommand not nested, its marks are listed where the reload put them, at once', async () => {
+  const rows = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `row ${from + i}`).join('\n') + '\n';
+  const path = await file(rows(1, 100));
+  await open(path);
+  const [id] = await text.place([{ path, match: 'row 40\nrow 41\nrow 42', text: 'on 40-42' }]);
+  await writeFile(path, rows(31, 50));
+  // No BufReadPost from within an autocommand not nested: listed in the same call, before Neovim can do what it put off.
+  const listed = await remote.lua(`vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextReload', once = true, command = 'edit!' })
+    vim.cmd.doautocmd('User VirtualTextReload')
+    return vim.tbl_map(function(mark) return { mark.id, mark.line, mark.endLine } end, remote.nvim_virtual_text.list('test', {}))`);
+  assert.deepEqual(listed, [[id, 10, 12]]);
+});
+
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

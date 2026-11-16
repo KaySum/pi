@@ -397,6 +397,16 @@ test('a note whose file is reloaded shorter as it is shown, its old lines past t
   await lua('vim.o.autoread = true');
   assert.equal(await annotate({ action: 'show', note: 1 }), `Note 1 of 1: ${name(b)}:10-12`);
   assert.equal(await lua('local win = ...; return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1]', yours), 'function f40() {}');
+  // Shown again from the other file, entering it reloads it shorter still, from an autocommand not nested.
+  await annotate({ action: 'add', notes: [{ file: name(a), line: 5, text: 'away' }] });
+  await annotate({ action: 'show', note: 2 });
+  await lua(`local path = ...
+    vim.api.nvim_create_autocmd('BufEnter', { buffer = vim.fn.bufnr(path), once = true, callback = function()
+      vim.fn.writefile(vim.list_slice(vim.fn.readfile(path), 6, 20), path)
+      vim.cmd('edit!')
+    end })`, b);
+  assert.equal(await annotate({ action: 'show', note: 1 }), `Note 1 of 2: ${name(b)}:5-7`);
+  assert.equal(await lua('local win = ...; return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1]', yours), 'function f40() {}');
 });
 
 test('a note added while a step is reading the notes is kept', async () => {

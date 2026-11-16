@@ -22,8 +22,9 @@ if not state then
 	-- `anchor` is the text it was placed on, found again when the file is reloaded. `stale`:
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
-	-- are followed, and `queued` those with a sync to come.
-	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {} }
+	-- are followed, and `queued` those with a sync to come; `unanchored`, those reloaded and not
+	-- yet reanchored.
+	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {}, unanchored = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
 		state.closed = true
@@ -1049,33 +1050,20 @@ local function watch(buf)
 			end
 		end,
 		-- Reloaded, however: from an autocommand not nested too, where no BufReadPost reanchors.
-		-- After it, as BufReadPost would have; then nothing to do if it did.
+		-- After it, as BufReadPost would have, or before marks are listed; nothing to do if it did.
 		on_reload = function()
+			state.unanchored[buf] = true
 			vim.schedule(function()
-				if not state.closed and vim.api.nvim_buf_is_loaded(buf) then
-					state.reanchor(buf)
-				end
+				state.settle(buf)
 			end)
 		end,
 		on_detach = function()
 			state.watched[buf] = nil
 			-- Still loaded after, it was reloaded (:edit!, :checktime), detaching it: watched again,
-			-- next, if it has marks. Reanchored too, as BufReadPost does, which a reload from an
-			-- autocommand not nested never fires; nothing to do if it did.
+			-- next, if it has marks, and reanchored as above.
+			state.unanchored[buf] = true
 			vim.schedule(function()
-				if state.closed then
-					return
-				elseif not vim.api.nvim_buf_is_valid(buf) then
-					return state.forget(buf)
-				elseif not vim.api.nvim_buf_is_loaded(buf) then
-					return
-				end
-				for _, mark in pairs(state.marks) do
-					if mark.spec.buf == buf then
-						watch(buf)
-						return state.reanchor(buf)
-					end
-				end
+				state.settle(buf)
 			end)
 		end,
 	})
@@ -1399,6 +1387,7 @@ function state.restore(buf)
 end
 
 function state.reanchor(buf)
+	state.unanchored[buf] = nil
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
 	local text = text_of(buf)
@@ -1433,6 +1422,28 @@ function state.reanchor(buf)
 	state.save(buf, false)
 end
 
+-- Reanchor `buf` if a reload left it waiting to be (see `watch`), watched again if it has marks.
+function state.settle(buf)
+	if not state.unanchored[buf] then
+		return
+	end
+	state.unanchored[buf] = nil
+	if state.closed then
+		return
+	elseif not vim.api.nvim_buf_is_valid(buf) then
+		return state.forget(buf)
+	elseif not vim.api.nvim_buf_is_loaded(buf) then
+		return
+	end
+	for _, mark in pairs(state.marks) do
+		if mark.spec.buf == buf then
+			watch(buf)
+			break
+		end
+	end
+	state.reanchor(buf)
+end
+
 --- Remove the marks `ids` of `group` (of any group if nil); returns those that were there.
 function state.remove(group, ids)
 	state.prune()
@@ -1461,6 +1472,10 @@ end
 --- The marks of `group` (every group if nil), only in the buffer of `path` or `buf` if given,
 --- in order of placement: each with its id, buffer and file, where edits have moved it.
 function state.list(group, filter)
+	-- Where reloads put them, not where they were before.
+	for buf in pairs(state.unanchored) do
+		state.settle(buf)
+	end
 	state.prune()
 	local marks = {}
 	for id, mark in pairs(matching(group ~= vim.NIL and group or nil, filter)) do

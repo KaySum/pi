@@ -484,18 +484,23 @@ test('reloaded from an autocommand not nested, then edited within a mark before 
   const path = await file('a\nb\nc\nd\ne\n');
   await open(path);
   const [id] = await text.place([{ path, match: 'b\nc\nd', text: 'on b-d', invalidate: true }]);
-  await lua(`vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextGrow', once = true, callback = function()
+  // The file written after, without its text: what was loaded, and is still there, counts.
+  await lua(`local path = ...
+    vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextGrow', once = true, callback = function()
       vim.cmd('edit!')
       vim.api.nvim_buf_set_lines(0, 2, 2, true, { 'new' })
+      vim.fn.writefile({ 'x', 'y', 'z', 'w', 'v' }, path)
     end })
-    vim.cmd.doautocmd('User VirtualTextGrow')`);
+    vim.cmd.doautocmd('User VirtualTextGrow')`, path);
   assert.deepEqual((await text.list()).map(m => [m.id, m.line, m.endLine]), [[id, 2, 5]]);
-  // But a reload that loses its text, then an edit elsewhere: gone, as the file has it nowhere.
+  // But a reload that loses its text, then an edit elsewhere: gone, though the file written after
+  // has it again.
   await lua(`local path = ...
     vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextLose', once = true, callback = function()
       vim.fn.writefile({ 'x', 'y', 'z', 'w', 'v' }, path)
       vim.cmd('edit!')
       vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '  ' })
+      vim.fn.writefile({ 'a', 'b', 'c', 'd', 'e' }, path)
     end })
     vim.cmd.doautocmd('User VirtualTextLose')`, path);
   assert.deepEqual(await text.list(), []);

@@ -639,9 +639,14 @@ local texts = setmetatable({}, { __mode = "v" })
 -- every mark's, and a call may place many. `lines` are trimmed when first looked at;
 -- `joined` (see below) is them all, untrimmed, one string, in which `find` searches in C,
 -- and `starts` where each begins in it.
--- `raw` lines as a text to search, each trimmed only once a search needs it.
-local function text_from(raw, tick)
+local function text_of(buf)
+	local tick = vim.api.nvim_buf_get_changedtick(buf)
+	if texts[buf] and texts[buf].tick == tick then
+		return texts[buf]
+	end
+	local raw = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
 	local text = { tick = tick, n = #raw, raw = raw }
+	texts[buf] = text
 	text.lines = setmetatable({}, {
 		__index = function(cache, i)
 			local line = raw[i] and vim.trim(raw[i])
@@ -650,15 +655,6 @@ local function text_from(raw, tick)
 		end,
 	})
 	return text
-end
-
-local function text_of(buf)
-	local tick = vim.api.nvim_buf_get_changedtick(buf)
-	if texts[buf] and texts[buf].tick == tick then
-		return texts[buf]
-	end
-	texts[buf] = text_from(vim.api.nvim_buf_get_lines(buf, 0, -1, true), tick)
-	return texts[buf]
 end
 
 -- `text` with `joined` and `starts`, made only once a search needs them: most marks are where
@@ -684,6 +680,21 @@ local function holds(lines, needles, line)
 		end
 	end
 	return true
+end
+
+-- Whether `needles` are on lines `first` to `last` of `lines`, in order, each on a line of its
+-- own, others among them: as edits leave a mark's text when they only add to it.
+local function spread(lines, needles, first, last)
+	local i = 1
+	for line = first, last do
+		if lines[line] and lines[line]:find(needles[i], 1, true) then
+			i = i + 1
+			if i > #needles then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 -- The line, from `from` on, that byte `at` of `joined` is on.
@@ -1399,21 +1410,16 @@ function state.reanchor(buf)
 	state.unanchored[buf] = nil
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
-	local text, disk = text_of(buf), nil
+	local text = text_of(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
 			local found = locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
-				-- Not found as reloaded, its text is gone. Edited since (reanchored late, see `watch`),
-				-- the edits may only have split it: it stays where they took it if the file, as it was
-				-- reloaded, has it.
-				if not gone and vim.bo[buf].modified and not disk then
-					local ok, raw = pcall(vim.fn.readfile, vim.api.nvim_buf_get_name(buf))
-					disk = text_from(ok and raw or {})
-				end
-				local split = not gone and vim.bo[buf].modified and locate(disk, mark.anchor, spec.line, not spec.match)
+				-- Not found whole, its text is gone; unless, reanchored late (see `watch`), edits since
+				-- the reload only split it, all of it still on the mark's lines, which follow them.
+				local split = not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
 				if spec.invalidate and not split then
 					remove(id)
 				elseif gone then

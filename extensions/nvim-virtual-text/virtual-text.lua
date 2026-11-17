@@ -682,26 +682,13 @@ local function holds(lines, needles, line)
 	return true
 end
 
--- Whether `needles` are on lines `first` to `last` of `lines`, in order, each on a line of its
--- own, the first on the first and the last on the last, others among them: as edits leave a
--- mark's text when they only add to it.
-local function spread(lines, needles, first, last)
+-- Whether lines `first` to `last` of `lines` begin with the first of `needles` and end with the
+-- last: as edits within a mark's lines leave them, its first and last line aside.
+local function bounded(lines, needles, first, last)
 	local function on(line, needle)
 		return lines[line] and lines[line]:find(needle, 1, true)
 	end
-	if not (on(first, needles[1]) and on(last, needles[#needles])) then
-		return false
-	end
-	local i = 1
-	for line = first, last do
-		if on(line, needles[i]) then
-			i = i + 1
-			if i > #needles then
-				return true
-			end
-		end
-	end
-	return false
+	return (first < last or #needles == 1) and on(first, needles[1]) and on(last, needles[#needles]) and true or false
 end
 
 -- The line, from `from` on, that byte `at` of `joined` is on.
@@ -1424,11 +1411,11 @@ function state.reanchor(buf, late)
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			-- Late, edits since the reload may only have added to its text: spread over its lines,
-			-- first to last, it stays on them, as they took it, though the text is whole elsewhere,
-			-- or within them, too. Which lines were edited is not known: lines the reload took from
-			-- it stay too, where the next is a copy of its last.
-			local kept = late and not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+			-- Late, edits since the reload may have changed its text: its lines still beginning and
+			-- ending with it, it stays on them, as the edits took it, though the text is whole
+			-- elsewhere, or within them, too. Which lines were edited is not known: lines the reload
+			-- took from it stay too, where the next is a copy of its last.
+			local kept = late and not gone and bounded(text.lines, mark.anchor, spec.line, spec.endLine)
 			local found = kept and spec.line or locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
 				-- Not found whole, nor on its lines, its text is gone.

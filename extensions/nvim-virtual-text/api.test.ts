@@ -546,6 +546,9 @@ test('reloaded from an autocommand not nested, a mark keeps lines added within i
   assert.deepEqual(await lines(), [[id, 2, 5]]);
   await lua('vim.cmd("edit!")');
   assert.deepEqual(await lines(), [[id, 2, 4]]);
+  // A line within it edited, not added: kept, its first and last lines as they were.
+  await reload(`vim.api.nvim_buf_set_text(0, 2, 0, 2, 1, { 'C' })`);
+  assert.deepEqual(await lines(), [[id, 2, 4]]);
 });
 
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {

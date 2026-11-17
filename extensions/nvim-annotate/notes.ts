@@ -37,8 +37,8 @@ return marks`;
 // this one call: no other call comes between. Showing can move it all the same (a reload of its
 // file, the user's autocommands as its buffer is entered), so it is found again after, and shown
 // again where it went, a few times at most: also when nvim-point failed, its lines past the end of
-// the file as reloaded shorter. nvim-point's result, with the lines shown; not shown if it kept
-// moving; nil if the note is gone or hidden; false if nvim-point is not installed yet.
+// the file as reloaded shorter. nvim-point's result, with the file and lines shown; not shown if
+// it kept moving; nil if the note is gone or hidden; false if nvim-point is not installed yet.
 const SHOW = `local vt, pt, group, key, spec = remote.nvim_virtual_text, remote.nvim_point, ...
 if not pt then return false end
 local function find()
@@ -56,7 +56,7 @@ for _ = 1, 3 do
   local moved = not mark or mark.buf ~= spec.buf or mark.line ~= spec.line or (mark.endLine or mark.line) ~= spec.endLine
   if not moved then
     if not ok then error(pointed, 0) end
-    pointed.line, pointed.endLine = spec.line, spec.endLine
+    pointed.path, pointed.line, pointed.endLine = mark.path, spec.line, spec.endLine
     return pointed
   end
 end
@@ -285,14 +285,14 @@ export class Notes {
     if (!note) return undefined;
     const result = await this.point(note, options);
     if (!result) return undefined;
-    const { line = note.line, endLine = note.endLine, ...pointed } = result;
+    const { path = note.path, line = note.line, endLine = note.endLine, ...pointed } = result;
     if (pointed.shown) this.at = note.number;
-    return { note: { ...note, line, endLine }, total: notes.length, pointed: pointed as Pointed };
+    return { note: { ...note, path, line, endLine }, total: notes.length, pointed: pointed as Pointed };
   }
 
   /** Show `note` where it is (see SHOW). Undefined if it is gone or hidden by then. */
   private async point(note: Note, options: { focus?: boolean }) {
-    type Result = (Pointed & { line?: number; endLine?: number }) | null | false;
+    type Result = (Pointed & { path?: string; line?: number; endLine?: number }) | null | false;
     const args = [GROUP, note.mark.key, options.focus ? { focus: true } : {}];
     try {
       let result: Result = await this.remote.lua(SHOW, args);

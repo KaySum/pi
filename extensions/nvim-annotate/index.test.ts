@@ -421,6 +421,11 @@ test('a note whose buffer is renamed is listed and shown in that buffer, by its 
   assert.equal(await annotate({ action: 'show', note: 1 }), 'Note 1 of 2: renamed.ts:22');
   const at = await lua('local win = ...; local buf = vim.api.nvim_win_get_buf(win); return { buf, vim.api.nvim_buf_get_lines(buf, vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1] }', yours);
   assert.deepEqual(at, [buf, 'function f20() {}']);
+  // Renamed again as it is entered, shown: said by that name.
+  await annotate({ action: 'show', note: 2 });
+  await lua(`local buf, name = ...
+    vim.api.nvim_create_autocmd('BufEnter', { buffer = buf, once = true, callback = function() vim.api.nvim_buf_set_name(buf, name) end })`, buf, join(dir, 'entered.ts'));
+  assert.equal(await annotate({ action: 'show', note: 1 }), 'Note 1 of 2: entered.ts:22');
 });
 
 test('a note added while a step is reading the notes is kept', async () => {

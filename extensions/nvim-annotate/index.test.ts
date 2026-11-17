@@ -409,6 +409,20 @@ test('a note whose file is reloaded shorter as it is shown, its old lines past t
   assert.equal(await lua('local win = ...; return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1]', yours), 'function f40() {}');
 });
 
+test('a note whose buffer is renamed is listed and shown in that buffer, by its name now', async () => {
+  const { annotate } = await attached();
+  const [a, b] = [await file(), await file()];
+  const [yours] = await layout(a);
+  await annotate({ action: 'add', notes: [{ file: name(a), match: 'function f20() {}', text: 'here' }, { file: name(b), line: 5, text: 'there' }] });
+  const renamed = join(dir, 'renamed.ts');
+  const buf = await lua('local path, renamed = ...; local buf = vim.fn.bufnr(path); vim.api.nvim_buf_set_lines(buf, 0, 0, true, { "x", "y" }); vim.api.nvim_buf_set_name(buf, renamed); return buf', a, renamed);
+  assert.match(await annotate({ action: 'list' }), /^1\. renamed\.ts:22 `function f20\(\) \{\}`: here$/m);
+  await annotate({ action: 'show', note: 2 });
+  assert.equal(await annotate({ action: 'show', note: 1 }), 'Note 1 of 2: renamed.ts:22');
+  const at = await lua('local win = ...; local buf = vim.api.nvim_win_get_buf(win); return { buf, vim.api.nvim_buf_get_lines(buf, vim.api.nvim_win_get_cursor(win)[1] - 1, vim.api.nvim_win_get_cursor(win)[1], true)[1] }', yours);
+  assert.deepEqual(at, [buf, 'function f20() {}']);
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();

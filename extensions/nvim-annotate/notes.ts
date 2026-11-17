@@ -33,11 +33,12 @@ for _, mark in ipairs(marks) do
   mark.code = ok and lines[1] or ''
 end
 return marks`;
-// Show the note whose mark has key `key` where it is, both in this one call: no other call comes
-// between. Showing can move it all the same (a reload of its file, the user's autocommands as
-// its buffer is entered), so it is found again after, and shown again where it went, a few times
-// at most: also when nvim-point failed, its lines past the end of the file as reloaded shorter. nvim-point's result, with the lines shown; not shown if it kept moving; nil if the
-// note is gone or hidden; false if nvim-point is not installed yet.
+// Show the note whose mark has key `key` where it is, in its buffer however named now, both in
+// this one call: no other call comes between. Showing can move it all the same (a reload of its
+// file, the user's autocommands as its buffer is entered), so it is found again after, and shown
+// again where it went, a few times at most: also when nvim-point failed, its lines past the end of
+// the file as reloaded shorter. nvim-point's result, with the lines shown; not shown if it kept
+// moving; nil if the note is gone or hidden; false if nvim-point is not installed yet.
 const SHOW = `local vt, pt, group, key, spec = remote.nvim_virtual_text, remote.nvim_point, ...
 if not pt then return false end
 local function find()
@@ -48,11 +49,11 @@ end
 local mark = find()
 for _ = 1, 3 do
   if not mark then return nil end
-  spec.line, spec.endLine = mark.line, mark.endLine or mark.line
+  spec.buf, spec.line, spec.endLine = mark.buf, mark.line, mark.endLine or mark.line
   local ok, pointed = pcall(pt.show, spec)
   if ok and not pointed.shown then return pointed end
   mark = find()
-  local moved = not mark or mark.line ~= spec.line or (mark.endLine or mark.line) ~= spec.endLine
+  local moved = not mark or mark.buf ~= spec.buf or mark.line ~= spec.line or (mark.endLine or mark.line) ~= spec.endLine
   if not moved then
     if not ok then error(pointed, 0) end
     pointed.line, pointed.endLine = spec.line, spec.endLine
@@ -219,7 +220,7 @@ export class Notes {
     const found = this.notes.filter(note => numbers.includes(note.number));
     if (found.length) await this.text.remove(found.map(note => marks.get(note.mark.key)!.id));
     this.notes = this.notes.filter(note => !found.includes(note));
-    this.journal(found, by);
+    this.journal(found.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
     return found.map(note => note.number);
   }
 
@@ -263,7 +264,8 @@ export class Notes {
     const marks = await this.marks();
     return this.notes.map(note => {
       const mark = marks.get(note.mark.key)!;
-      return { ...note, line: mark.line, endLine: mark.endLine ?? mark.line, code: mark.code ?? '', ...(mark.invalid ? { hidden: true as const } : {}) };
+      // Its file as its buffer is named now, renamed or saved as another.
+      return { ...note, path: mark.path, line: mark.line, endLine: mark.endLine ?? mark.line, code: mark.code ?? '', ...(mark.invalid ? { hidden: true as const } : {}) };
     });
   }
 
@@ -291,7 +293,7 @@ export class Notes {
   /** Show `note` where it is (see SHOW). Undefined if it is gone or hidden by then. */
   private async point(note: Note, options: { focus?: boolean }) {
     type Result = (Pointed & { line?: number; endLine?: number }) | null | false;
-    const args = [GROUP, note.mark.key, { path: note.path, ...(options.focus ? { focus: true } : {}) }];
+    const args = [GROUP, note.mark.key, options.focus ? { focus: true } : {}];
     try {
       let result: Result = await this.remote.lua(SHOW, args);
       if (result === false) {
@@ -313,10 +315,11 @@ export class Notes {
   }
 
   private async clearing(by: By) {
+    const marks = await this.marks();
     const numbers = this.notes.map(note => note.number);
     await this.text.clear();
     if (by === 'pi') this.retire(this.notes);
-    else this.journal(this.notes, by);
+    else this.journal(this.notes.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
     this.notes = [];
     this.at = this.last = 0;
     return numbers;

@@ -1415,11 +1415,14 @@ function state.reanchor(buf)
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			local found = locate(text, mark.anchor, spec.line, not spec.match)
+			-- Reanchored late (see `watch`), edits since the reload can have split its text, all of
+			-- it still on the mark's lines, which follow them: it stays there, though the text is
+			-- whole elsewhere too.
+			local split = not gone and not holds(text.lines, mark.anchor, spec.line)
+				and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+			local found = not split and locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
-				-- Not found whole, its text is gone; unless, reanchored late (see `watch`), edits since
-				-- the reload only split it, all of it still on the mark's lines, which follow them.
-				local split = not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+				-- Not found whole, nor split, its text is gone.
 				if spec.invalidate and not split then
 					remove(id)
 				elseif gone then

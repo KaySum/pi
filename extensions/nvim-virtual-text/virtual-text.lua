@@ -1402,7 +1402,9 @@ function state.reanchor(buf)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
 			local found = locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
-				if spec.invalidate then
+				-- Not found as reloaded, its text is gone. Edited since (reanchored late, see `watch`),
+				-- the edits may only have split it: it stays where they took it.
+				if spec.invalidate and (gone or not vim.bo[buf].modified) then
 					remove(id)
 				elseif gone then
 					install(id, mark.group, spec, false, true)

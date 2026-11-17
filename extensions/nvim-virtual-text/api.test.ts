@@ -480,6 +480,18 @@ test('reloaded unchanged, a buffer is still watched: its marks follow later edit
   await eventually(async () => await pad() === '  ');
 });
 
+test('reloaded from an autocommand not nested, then edited within a mark before it is reanchored, the mark grows', async () => {
+  const path = await file('a\nb\nc\nd\ne\n');
+  await open(path);
+  const [id] = await text.place([{ path, match: 'b\nc\nd', text: 'on b-d', invalidate: true }]);
+  await lua(`vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextGrow', once = true, callback = function()
+      vim.cmd('edit!')
+      vim.api.nvim_buf_set_lines(0, 2, 2, true, { 'new' })
+    end })
+    vim.cmd.doautocmd('User VirtualTextGrow')`);
+  assert.deepEqual((await text.list()).map(m => [m.id, m.line, m.endLine]), [[id, 2, 5]]);
+});
+
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

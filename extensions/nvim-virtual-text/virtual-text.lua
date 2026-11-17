@@ -683,11 +683,18 @@ local function holds(lines, needles, line)
 end
 
 -- Whether `needles` are on lines `first` to `last` of `lines`, in order, each on a line of its
--- own, others among them: as edits leave a mark's text when they only add to it.
+-- own, the first on the first and the last on the last, others among them: as edits leave a
+-- mark's text when they only add to it.
 local function spread(lines, needles, first, last)
+	local function on(line, needle)
+		return lines[line] and lines[line]:find(needle, 1, true)
+	end
+	if not (on(first, needles[1]) and on(last, needles[#needles])) then
+		return false
+	end
 	local i = 1
 	for line = first, last do
-		if lines[line] and lines[line]:find(needles[i], 1, true) then
+		if on(line, needles[i]) then
 			i = i + 1
 			if i > #needles then
 				return true
@@ -1415,15 +1422,14 @@ function state.reanchor(buf)
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			-- Reanchored late (see `watch`), edits since the reload can have split its text, all of
-			-- it still on the mark's lines, which follow them: it stays there, though the text is
-			-- whole elsewhere too.
-			local split = not gone and not holds(text.lines, mark.anchor, spec.line)
-				and spread(text.lines, mark.anchor, spec.line, spec.endLine)
-			local found = not split and locate(text, mark.anchor, spec.line, not spec.match)
+			-- Its text spread over its lines, first to last: on them still, where edits since the
+			-- reload (reanchored late, see `watch`) may only have added to it; and as they took it,
+			-- though the text is whole elsewhere, or within them, too.
+			local kept = not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+			local found = kept and spec.line or locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
-				-- Not found whole, nor split, its text is gone.
-				if spec.invalidate and not split then
+				-- Not found whole, nor on its lines, its text is gone.
+				if spec.invalidate then
 					remove(id)
 				elseif gone then
 					install(id, mark.group, spec, false, true)
@@ -1431,13 +1437,13 @@ function state.reanchor(buf)
 			else
 				-- On its lines, its text may still have moved along them.
 				local col, endCol = spec.col, spec.endCol
-				if spec.columns and spec.match then
+				if spec.columns and spec.match and holds(text.lines, mark.anchor, found) then
 					col, endCol = columns_of(buf, mark.anchor, found)
 				end
 				-- Re-indented in the file as reloaded, as when edited (see `state.sync`).
 				local reindented = mark.indented and mark.indented ~= indented(spec)
-				-- All its text found, it spans all of it: where it was, a file now shorter cut it off.
-				local endLine = found + #mark.anchor - 1
+				-- Found again, it spans all of its text: where it was, a file now shorter cut it off.
+				local endLine = kept and spec.endLine or found + #mark.anchor - 1
 				if found ~= spec.line or endLine ~= spec.endLine or invalid or gone or reindented or col ~= spec.col or endCol ~= spec.endCol then
 					spec.line, spec.endLine, spec.col, spec.endCol = found, endLine, col, endCol
 					install(id, mark.group, spec, false, true)

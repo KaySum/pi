@@ -518,6 +518,24 @@ test('reloaded from an autocommand not nested, then edited within a mark whose t
   assert.deepEqual((await text.list()).map(m => [m.id, m.line, m.endLine]), [[id, 2, 5]]);
 });
 
+test('reloaded from an autocommand not nested, a mark keeps lines added within it, and loses those the reload took', async () => {
+  const path = await file('a\nb\nc\nd\ne\n');
+  await open(path);
+  const [id] = await text.place([{ path, match: 'b\nc\nd', text: 'on b-d', invalidate: true }]);
+  const reload = (then: string) => lua(`vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextReload', once = true, callback = function()
+      vim.cmd('edit!')
+      ${then}
+    end })
+    vim.cmd.doautocmd('User VirtualTextReload')`);
+  const lines = async () => (await text.list()).map(m => [m.id, m.line, m.endLine]);
+  // A copy of its last line added before it: its first lines read as all of its text again.
+  await reload(`vim.api.nvim_buf_set_lines(0, 3, 3, true, { 'd' })`);
+  assert.deepEqual(await lines(), [[id, 2, 5]]);
+  // Added unsaved, then reloaded as saved: gone again.
+  await reload('');
+  assert.deepEqual(await lines(), [[id, 2, 4]]);
+});
+
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

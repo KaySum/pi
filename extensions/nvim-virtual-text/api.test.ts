@@ -490,6 +490,15 @@ test('reloaded from an autocommand not nested, then edited within a mark before 
     end })
     vim.cmd.doautocmd('User VirtualTextGrow')`);
   assert.deepEqual((await text.list()).map(m => [m.id, m.line, m.endLine]), [[id, 2, 5]]);
+  // But a reload that loses its text, then an edit elsewhere: gone, as the file has it nowhere.
+  await lua(`local path = ...
+    vim.api.nvim_create_autocmd('User', { pattern = 'VirtualTextLose', once = true, callback = function()
+      vim.fn.writefile({ 'x', 'y', 'z', 'w', 'v' }, path)
+      vim.cmd('edit!')
+      vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '  ' })
+    end })
+    vim.cmd.doautocmd('User VirtualTextLose')`, path);
+  assert.deepEqual(await text.list(), []);
 });
 
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {

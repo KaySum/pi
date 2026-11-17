@@ -639,14 +639,9 @@ local texts = setmetatable({}, { __mode = "v" })
 -- every mark's, and a call may place many. `lines` are trimmed when first looked at;
 -- `joined` (see below) is them all, untrimmed, one string, in which `find` searches in C,
 -- and `starts` where each begins in it.
-local function text_of(buf)
-	local tick = vim.api.nvim_buf_get_changedtick(buf)
-	if texts[buf] and texts[buf].tick == tick then
-		return texts[buf]
-	end
-	local raw = vim.api.nvim_buf_get_lines(buf, 0, -1, true)
+-- `raw` lines as a text to search, each trimmed only once a search needs it.
+local function text_from(raw, tick)
 	local text = { tick = tick, n = #raw, raw = raw }
-	texts[buf] = text
 	text.lines = setmetatable({}, {
 		__index = function(cache, i)
 			local line = raw[i] and vim.trim(raw[i])
@@ -655,6 +650,15 @@ local function text_of(buf)
 		end,
 	})
 	return text
+end
+
+local function text_of(buf)
+	local tick = vim.api.nvim_buf_get_changedtick(buf)
+	if texts[buf] and texts[buf].tick == tick then
+		return texts[buf]
+	end
+	texts[buf] = text_from(vim.api.nvim_buf_get_lines(buf, 0, -1, true), tick)
+	return texts[buf]
 end
 
 -- `text` with `joined` and `starts`, made only once a search needs them: most marks are where
@@ -1395,7 +1399,7 @@ function state.reanchor(buf)
 	state.unanchored[buf] = nil
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
-	local text = text_of(buf)
+	local text, disk = text_of(buf), nil
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
@@ -1403,8 +1407,14 @@ function state.reanchor(buf)
 			local found = locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
 				-- Not found as reloaded, its text is gone. Edited since (reanchored late, see `watch`),
-				-- the edits may only have split it: it stays where they took it.
-				if spec.invalidate and (gone or not vim.bo[buf].modified) then
+				-- the edits may only have split it: it stays where they took it if the file, as it was
+				-- reloaded, has it.
+				if not gone and vim.bo[buf].modified and not disk then
+					local ok, raw = pcall(vim.fn.readfile, vim.api.nvim_buf_get_name(buf))
+					disk = text_from(ok and raw or {})
+				end
+				local split = not gone and vim.bo[buf].modified and locate(disk, mark.anchor, spec.line, not spec.match)
+				if spec.invalidate and not split then
 					remove(id)
 				elseif gone then
 					install(id, mark.group, spec, false, true)

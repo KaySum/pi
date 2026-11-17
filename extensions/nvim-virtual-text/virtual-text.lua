@@ -1413,19 +1413,23 @@ function state.restore(buf)
 	end
 end
 
-function state.reanchor(buf)
+-- Move `buf`'s marks back onto their text, as reloaded; `late`, after the reload (see `watch`),
+-- when edits may have come since.
+function state.reanchor(buf, late)
 	state.unanchored[buf] = nil
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
 	local text = text_of(buf)
+	-- A reload leaves it unmodified: modified, it was edited since.
+	local edited = late and vim.bo[buf].modified
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			-- Its text spread over its lines, first to last: on them still, where edits since the
-			-- reload (reanchored late, see `watch`) may only have added to it; and as they took it,
-			-- though the text is whole elsewhere, or within them, too.
-			local kept = not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+			-- Edited since the reload, its text spread over its lines, first to last: on them still,
+			-- where the edits may only have added to it; and as they took it, though the text is
+			-- whole elsewhere, or within them, too. Not edited since, its lines are as reloaded.
+			local kept = edited and not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
 			local found = kept and spec.line or locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
 				-- Not found whole, nor on its lines, its text is gone.
@@ -1480,7 +1484,7 @@ function state.settle(buf)
 		return
 	end
 	state.rewatch(buf)
-	state.reanchor(buf)
+	state.reanchor(buf, true)
 end
 
 --- Remove the marks `ids` of `group` (of any group if nil); returns those that were there.

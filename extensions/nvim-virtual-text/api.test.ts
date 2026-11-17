@@ -534,6 +534,15 @@ test('reloaded from an autocommand not nested, a mark keeps lines added within i
   // Added unsaved, then reloaded as saved: gone again.
   await reload('');
   assert.deepEqual(await lines(), [[id, 2, 4]]);
+  // So too where the line after it is a copy of its last, which its range then ends on.
+  await writeFile(path, 'a\nb\nc\nd\nd\ne\n');
+  await lua('vim.cmd("edit!")');
+  for (const how of ['plain', 'not nested']) {
+    await lua('vim.api.nvim_buf_set_lines(0, 2, 2, true, { "new" })');
+    assert.deepEqual(await lines(), [[id, 2, 5]], how);
+    await (how === 'plain' ? lua('vim.cmd("edit!")') : reload(''));
+    assert.deepEqual(await lines(), [[id, 2, 4]], how);
+  }
 });
 
 test('invalidate hides a mark while its lines are deleted, and removes it when a reload loses its text', async () => {

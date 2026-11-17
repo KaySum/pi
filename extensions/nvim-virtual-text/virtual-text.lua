@@ -1420,16 +1420,15 @@ function state.reanchor(buf, late)
 	-- Reloaded, a buffer's changedtick can be the one its old text was cached at.
 	texts[buf] = nil
 	local text = text_of(buf)
-	-- A reload leaves it unmodified: modified, it was edited since.
-	local edited = late and vim.bo[buf].modified
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
 			local spec, invalid = current(mark)
 			local gone = not vim.api.nvim_buf_get_extmark_by_id(buf, mark.ns, mark.extmarks.span, {})[1]
-			-- Edited since the reload, its text spread over its lines, first to last: on them still,
-			-- where the edits may only have added to it; and as they took it, though the text is
-			-- whole elsewhere, or within them, too. Not edited since, its lines are as reloaded.
-			local kept = edited and not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
+			-- Late, edits since the reload may only have added to its text: spread over its lines,
+			-- first to last, it stays on them, as they took it, though the text is whole elsewhere,
+			-- or within them, too. Which lines were edited is not known: lines the reload took from
+			-- it stay too, where the next is a copy of its last.
+			local kept = late and not gone and spread(text.lines, mark.anchor, spec.line, spec.endLine)
 			local found = kept and spec.line or locate(text, mark.anchor, spec.line, not spec.match)
 			if not found then
 				-- Not found whole, nor on its lines, its text is gone.

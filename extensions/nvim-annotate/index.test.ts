@@ -428,6 +428,15 @@ test('a note whose buffer is renamed is listed and shown in that buffer, by its 
   assert.equal(await annotate({ action: 'show', note: 1 }), 'Note 1 of 2: entered.ts:22');
 });
 
+test('a long line of code is cut short by whole characters, not halves of one', async () => {
+  const { annotate } = await attached();
+  const path = join(dir, 'unicode.ts');
+  await writeFile(path, `// ${'a'.repeat(75)}🚀 tail\n`);
+  const added = await annotate({ action: 'add', notes: [{ file: name(path), line: 1, text: 'long' }] });
+  assert.ok(added.isWellFormed(), added);
+  assert.match(added, new RegExp(`aaa🚀…\`: long$`));
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();

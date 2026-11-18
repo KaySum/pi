@@ -50,8 +50,9 @@ const where = (note: Placed, cwd: string) =>
 const CHANGED = 'nvim-annotate';
 // The code it is on, so that a match that found other code than meant shows.
 const code = (note: Placed) => {
-  const line = note.code.trim();
-  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+  // By characters, not UTF-16 units: one outside the BMP is not cut in half.
+  const chars = [...note.code.trim()];
+  return chars.length > 80 ? `${chars.slice(0, 79).join('')}…` : chars.join('');
 };
 const describe = (note: Placed, cwd: string) =>
   `${note.number}. ${where(note, cwd)}${note.kind === 'info' ? '' : ` ${note.kind}`}${note.hidden ? ' (its lines deleted)' : ` \`${code(note)}\``}: ${note.text}`;

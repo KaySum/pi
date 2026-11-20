@@ -718,6 +718,24 @@ test('a change found as Pi detaches is not told: it is of notes no longer there'
   assert.deepEqual((await told).filter(Boolean), []);
 });
 
+test('a Pi detaching leaves :PiNotes and :PiNotesRemove to another attached since, which has them as its own', async () => {
+  const first = await pi();
+  running.add(first);
+  const path = await file();
+  const [yours] = await layout(path);
+  await first.annotate({ action: 'add', notes: [{ file: name(path), line: 20, text: 'first' }] });
+  const second = await attached();
+  await second.annotate({ action: 'add', notes: [{ file: name(path), line: 70, text: 'second' }] });
+  await first.shutdown();
+  running.delete(first);
+  assert.equal(await lua('return vim.fn.exists(":PiNotes") + vim.fn.exists(":PiNotesRemove")'), 4);
+  await editor.request('nvim_command', ['PiNotes 1']);
+  await eventually(async () => (await cursor(yours))[0] === 70);
+  await second.shutdown();
+  running.delete(second);
+  await eventually(async () => await lua('return vim.fn.exists(":PiNotes") + vim.fn.exists(":PiNotesRemove")') === 0);
+});
+
 test('once Pi detaches, its notes and :PiNotes go; without Neovim the tool and command say so', async () => {
   const p = await pi();
   const path = await file();

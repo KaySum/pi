@@ -4,17 +4,26 @@ import { useRemote, type Remote } from '../nvim-remote/api.ts';
 import { errorText, perAttachment, useCwd, withKit } from '../nvim-remote-kit/api.ts';
 import { Notes, type Kind, type NoteSpec, type Placed } from './notes.ts';
 
-// :PiNotes and :PiNotesRemove in Neovim, their arguments sent to Pi; gone with the attachment.
-const COMMAND = `vim.api.nvim_create_user_command('PiNotes', function(o) remote.notify('nvim-annotate:step', o.args) end, {
+// :PiNotes and :PiNotesRemove in Neovim, their arguments sent to Pi; gone with the attachment,
+// unless another Pi attached since has them as its own.
+const COMMAND = `local own = {
+  PiNotes = function(o) remote.notify('nvim-annotate:step', o.args) end,
+  PiNotesRemove = function(o) remote.notify('nvim-annotate:remove', o.args) end,
+}
+vim.api.nvim_create_user_command('PiNotes', own.PiNotes, {
   nargs = '?', desc = "Go to Pi's notes: next, prev, or a number",
   complete = function() return { 'next', 'prev' } end,
 })
-vim.api.nvim_create_user_command('PiNotesRemove', function(o) remote.notify('nvim-annotate:remove', o.args) end, {
+vim.api.nvim_create_user_command('PiNotesRemove', own.PiNotesRemove, {
   nargs = '*', desc = "Remove Pi's notes by numbers and ranges (2 5-7,10); all of them, with none",
 })
 remote.on_detach(function()
-  pcall(vim.api.nvim_del_user_command, 'PiNotes')
-  pcall(vim.api.nvim_del_user_command, 'PiNotesRemove')
+  local commands = vim.api.nvim_get_commands({})
+  for name, callback in pairs(own) do
+    if commands[name] and commands[name].callback == callback then
+      pcall(vim.api.nvim_del_user_command, name)
+    end
+  end
 end)`;
 // A note whose code a reload took since it was placed or changed.
 const GONE = 'gone from the editor: its code deleted, or its buffer wiped';

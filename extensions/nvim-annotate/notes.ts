@@ -323,12 +323,14 @@ export class Notes {
     const found = this.notes.filter(note => numbers.includes(note.number));
     if (found.length) {
       const ids = found.map(note => marks.get(note.mark.key)!.id);
-      // Made late, also those with their keys then whose marks it removed: a replace since kept the
-      // keys' marks, and so their ids; a clear did not, the ids gone, and the notes since have others.
+      // The notes with those keys then whose marks it removed, made late too: a replace since kept
+      // the keys' marks, and so their ids; a clear did not, and the notes since, even these restored
+      // by an add made late, have others.
       const made = (removed: number[]) => {
-        this.drop(found, by, marks);
         const gone = found.filter((_, i) => removed.includes(ids[i])).map(note => note.mark.key);
-        this.drop(this.notes.filter(note => gone.includes(note.mark.key)), by, new Map());
+        const there = this.notes.filter(note => gone.includes(note.mark.key));
+        this.drop(there.filter(note => found.includes(note)), by, marks);
+        this.drop(there.filter(note => !found.includes(note)), by, new Map());
       };
       await this.call('remove', [ids], made, { notes: found, by, marks });
     }

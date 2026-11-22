@@ -576,6 +576,16 @@ test('a change Neovim makes only after the notes were read again is known for ma
   await annotate({ action: 'add', notes: [{ file: name(path), line: 80, text: 'reborn' }] });
   await removingCleared();
   assert.match(await annotate({ action: 'list' }), /^1\. .*:80 .*: reborn$/);
+  // So too that note itself, put back by an add Neovim makes after the clear.
+  const removingRestored = delay('remove');
+  await assert.rejects(annotate({ action: 'remove', note: 1 }), /did not answer/);
+  const restoring = delay('set');
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(path), line: 90, text: 'restoring' }] }), /did not answer/);
+  await annotate({ action: 'clear' });
+  await restoring();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
+  await removingRestored();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

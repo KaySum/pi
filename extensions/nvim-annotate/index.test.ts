@@ -538,6 +538,17 @@ test('a change Neovim makes only after the notes were read again is known for ma
   await older();
   assert.match(await annotate({ action: 'list' }), /^1\. .*: older$/);
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 90, text: 'after' }] }), /^Added note 2:/);
+  // A replace Neovim makes as the notes are read: listed as it was, or as it is, not half of each.
+  const replacing = delay('set');
+  await assert.rejects(annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 30, text: 'replacing' }] }), /did not answer/);
+  const real = nvim!.lua;
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (!code.includes('vt.list(group')) return real(code, args);
+    nvim!.lua = real;
+    await replacing();
+    return real(code, args);
+  }) as Remote['lua'];
+  assert.equal(await annotate({ action: 'list' }), `1. ${name(path)}:30 \`function f30() {}\`: replacing`);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

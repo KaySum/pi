@@ -29,20 +29,26 @@ type Marks = Map<string | undefined, VirtualPlaced & { code: string }>;
 type Done = Record<string, { ok: boolean; result?: unknown; made: number }> | [];
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
-// The group's marks, each with the code on its line, all read in one call: an edit cannot come
-// between where a mark is and what is there. False if nvim-virtual-text is not installed yet.
-const MARKS = `local vt, group = remote.nvim_virtual_text, ...
+// Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
+// CALL) so that a read that fails loses nothing; and the group's marks, each with the code on its
+// line. False if nvim-virtual-text is not installed yet. All in one call: neither a change nor an
+// edit can come between what is done and where a mark is, and what is there.
+const MARKS = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
+for _, token in ipairs(...) do
+  done[token] = calls[token]
+end
+local vt, group = remote.nvim_virtual_text, select(2, ...)
 if not vt then return false end
 local marks = vt.list(group, {})
 for _, mark in ipairs(marks) do
   local ok, lines = pcall(vim.api.nvim_buf_get_lines, mark.buf, mark.line - 1, mark.line, false)
   mark.code = ok and lines[1] or ''
 end
-return marks`;
+return { true, marks, done }`;
 // Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
 // { token, forget, pending }: the token under which to note that it has run, how, and when among
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
-// says (see DONE); the tokens of those no longer asked about; and of those still asked about, to
+// says (see MARKS); the tokens of those no longer asked about; and of those still asked about, to
 // say which ran before this one. False if it is not installed yet.
 const CALL = `local vt, fn = remote.nvim_virtual_text, ...
 if not vt then return false end
@@ -62,13 +68,6 @@ calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim
 if not ok then error(result, 0) end
 if result == nil then result = vim.NIL end
 return { true, result, done }`;
-// Of the CALLs whose tokens are given, those that have run, and how; kept until forgotten (see
-// CALL), so that a read that fails loses nothing.
-const DONE = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
-for _, token in ipairs(...) do
-  done[token] = calls[token]
-end
-return done`;
 // Show the note whose mark has key `key` where it is, in its buffer however named now, both in
 // this one call: no other call comes between. Showing can move it all the same (a reload of its
 // file, the user's autocommands as its buffer is entered), so it is found again after, and shown
@@ -161,15 +160,15 @@ export class Notes {
    * read again, is forgotten: it would otherwise be given again, and fail, with every add.
    */
   private async marks() {
-    type Read = (VirtualPlaced & { code: string })[] | false;
-    // Before the marks: a call said done has its effect among them.
-    const done: Done = this.pending.length ? await this.remote.lua(DONE, [this.pending.map(call => call.token)]) : {};
-    let read: Read = await this.remote.lua(MARKS, [GROUP]);
-    if (read === false) {
+    type Read = [true, (VirtualPlaced & { code: string })[], Done] | false;
+    const read = (): Promise<Read> => this.remote.lua(MARKS, [this.pending.map(call => call.token), GROUP]);
+    let result = await read();
+    if (result === false) {
       await this.text.list();
-      read = await this.remote.lua(MARKS, [GROUP]) as Read;
+      result = await read();
     }
-    const marks: Marks = new Map((read || []).map(mark => [mark.key, mark]));
+    const [, placed, done] = result || [true, [], {}];
+    const marks: Marks = new Map(placed.map(mark => [mark.key, mark]));
     this.settle(done);
     for (const { removing } of this.pending) {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);

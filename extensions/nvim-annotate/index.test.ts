@@ -528,6 +528,16 @@ test('a change Neovim makes only after the notes were read again is known for ma
   await late();
   assert.equal(await annotate({ action: 'list' }), 'No notes');
   assert.deepEqual(await between(), []);
+  // Two answers lost, Neovim making the later first: made as it made them, the older last.
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 10, text: 'kept' }] });
+  const older = delay('set');
+  await assert.rejects(annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 80, text: 'older' }] }), /did not answer/);
+  const newer = delay('clear');
+  await assert.rejects(annotate({ action: 'clear' }), /did not answer/);
+  await newer();
+  await older();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: older$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 90, text: 'after' }] }), /^Added note 2:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

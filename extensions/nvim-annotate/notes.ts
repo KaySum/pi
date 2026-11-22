@@ -25,6 +25,8 @@ export type Placed = Note & { line: number; endLine: number; code: string; hidde
 const GROUP = 'nvim-annotate';
 /** The group's marks by key, each with the code on its line (see MARKS). */
 type Marks = Map<string | undefined, VirtualPlaced & { code: string }>;
+/** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
+type Done = Record<string, { ok: boolean; result?: unknown; made: number }> | [];
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // The group's marks, each with the code on its line, all read in one call: an edit cannot come
@@ -38,22 +40,28 @@ for _, mark in ipairs(marks) do
 end
 return marks`;
 // Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
-// { token, forget }: the token under which to note that it has run, and how, so that one whose
-// answer was lost (timed out) is known for done or not once Neovim says (see DONE); and the
-// tokens of those no longer asked about. False if it is not installed yet.
+// { token, forget, pending }: the token under which to note that it has run, how, and when among
+// the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
+// says (see DONE); the tokens of those no longer asked about; and of those still asked about, to
+// say which ran before this one. False if it is not installed yet.
 const CALL = `local vt, fn = remote.nvim_virtual_text, ...
 if not vt then return false end
 local args = { select(2, ...) }
 local call = table.remove(args)
-local calls = remote.nvim_annotate_calls or {}
+local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
 remote.nvim_annotate_calls = calls
 for _, token in ipairs(call.forget) do
   calls[token] = nil
 end
+for _, token in ipairs(call.pending) do
+  done[token] = calls[token]
+end
 local ok, result = pcall(vt[fn], unpack(args))
-calls[call.token] = { ok = ok, result = ok and result or nil }
+remote.nvim_annotate_made = (remote.nvim_annotate_made or 0) + 1
+calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made }
 if not ok then error(result, 0) end
-return { true, result }`;
+if result == nil then result = vim.NIL end
+return { true, result, done }`;
 // Of the CALLs whose tokens are given, those that have run, and how; kept until forgotten (see
 // CALL), so that a read that fails loses nothing.
 const DONE = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
@@ -154,7 +162,6 @@ export class Notes {
    */
   private async marks() {
     type Read = (VirtualPlaced & { code: string })[] | false;
-    type Done = Record<string, { ok: boolean; result?: unknown }> | [];
     // Before the marks: a call said done has its effect among them.
     const done: Done = this.pending.length ? await this.remote.lua(DONE, [this.pending.map(call => call.token)]) : {};
     let read: Read = await this.remote.lua(MARKS, [GROUP]);
@@ -163,18 +170,7 @@ export class Notes {
       read = await this.remote.lua(MARKS, [GROUP]) as Read;
     }
     const marks: Marks = new Map((read || []).map(mark => [mark.key, mark]));
-    // Those done, made in the order made: as Neovim made them, though after a later one.
-    const pending = this.pending;
-    this.pending = [];
-    for (const call of pending) {
-      const outcome = Array.isArray(done) ? undefined : done[call.token];
-      if (!outcome) {
-        this.pending.push(call);
-        continue;
-      }
-      this.forget.push(call.token);
-      if (outcome.ok) call.made(outcome.result);
-    }
+    this.settle(done);
     for (const { removing } of this.pending) {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
@@ -182,25 +178,42 @@ export class Notes {
     return marks;
   }
 
+  /**
+   * The pending changes Neovim says it made, made here as it made them: in the order it ran them,
+   * not the order asked, as one whose answer was lost may have waited there for a later one.
+   */
+  private settle(done: Done) {
+    if (Array.isArray(done)) return;
+    const settled = this.pending.filter(call => done[call.token]).sort((a, b) => done[a.token].made - done[b.token].made);
+    this.pending = this.pending.filter(call => !done[call.token]);
+    for (const call of settled) {
+      this.forget.push(call.token);
+      if (done[call.token].ok) call.made(done[call.token].result);
+    }
+  }
+
   /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */
   private async call<T>(fn: string, args: unknown[], made: (result: T) => void, removing?: Removing): Promise<T> {
     const token = String(++this.calls);
-    // Through JSON, as undefined would reach Lua as vim.NIL.
     const forget = [...this.forget];
-    const run = (): Promise<[true, T] | false> =>
-      this.remote.lua(CALL, [fn, GROUP, ...JSON.parse(JSON.stringify(args)), { token, forget }]);
-    let result: [true, T] | false;
+    const pending = this.pending.map(call => call.token);
+    // Through JSON, as undefined would reach Lua as vim.NIL.
+    const run = (): Promise<[true, T, Done] | false> =>
+      this.remote.lua(CALL, [fn, GROUP, ...JSON.parse(JSON.stringify(args)), { token, forget, pending }]);
+    let result: [true, T, Done] | false;
     try {
       result = await run();
       if (result === false) {
         await this.text.list();
-        result = await run() as [true, T];
+        result = await run() as [true, T, Done];
       }
     } catch (error) {
       this.pending.push({ token, made, removing });
       throw error;
     }
-    this.forget = [...this.forget.filter(old => !forget.includes(old)), token];
+    this.forget = this.forget.filter(old => !forget.includes(old));
+    this.settle(result[2]);
+    this.forget.push(token);
     made(result[1]);
     return result[1];
   }

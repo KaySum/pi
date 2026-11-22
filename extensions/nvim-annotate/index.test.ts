@@ -437,6 +437,35 @@ test('a long line of code is cut short by whole characters, not halves of one', 
   assert.match(added, new RegExp(`aaa🚀…\`: long$`));
 });
 
+test('a change Neovim made whose answer is lost, as when a call times out, is known for made', async () => {
+  const { nvim, annotate, fire } = await attached();
+  const path = await file();
+  await layout(path);
+  const between = async () => (await fire('turn_end', { toolResults: [{}], entries: [] }))
+    .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
+  await annotate({ action: 'add', notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  // The next call of nvim-virtual-text's `fn` is made, and its answer lost.
+  const lose = (fn: string) => {
+    const real = nvim!.lua;
+    nvim!.lua = (async (code: string, args?: unknown[]) => {
+      const result = await real(code, args);
+      if (args?.[0] !== fn) return result;
+      nvim!.lua = real;
+      throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+    }) as Remote['lua'];
+  };
+  lose('update');
+  await assert.rejects(annotate({ action: 'update', note: 1, text: 'updated' }), /did not answer/);
+  lose('set');
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(path), line: 30, text: 'added' }] }), /did not answer/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: updated\n2\. .*: at 20\n3\. .*: added$/);
+  lose('remove');
+  await assert.rejects(annotate({ action: 'remove', note: 2 }), /did not answer/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: updated\n3\. .*: added$/);
+  // Its own removal, which it knows of: nothing to tell it.
+  assert.deepEqual(await between(), []);
+});
+
 test('a note added while a step is reading the notes is kept', async () => {
   const { nvim, annotate } = await attached();
   const path = await file();

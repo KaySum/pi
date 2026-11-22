@@ -292,9 +292,11 @@ export class Notes {
     const { note, id } = found;
     const text = change.text ?? note.text, kind = change.kind ?? note.kind;
     const patch = { text: `${number}. ${text}`, hl: HL[kind] };
-    // As nvim-virtual-text now has it given, so that a later add leaves it as it is.
+    // As nvim-virtual-text now has it given, so that a later add leaves it as it is. Made late, it
+    // is of the note with its key then: a replace since kept the key's mark, and so its id.
     return this.call<boolean>('update', [id, patch], updated => {
-      if (updated) Object.assign(note, { text, kind, mark: { ...note.mark, ...patch } });
+      const now = this.notes.find(other => other.mark.key === note.mark.key);
+      if (updated && now) Object.assign(now, { text, kind, mark: { ...now.mark, ...patch } });
     });
   }
 
@@ -320,8 +322,13 @@ export class Notes {
     const marks = await this.marks();
     const found = this.notes.filter(note => numbers.includes(note.number));
     if (found.length) {
-      const ids = found.map(note => marks.get(note.mark.key)!.id);
-      await this.call('remove', [ids], () => this.drop(found, by, marks), { notes: found, by, marks });
+      const ids = found.map(note => marks.get(note.mark.key)!.id), keys = found.map(note => note.mark.key);
+      // Made late, also those with their keys then: a replace since kept the keys' marks, and so their ids.
+      const made = () => {
+        this.drop(found, by, marks);
+        this.drop(this.notes.filter(note => keys.includes(note.mark.key)), by, new Map());
+      };
+      await this.call('remove', [ids], made, { notes: found, by, marks });
     }
     return found.map(note => note.number);
   }

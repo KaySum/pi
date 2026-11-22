@@ -549,6 +549,13 @@ test('a change Neovim makes only after the notes were read again is known for ma
     return real(code, args);
   }) as Remote['lua'];
   assert.equal(await annotate({ action: 'list' }), `1. ${name(path)}:30 \`function f30() {}\`: replacing`);
+  // An append Neovim makes after an update to a note it kept: that note as the append gave it.
+  const appending = delay('set');
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'appended' }] }), /did not answer/);
+  await annotate({ action: 'update', note: 1, text: 'changed' });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: changed$/);
+  await appending();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: replacing\n2\. .*: appended$/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

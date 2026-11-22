@@ -234,7 +234,8 @@ export class Notes {
   private async adding(specs: NoteSpec[], cwd: string, replace: boolean) {
     // Those done before, settled first: this comes after them.
     await this.marks();
-    const kept = replace ? [] : this.notes;
+    // Each kept as given now: one made late leaves them so, though changed since.
+    const kept = replace ? [] : this.notes.map(note => [note, { ...note }] as const);
     const after = replace ? 0 : this.last;
     const added = specs.map((spec, i): Note => {
       const number = after + i + 1, kind = spec.kind ?? 'info';
@@ -249,7 +250,8 @@ export class Notes {
     this.ids += added.length;
     // Made, late too, the notes are those it set: any others there then it removed, as Pi.
     const made = () => {
-      const set = [...kept, ...added];
+      for (const [note, was] of kept) Object.assign(note, was);
+      const set = [...kept.map(([note]) => note), ...added];
       if (replace) this.retire(this.notes);
       else this.journal(this.notes.filter(note => !set.includes(note)), 'pi');
       this.changes.added.push(...added);
@@ -259,7 +261,7 @@ export class Notes {
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
-      await this.call('set', [[...kept, ...added].map(note => note.mark)], made);
+      await this.call('set', [[...kept.map(([, was]) => was), ...added].map(note => note.mark)], made);
     } catch (error) {
       throw await this.why(added.map(note => note.mark)) ?? error;
     }

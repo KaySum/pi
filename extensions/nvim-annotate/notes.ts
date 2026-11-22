@@ -163,7 +163,7 @@ export class Notes {
       read = await this.remote.lua(MARKS, [GROUP]) as Read;
     }
     const marks: Marks = new Map((read || []).map(mark => [mark.key, mark]));
-    // Those done, made in the order made: one that replaced or cleared the notes ends those before.
+    // Those done, made in the order made: as Neovim made them, though after a later one.
     const pending = this.pending;
     this.pending = [];
     for (const call of pending) {
@@ -205,11 +205,6 @@ export class Notes {
     return result[1];
   }
 
-  /** Those pending ended by a change that replaced or cleared every note: no longer asked about. */
-  private supersede() {
-    this.forget.push(...this.pending.map(call => call.token));
-    this.pending = [];
-  }
 
   /**
    * Add notes after those there, or with `replace` instead of them, numbered from 1 again: all
@@ -240,16 +235,14 @@ export class Notes {
     });
     // Its ids taken, made or not: one made late does not share those given meanwhile.
     this.ids += added.length;
-    // Made, it is added to the notes there then: those kept, unless made late.
+    // Made, late too, the notes are those it set: any others there then it removed, as Pi.
     const made = () => {
-      if (replace) {
-        this.supersede();
-        this.retire(this.notes);
-      }
+      const set = [...kept, ...added];
+      if (replace) this.retire(this.notes);
+      else this.journal(this.notes.filter(note => !set.includes(note)), 'pi');
       this.changes.added.push(...added);
-      this.notes = [...replace ? [] : this.notes, ...added];
-      // Numbered from 1 again when replacing; else after any given since, made late.
-      this.last = replace ? added.length : Math.max(this.last, after + added.length);
+      this.notes = set;
+      this.last = after + added.length;
       if (replace) this.at = 0;
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
@@ -323,7 +316,7 @@ export class Notes {
   private drop(notes: Note[], by: By, marks: Marks) {
     const there = notes.filter(note => this.notes.includes(note));
     this.notes = this.notes.filter(note => !there.includes(note));
-    this.journal(there.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
+    this.journal(there.map(note => ({ ...note, path: marks.get(note.mark.key)?.path ?? note.path })), by);
   }
 
   private journal(notes: Note[], by: By) {
@@ -420,13 +413,11 @@ export class Notes {
     const marks = await this.marks();
     const all = this.notes, numbers = all.map(note => note.number);
     await this.call('clear', [{}], () => {
-      // Those there still: made late, those gone since are already told for removed by `by`.
-      const there = all.filter(note => this.notes.includes(note));
-      this.supersede();
-      if (by === 'pi') this.retire(there);
-      else this.drop(there, by, marks);
-      this.notes = this.notes.filter(note => !all.includes(note));
-      if (!this.notes.length) this.at = this.last = 0;
+      // Every note there as it ran, made late too: added since, or not.
+      if (by === 'pi') this.retire(this.notes);
+      else this.drop(this.notes, by, marks);
+      this.notes = [];
+      this.at = this.last = 0;
     }, { notes: all, by, marks });
     return numbers;
   }

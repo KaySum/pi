@@ -25,6 +25,8 @@ export type Placed = Note & { line: number; endLine: number; code: string; hidde
 const GROUP = 'nvim-annotate';
 /** The group's marks by key, each with the code on its line (see MARKS). */
 type Marks = Map<string | undefined, VirtualPlaced & { code: string }>;
+/** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
+type Removing = { notes: Note[]; by: By; marks: Marks };
 // The group's marks, each with the code on its line, all read in one call: an edit cannot come
 // between where a mark is and what is there. False if nvim-virtual-text is not installed yet.
 const MARKS = `local vt, group = remote.nvim_virtual_text, ...
@@ -35,6 +37,30 @@ for _, mark in ipairs(marks) do
   mark.code = ok and lines[1] or ''
 end
 return marks`;
+// Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
+// { token, forget }: the token under which to note that it has run, and how, so that one whose
+// answer was lost (timed out) is known for done or not once Neovim says (see DONE); and the
+// tokens of those no longer asked about. False if it is not installed yet.
+const CALL = `local vt, fn = remote.nvim_virtual_text, ...
+if not vt then return false end
+local args = { select(2, ...) }
+local call = table.remove(args)
+local calls = remote.nvim_annotate_calls or {}
+remote.nvim_annotate_calls = calls
+for _, token in ipairs(call.forget) do
+  calls[token] = nil
+end
+local ok, result = pcall(vt[fn], unpack(args))
+calls[call.token] = { ok = ok, result = ok and result or nil }
+if not ok then error(result, 0) end
+return { true, result }`;
+// Of the CALLs whose tokens are given, those that have run, and how; kept until forgotten (see
+// CALL), so that a read that fails loses nothing.
+const DONE = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
+for _, token in ipairs(...) do
+  done[token] = calls[token]
+end
+return done`;
 // Show the note whose mark has key `key` where it is, in its buffer however named now, both in
 // this one call: no other call comes between. Showing can move it all the same (a reload of its
 // file, the user's autocommands as its buffer is entered), so it is found again after, and shown
@@ -89,11 +115,16 @@ export class Notes {
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
   private changes: Changes = { added: [], removed: [] };
+  /** The CALLs made, by which each is known. */
+  private calls = 0;
   /**
-   * Changes whose call failed, which Neovim may have made all the same (one timed out after it
-   * did): each settled, by the marks next read, as made or not.
+   * Changes whose CALL failed, which Neovim may have made all the same (one timed out after it
+   * did): `made` once Neovim says it did, with its result. Notes one would remove are taken for
+   * removed by whoever asked once they are gone, whenever that is.
    */
-  private unsure: ((marks: Marks) => void)[] = [];
+  private pending: { token: string; made: (result: any) => void; removing?: Removing }[] = [];
+  /** The CALLs no longer asked about, for Neovim to forget with the next (see CALL). */
+  private forget: string[] = [];
   /** What the notes are doing, each after the one before: see `queued`. */
   private queue: Promise<unknown> = Promise.resolve();
   private remote: Remote;
@@ -123,15 +154,61 @@ export class Notes {
    */
   private async marks() {
     type Read = (VirtualPlaced & { code: string })[] | false;
+    type Done = Record<string, { ok: boolean; result?: unknown }> | [];
+    // Before the marks: a call said done has its effect among them.
+    const done: Done = this.pending.length ? await this.remote.lua(DONE, [this.pending.map(call => call.token)]) : {};
     let read: Read = await this.remote.lua(MARKS, [GROUP]);
     if (read === false) {
       await this.text.list();
       read = await this.remote.lua(MARKS, [GROUP]) as Read;
     }
     const marks: Marks = new Map((read || []).map(mark => [mark.key, mark]));
-    for (const settle of this.unsure.splice(0)) settle(marks);
+    // Those done, made in the order made: one that replaced or cleared the notes ends those before.
+    const pending = this.pending;
+    this.pending = [];
+    for (const call of pending) {
+      const outcome = Array.isArray(done) ? undefined : done[call.token];
+      if (!outcome) {
+        this.pending.push(call);
+        continue;
+      }
+      this.forget.push(call.token);
+      if (outcome.ok) call.made(outcome.result);
+    }
+    for (const { removing } of this.pending) {
+      if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
+    }
     this.notes = this.notes.filter(note => marks.has(note.mark.key));
     return marks;
+  }
+
+  /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */
+  private async call<T>(fn: string, args: unknown[], made: (result: T) => void, removing?: Removing): Promise<T> {
+    const token = String(++this.calls);
+    // Through JSON, as undefined would reach Lua as vim.NIL.
+    const forget = [...this.forget];
+    const run = (): Promise<[true, T] | false> =>
+      this.remote.lua(CALL, [fn, GROUP, ...JSON.parse(JSON.stringify(args)), { token, forget }]);
+    let result: [true, T] | false;
+    try {
+      result = await run();
+      if (result === false) {
+        await this.text.list();
+        result = await run() as [true, T];
+      }
+    } catch (error) {
+      this.pending.push({ token, made, removing });
+      throw error;
+    }
+    this.forget = [...this.forget.filter(old => !forget.includes(old)), token];
+    made(result[1]);
+    return result[1];
+  }
+
+  /** Those pending ended by a change that replaced or cleared every note: no longer asked about. */
+  private supersede() {
+    this.forget.push(...this.pending.map(call => call.token));
+    this.pending = [];
   }
 
   /**
@@ -148,7 +225,8 @@ export class Notes {
   }
 
   private async adding(specs: NoteSpec[], cwd: string, replace: boolean) {
-    if (!replace) await this.marks();
+    // Those done before, settled first: this comes after them.
+    await this.marks();
     const kept = replace ? [] : this.notes;
     const after = replace ? 0 : this.last;
     const added = specs.map((spec, i): Note => {
@@ -160,24 +238,26 @@ export class Notes {
       };
       return { id: this.ids + i + 1, number, path: mark.path!, text: spec.text, kind, mark };
     });
+    // Its ids taken, made or not: one made late does not share those given meanwhile.
+    this.ids += added.length;
+    // Made, it is added to the notes there then: those kept, unless made late.
     const made = () => {
-      this.ids += added.length;
-      if (replace) this.retire(this.notes);
+      if (replace) {
+        this.supersede();
+        this.retire(this.notes);
+      }
       this.changes.added.push(...added);
-      this.notes = [...kept, ...added];
-      this.last = after + added.length;
+      this.notes = [...replace ? [] : this.notes, ...added];
+      // Numbered from 1 again when replacing; else after any given since, made late.
+      this.last = replace ? added.length : Math.max(this.last, after + added.length);
       if (replace) this.at = 0;
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
-      await this.text.set([...kept, ...added].map(note => note.mark));
+      await this.call('set', [[...kept, ...added].map(note => note.mark)], made);
     } catch (error) {
-      this.unsure.push(marks => {
-        if (added.every(note => marks.get(note.mark.key)?.text === note.mark.text)) made();
-      });
       throw await this.why(added.map(note => note.mark)) ?? error;
     }
-    made();
     return added;
   }
 
@@ -206,20 +286,9 @@ export class Notes {
     const text = change.text ?? note.text, kind = change.kind ?? note.kind;
     const patch = { text: `${number}. ${text}`, hl: HL[kind] };
     // As nvim-virtual-text now has it given, so that a later add leaves it as it is.
-    const made = () => Object.assign(note, { text, kind, mark: { ...note.mark, ...patch } });
-    let updated: boolean;
-    try {
-      updated = await this.text.update(id, patch);
-    } catch (error) {
-      this.unsure.push(marks => {
-        const mark = marks.get(note.mark.key);
-        if (mark?.text === patch.text && mark.hl === patch.hl) made();
-      });
-      throw error;
-    }
-    if (!updated) return false;
-    made();
-    return true;
+    return this.call<boolean>('update', [id, patch], updated => {
+      if (updated) Object.assign(note, { text, kind, mark: { ...note.mark, ...patch } });
+    });
   }
 
   /** Remove the notes `numbers`, the others keeping theirs. Resolves to the numbers there were. */
@@ -243,20 +312,18 @@ export class Notes {
   private async removing(numbers: number[], by: By) {
     const marks = await this.marks();
     const found = this.notes.filter(note => numbers.includes(note.number));
-    try {
-      if (found.length) await this.text.remove(found.map(note => marks.get(note.mark.key)!.id));
-    } catch (error) {
-      this.unsure.push(now => this.drop(found.filter(note => !now.has(note.mark.key)), by, marks));
-      throw error;
+    if (found.length) {
+      const ids = found.map(note => marks.get(note.mark.key)!.id);
+      await this.call('remove', [ids], () => this.drop(found, by, marks), { notes: found, by, marks });
     }
-    this.drop(found, by, marks);
     return found.map(note => note.number);
   }
 
-  /** Forget `notes`, removed `by` the user or Pi, their files as `marks` had them. */
+  /** Forget `notes` among those there still, removed `by` the user or Pi, their files as `marks` had them. */
   private drop(notes: Note[], by: By, marks: Marks) {
-    this.notes = this.notes.filter(note => !notes.includes(note));
-    this.journal(notes.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
+    const there = notes.filter(note => this.notes.includes(note));
+    this.notes = this.notes.filter(note => !there.includes(note));
+    this.journal(there.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
   }
 
   private journal(notes: Note[], by: By) {
@@ -352,23 +419,15 @@ export class Notes {
   private async clearing(by: By) {
     const marks = await this.marks();
     const all = this.notes, numbers = all.map(note => note.number);
-    const made = () => {
-      if (by === 'pi') this.retire(all);
-      else this.journal(all.map(note => ({ ...note, path: marks.get(note.mark.key)!.path })), by);
-      this.notes = [];
-      this.at = this.last = 0;
-    };
-    try {
-      await this.text.clear();
-    } catch (error) {
-      this.unsure.push(now => {
-        const gone = all.filter(note => !now.has(note.mark.key));
-        if (gone.length === all.length) made();
-        else this.drop(gone, by, marks);
-      });
-      throw error;
-    }
-    made();
+    await this.call('clear', [{}], () => {
+      // Those there still: made late, those gone since are already told for removed by `by`.
+      const there = all.filter(note => this.notes.includes(note));
+      this.supersede();
+      if (by === 'pi') this.retire(there);
+      else this.drop(there, by, marks);
+      this.notes = this.notes.filter(note => !all.includes(note));
+      if (!this.notes.length) this.at = this.last = 0;
+    }, { notes: all, by, marks });
     return numbers;
   }
 }

@@ -444,7 +444,7 @@ test('a change Neovim made whose answer is lost, as when a call times out, is kn
   const between = async () => (await fire('turn_end', { toolResults: [{}], entries: [] }))
     .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
   await annotate({ action: 'add', notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
-  // The next call of nvim-virtual-text's `fn` is made, and its answer lost.
+  // The next call of nvim-virtual-text's `fn` (see CALL) is made, and its answer lost.
   const lose = (fn: string) => {
     const real = nvim!.lua;
     nvim!.lua = (async (code: string, args?: unknown[]) => {
@@ -464,6 +464,72 @@ test('a change Neovim made whose answer is lost, as when a call times out, is kn
   assert.match(await annotate({ action: 'list' }), /^1\. .*: updated\n3\. .*: added$/);
   // Its own removal, which it knows of: nothing to tell it.
   assert.deepEqual(await between(), []);
+  // Made, its answer lost, and the next read of the marks failing too: known for made all the same.
+  lose('update');
+  await assert.rejects(annotate({ action: 'update', note: 1, text: 'again' }), /did not answer/);
+  const real = nvim!.lua;
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (!code.includes('vt.list(group')) return real(code, args);
+    nvim!.lua = real;
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'list' }), /did not answer/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: again\n3\. .*: added$/);
+  // A clear made, its answer lost, then a replace: the replace's notes, added to after.
+  lose('clear');
+  await assert.rejects(annotate({ action: 'clear' }), /did not answer/);
+  await annotate({ action: 'add', replace: true, notes: [40, 50].map(line => ({ file: name(path), line, text: `new ${line}` })) });
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 60, text: 'after' }] }), /^Added note 3:/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: new 40\n2\. .*: new 50\n3\. .*: after$/);
+});
+
+test('a change Neovim makes only after the notes were read again is known for made once it is', async () => {
+  const { nvim, annotate, fire } = await attached();
+  const path = await file();
+  await layout(path);
+  const between = async () => (await fire('turn_end', { toolResults: [{}], entries: [] }))
+    .flatMap(result => (result as { entries?: { content: string }[] } | undefined)?.entries ?? []).map(entry => entry.content);
+  await annotate({ action: 'add', notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  // The next call of nvim-virtual-text's `fn` (see CALL) gives up at once; Neovim runs it at `late()`.
+  const delay = (fn: string) => {
+    const real = nvim!.lua;
+    let late!: () => Promise<unknown>;
+    nvim!.lua = (async (code: string, args?: unknown[]) => {
+      if (args?.[0] !== fn) return real(code, args);
+      nvim!.lua = real;
+      late = () => real(code, args);
+      throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+    }) as Remote['lua'];
+    return () => late();
+  };
+  let late = delay('update');
+  await assert.rejects(annotate({ action: 'update', note: 1, text: 'updated' }), /did not answer/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: at 10\n/);
+  await late();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: updated\n/);
+  late = delay('remove');
+  await assert.rejects(annotate({ action: 'remove', note: 2 }), /did not answer/);
+  assert.deepEqual(await between(), []);
+  await late();
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: updated$/);
+  assert.deepEqual(await between(), []);
+});
+
+test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {
+  const { annotate } = await attached();
+  const path = await file();
+  await layout(path);
+  await annotate({ action: 'add', notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  const listed = await annotate({ action: 'list' });
+  await assert.rejects(annotate({ action: 'add', replace: true, notes: [
+    { file: name(path), line: 30, text: 'at 10', kind: 'error' },
+    { file: 'missing.ts', line: 1, text: 'at 20' },
+  ] }), /cannot be placed/);
+  assert.equal(await annotate({ action: 'list' }), listed);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'more' }] }), /^Added note 3:/);
+  // Replaced, numbered from 1 again: the next after it.
+  await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 50, text: 'anew' }] });
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 60, text: 'after' }] }), /^Added note 2:/);
 });
 
 test('a note added while a step is reading the notes is kept', async () => {

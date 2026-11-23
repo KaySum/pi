@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { Remote } from '../nvim-remote/api.ts';
 import { blocked } from '../nvim-remote-kit/api.ts';
 import { installPoint, type Pointed } from '../nvim-point/api.ts';
@@ -24,14 +25,14 @@ export type Placed = Note & { line: number; endLine: number; code: string; hidde
 
 const GROUP = 'nvim-annotate';
 /** The group's marks by key, each with the code on its line (see MARKS). */
-type Marks = Map<string | undefined, VirtualPlaced & { code: string }>;
+type Marks = Map<string | undefined, VirtualPlaced & { code: string; given?: Mark }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
 type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string }> | [];
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
 // CALL) so that a read that fails loses nothing; and the group's marks, each with the code on its
-// line. False if nvim-virtual-text is not installed yet. All in one call: neither a change nor an
+// line and the mark as last given it (see `drawn`). False if nvim-virtual-text is not installed yet. All in one call: neither a change nor an
 // edit can come between what is done and where a mark is, and what is there.
 const MARKS = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
 for _, token in ipairs(...) do
@@ -43,6 +44,7 @@ local marks = vt.list(group, {})
 for _, mark in ipairs(marks) do
   local ok, lines = pcall(vim.api.nvim_buf_get_lines, mark.buf, mark.line - 1, mark.line, false)
   mark.code = ok and lines[1] or ''
+  mark.given = vt.marks[mark.id] and vt.marks[mark.id].given
 end
 return { true, marks, done }`;
 // Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
@@ -143,7 +145,7 @@ export class Notes {
    * did): `made` once Neovim says it did, with its result. Notes one would remove are taken for
    * removed by whoever asked once they are gone, whenever that is.
    */
-  private pending: { token: string; made: (result: any) => void; removing?: Removing }[] = [];
+  private pending: { token: string; made: (result: any, marks?: Marks) => void; removing?: Removing }[] = [];
   /** The CALLs no longer asked about, for Neovim to forget with the next (see CALL). */
   private forget: string[] = [];
   /** What the notes are doing, each after the one before: see `queued`. */
@@ -174,7 +176,7 @@ export class Notes {
    * read again, is forgotten: it would otherwise be given again, and fail, with every add.
    */
   private async marks() {
-    type Read = [true, (VirtualPlaced & { code: string })[], Done] | false;
+    type Read = [true, (VirtualPlaced & { code: string; given?: Mark })[], Done] | false;
     const read = (): Promise<Read> => this.remote.lua(MARKS, [this.pending.map(call => call.token), GROUP]);
     let result = await read();
     if (result === false) {
@@ -183,7 +185,7 @@ export class Notes {
     }
     const [, placed, done] = result || [true, [], {}];
     const marks: Marks = new Map(placed.map(mark => [mark.key, mark]));
-    this.settle(done);
+    this.settle(done, marks);
     for (const { removing } of this.pending) {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
@@ -197,20 +199,20 @@ export class Notes {
    * writes, after or between them, can leave them otherwise than either order of the two made here.
    * One drawn that is not among them is taken in again, as if Pi had added it.
    */
-  private drawn(placed: VirtualPlaced[]) {
-    for (const mark of placed) {
-      const number = Number(mark.key?.match(/^note-(\d+)$/)?.[1]);
-      const kind = KINDS.find(kind => HL[kind] === mark.hl);
-      if (!number || !kind || typeof mark.text !== 'string' || !mark.text.startsWith(`${number}. `)) continue;
-      const text = mark.text.slice(`${number}. `.length);
-      const as = { text, kind, mark: markOf(number, mark.path, text, kind, { line: mark.line }) };
+  private drawn(placed: { key?: string; given?: Mark }[]) {
+    for (const { key, given } of placed) {
+      const number = Number(key?.match(/^note-(\d+)$/)?.[1]);
+      const kind = KINDS.find(kind => HL[kind] === given?.hl);
+      if (!given || !number || !kind || typeof given.text !== 'string' || !given.text.startsWith(`${number}. `)) continue;
+      // As given, its anchor too (a match, the lines it takes in): given so again, it stays as it is.
+      const as = { text: given.text.slice(`${number}. `.length), kind, mark: given };
       this.last = Math.max(this.last, number);
-      const note = this.notes.find(note => note.mark.key === mark.key);
+      const note = this.notes.find(note => note.mark.key === key);
       if (!note) {
-        const taken: Note = { id: ++this.ids, number, path: mark.path, ...as };
+        const taken: Note = { id: ++this.ids, number, path: given.path!, ...as };
         this.notes.push(taken);
         this.changes.added.push(taken);
-      } else if (note.text !== text || note.kind !== kind) Object.assign(note, as);
+      } else if (!isDeepStrictEqual(note.mark, given)) Object.assign(note, as);
     }
     this.notes.sort((a, b) => a.number - b.number);
     if (this.recount) this.last = Math.max(0, ...this.notes.map(note => note.number));
@@ -221,20 +223,20 @@ export class Notes {
    * The pending changes Neovim says it made, made here as it made them: in the order it ran them,
    * not the order asked, as one whose answer was lost may have waited there for a later one.
    */
-  private settle(done: Done) {
+  private settle(done: Done, marks?: Marks) {
     if (Array.isArray(done)) return;
     const settled = this.pending.filter(call => done[call.token]).sort((a, b) => done[a.token].made - done[b.token].made);
     this.pending = this.pending.filter(call => !done[call.token]);
     for (const call of settled) {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
-      call.made(done[call.token].result);
+      call.made(done[call.token].result, marks);
       if (done[call.token].during && !call.removing) this.recount = true;
     }
   }
 
   /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */
-  private async call<T>(fn: string, args: unknown[], made: (result: T) => void, removing?: Removing): Promise<T> {
+  private async call<T>(fn: string, args: unknown[], made: (result: T, marks?: Marks) => void, removing?: Removing): Promise<T> {
     const token = String(++this.calls);
     const forget = [...this.forget];
     const pending = this.pending.map(call => call.token);
@@ -364,9 +366,10 @@ export class Notes {
       const ids = found.map(note => marks.get(note.mark.key)!.id);
       // The notes with those keys then whose marks it removed, made late too: a replace since kept
       // the keys' marks, and so their ids; a clear did not, and the notes since, even these restored
-      // by an add made late, have others.
-      const made = (removed: number[]) => {
-        const gone = found.filter((_, i) => removed.includes(ids[i])).map(note => note.mark.key);
+      // by an add made late, have others. Not those drawn still, as `now` has them: one made during
+      // another, before its writes, had its mark drawn again by them (see `drawn`).
+      const made = (removed: number[], now?: Marks) => {
+        const gone = found.filter((_, i) => removed.includes(ids[i]) && !now?.has(found[i].mark.key)).map(note => note.mark.key);
         const there = this.notes.filter(note => gone.includes(note.mark.key));
         this.drop(there.filter(note => found.includes(note)), by, marks);
         this.drop(there.filter(note => !found.includes(note)), by, new Map());

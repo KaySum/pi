@@ -610,9 +610,11 @@ vt.set = function(...)
 end
 return call(unpack(args))`, [nested[1], args]);
   }) as Remote['lua'];
-  await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 30, text: 'over' }] });
-  assert.match(await annotate({ action: 'list' }), /^1\. .*:30 .*: over$/);
+  await annotate({ action: 'add', replace: true, notes: [{ file: name(path), match: 'function f30() {}\nline 31', text: 'over' }] });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*:30-31 .*: over$/);
+  // Its anchor as given too, its lines all kept by the next add.
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'next' }] }), /^Added note 2:/);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*:30-31 .*: over\n2\. /);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

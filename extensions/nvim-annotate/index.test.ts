@@ -586,6 +586,33 @@ test('a change Neovim makes only after the notes were read again is known for ma
   assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
   await removingRestored();
   assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
+  // One Neovim makes during another, before its writes, as an autocommand it sets off may: the
+  // notes as Neovim then has them, numbered on from them.
+  let nested!: [string, unknown[]];
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'update') return real(code, args);
+    nested = [code, args];
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'update', note: 1, text: 'nested' }), /did not answer/);
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    nvim!.lua = real;
+    return real(`local function during(...) ${nested[0]} end
+local function call(...) ${code} end
+local nested, args = ...
+local vt = remote.nvim_virtual_text
+local set = vt.set
+vt.set = function(...)
+  vt.set = set
+  during(unpack(nested))
+  return set(...)
+end
+return call(unpack(args))`, [nested[1], args]);
+  }) as Remote['lua'];
+  await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 30, text: 'over' }] });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*:30 .*: over$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'next' }] }), /^Added note 2:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

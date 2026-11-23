@@ -26,7 +26,7 @@ const GROUP = 'nvim-annotate';
 /** The group's marks by key, each with the code on its line (see MARKS). */
 type Marks = Map<string | undefined, VirtualPlaced & { code: string }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
-type Done = Record<string, { ok: boolean; result?: unknown; made: number }> | [];
+type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string }> | [];
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
@@ -49,7 +49,8 @@ return { true, marks, done }`;
 // { token, forget, pending }: the token under which to note that it has run, how, and when among
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
 // says (see MARKS); the tokens of those no longer asked about; and of those still asked about, to
-// say which ran before this one. False if it is not installed yet.
+// say which ran before this one (one that ran during another, in an autocommand it set off, is
+// noted so: see `drawn`). False if it is not installed yet.
 const CALL = `local vt, fn = remote.nvim_virtual_text, ...
 if not vt then return false end
 local args = { select(2, ...) }
@@ -62,9 +63,12 @@ end
 for _, token in ipairs(call.pending) do
   done[token] = calls[token]
 end
+local during = remote.nvim_annotate_running
+remote.nvim_annotate_running = call.token
 local ok, result = pcall(vt[fn], unpack(args))
+remote.nvim_annotate_running = during
 remote.nvim_annotate_made = (remote.nvim_annotate_made or 0) + 1
-calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made }
+calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made, during = during }
 if not ok then error(result, 0) end
 if result == nil then result = vim.NIL end
 return { true, result, done }`;
@@ -111,6 +115,11 @@ const HL: Record<Kind, string> = {
   info: 'PiVirtualTextInfo', hint: 'PiVirtualTextHint', warn: 'PiVirtualTextWarn', error: 'PiVirtualTextError',
 };
 
+/** Note `number`'s mark, its anchor `at`. */
+const markOf = (number: number, path: string, text: string, kind: Kind, at: { line?: number; match?: string }): Mark => ({
+  key: `note-${number}`, path, text: `${number}. ${text}`, position: 'above', hl: HL[kind], indent: true, wrap: 'window', invalidate: true, ...at,
+});
+
 /** Pi's notes in the editor of one attachment: added in order, stepped through, cleared. */
 export class Notes {
   private notes: Note[] = [];
@@ -118,6 +127,11 @@ export class Notes {
   private at = 0;
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
+  /**
+   * Whether `last` is to be the last number drawn: an add or clear made during another (see
+   * `drawn`) may have come before or after its writes, and so been undone by them or not.
+   */
+  private recount = false;
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -174,7 +188,33 @@ export class Notes {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
     this.notes = this.notes.filter(note => marks.has(note.mark.key));
+    this.drawn(placed);
     return marks;
+  }
+
+  /**
+   * The notes as Neovim draws them, `placed`: a change made there during another, before its
+   * writes, after or between them, can leave them otherwise than either order of the two made here.
+   * One drawn that is not among them is taken in again, as if Pi had added it.
+   */
+  private drawn(placed: VirtualPlaced[]) {
+    for (const mark of placed) {
+      const number = Number(mark.key?.match(/^note-(\d+)$/)?.[1]);
+      const kind = KINDS.find(kind => HL[kind] === mark.hl);
+      if (!number || !kind || typeof mark.text !== 'string' || !mark.text.startsWith(`${number}. `)) continue;
+      const text = mark.text.slice(`${number}. `.length);
+      const as = { text, kind, mark: markOf(number, mark.path, text, kind, { line: mark.line }) };
+      this.last = Math.max(this.last, number);
+      const note = this.notes.find(note => note.mark.key === mark.key);
+      if (!note) {
+        const taken: Note = { id: ++this.ids, number, path: mark.path, ...as };
+        this.notes.push(taken);
+        this.changes.added.push(taken);
+      } else if (note.text !== text || note.kind !== kind) Object.assign(note, as);
+    }
+    this.notes.sort((a, b) => a.number - b.number);
+    if (this.recount) this.last = Math.max(0, ...this.notes.map(note => note.number));
+    this.recount = false;
   }
 
   /**
@@ -187,7 +227,9 @@ export class Notes {
     this.pending = this.pending.filter(call => !done[call.token]);
     for (const call of settled) {
       this.forget.push(call.token);
-      if (done[call.token].ok) call.made(done[call.token].result);
+      if (!done[call.token].ok) continue;
+      call.made(done[call.token].result);
+      if (done[call.token].during && !call.removing) this.recount = true;
     }
   }
 
@@ -239,11 +281,8 @@ export class Notes {
     const after = replace ? 0 : this.last;
     const added = specs.map((spec, i): Note => {
       const number = after + i + 1, kind = spec.kind ?? 'info';
-      const mark: Mark = {
-        key: `note-${number}`, path: resolve(cwd, spec.file), text: `${number}. ${spec.text}`, position: 'above', hl: HL[kind],
-        indent: true, wrap: 'window', invalidate: true,
-        ...(spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line }),
-      };
+      const at = spec.match === undefined ? { line: spec.line } : { match: spec.match, line: spec.line };
+      const mark = markOf(number, resolve(cwd, spec.file), spec.text, kind, at);
       return { id: this.ids + i + 1, number, path: mark.path!, text: spec.text, kind, mark };
     });
     // Its ids taken, made or not: one made late does not share those given meanwhile.

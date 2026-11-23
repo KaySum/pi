@@ -588,33 +588,44 @@ test('a change Neovim makes only after the notes were read again is known for ma
   assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
   // One Neovim makes during another, before its writes, as an autocommand it sets off may: the
   // notes as Neovim then has them, numbered on from them.
-  let nested!: [string, unknown[]];
-  nvim!.lua = (async (code: string, args?: unknown[]) => {
-    if (args?.[0] !== 'update') return real(code, args);
-    nested = [code, args];
-    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
-  }) as Remote['lua'];
-  await assert.rejects(annotate({ action: 'update', note: 1, text: 'nested' }), /did not answer/);
-  nvim!.lua = (async (code: string, args?: unknown[]) => {
-    if (args?.[0] !== 'set') return real(code, args);
-    nvim!.lua = real;
-    return real(`local function during(...) ${nested[0]} end
+  // The next update lost, Neovim making it in the next call of `fn`, before its writes.
+  const during = async (fn: string, change: Promise<string>) => {
+    let nested!: [string, unknown[]];
+    nvim!.lua = (async (code: string, args?: unknown[]) => {
+      if (args?.[0] !== 'update') return real(code, args);
+      nested = [code, args];
+      throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+    }) as Remote['lua'];
+    await assert.rejects(change, /did not answer/);
+    nvim!.lua = (async (code: string, args?: unknown[]) => {
+      if (args?.[0] !== fn) return real(code, args);
+      nvim!.lua = real;
+      return real(`local function during(...) ${nested[0]} end
 local function call(...) ${code} end
-local nested, args = ...
+local nested, args, fn = ...
 local vt = remote.nvim_virtual_text
-local set = vt.set
-vt.set = function(...)
-  vt.set = set
+local real = vt[fn]
+vt[fn] = function(...)
+  vt[fn] = real
   during(unpack(nested))
-  return set(...)
+  return real(...)
 end
-return call(unpack(args))`, [nested[1], args]);
-  }) as Remote['lua'];
+return call(unpack(args))`, [nested[1], args, fn]);
+    }) as Remote['lua'];
+  };
+  await during('set', annotate({ action: 'update', note: 1, text: 'nested' }));
   await annotate({ action: 'add', replace: true, notes: [{ file: name(path), match: 'function f30() {}\nline 31', text: 'over' }] });
   assert.match(await annotate({ action: 'list' }), /^1\. .*:30-31 .*: over$/);
   // Its anchor as given too, its lines all kept by the next add.
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'next' }] }), /^Added note 2:/);
   assert.match(await annotate({ action: 'list' }), /^1\. .*:30-31 .*: over\n2\. /);
+  // Made during an update, the number of one removed is still not given again.
+  await annotate({ action: 'add', notes: [{ file: name(path), line: 50, text: 'third' }] });
+  await annotate({ action: 'remove', note: 3 });
+  await during('update', annotate({ action: 'update', note: 1, text: 'nested again' }));
+  await annotate({ action: 'update', note: 2, text: 'outer' });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: nested again\n2\. .*: outer$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 60, text: 'fourth' }] }), /^Added note 4:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

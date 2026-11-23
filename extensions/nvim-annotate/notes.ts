@@ -145,7 +145,7 @@ export class Notes {
    * did): `made` once Neovim says it did, with its result. Notes one would remove are taken for
    * removed by whoever asked once they are gone, whenever that is.
    */
-  private pending: { token: string; made: (result: any, marks?: Marks) => void; removing?: Removing }[] = [];
+  private pending: { token: string; fn: string; made: (result: any, marks?: Marks) => void; removing?: Removing }[] = [];
   /** The CALLs no longer asked about, for Neovim to forget with the next (see CALL). */
   private forget: string[] = [];
   /** What the notes are doing, each after the one before: see `queued`. */
@@ -231,7 +231,7 @@ export class Notes {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
       call.made(done[call.token].result, marks);
-      if (done[call.token].during && !call.removing) this.recount = true;
+      if (done[call.token].during && (call.fn === 'set' || call.fn === 'clear')) this.recount = true;
     }
   }
 
@@ -251,7 +251,7 @@ export class Notes {
         result = await run() as [true, T, Done];
       }
     } catch (error) {
-      this.pending.push({ token, made, removing });
+      this.pending.push({ token, fn, made, removing });
       throw error;
     }
     this.forget = this.forget.filter(old => !forget.includes(old));

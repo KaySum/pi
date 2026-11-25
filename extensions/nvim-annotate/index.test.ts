@@ -588,11 +588,12 @@ test('a change Neovim makes only after the notes were read again is known for ma
   assert.match(await annotate({ action: 'list' }), /^1\. .*: reborn\n2\. .*: restoring$/);
   // One Neovim makes during another, before its writes, as an autocommand it sets off may: the
   // notes as Neovim then has them, numbered on from them.
-  // The next update lost, Neovim making it in the next call of `fn`, before its writes.
-  const during = async (fn: string, change: Promise<string>) => {
+  // The next call of `lost` lost, Neovim making it in the next call of `fn`, before its writes,
+  // then running `then`.
+  const during = async (fn: string, change: Promise<string>, lost = 'update', then = '') => {
     let nested!: [string, unknown[]];
     nvim!.lua = (async (code: string, args?: unknown[]) => {
-      if (args?.[0] !== 'update') return real(code, args);
+      if (args?.[0] !== lost) return real(code, args);
       nested = [code, args];
       throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
     }) as Remote['lua'];
@@ -608,6 +609,7 @@ local real = vt[fn]
 vt[fn] = function(...)
   vt[fn] = real
   during(unpack(nested))
+  ${then}
   return real(...)
 end
 return call(unpack(args))`, [nested[1], args, fn]);
@@ -626,6 +628,13 @@ return call(unpack(args))`, [nested[1], args, fn]);
   await annotate({ action: 'update', note: 2, text: 'outer' });
   assert.match(await annotate({ action: 'list' }), /^1\. .*: nested again\n2\. .*: outer$/);
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 60, text: 'fourth' }] }), /^Added note 4:/);
+  // Nor that of one an add made during an update put there, though gone before it was known.
+  const other = await file();
+  const wipe = `vim.api.nvim_buf_delete(vim.fn.bufnr(${JSON.stringify(other)}), { force = true })`;
+  await during('update', annotate({ action: 'add', notes: [{ file: name(other), line: 10, text: 'fifth' }] }), 'set', wipe);
+  await annotate({ action: 'update', note: 2, text: 'outer again' });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*\n2\. .*: outer again\n4\. .*: fourth$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 70, text: 'sixth' }] }), /^Added note 6:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

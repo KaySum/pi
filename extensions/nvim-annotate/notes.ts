@@ -28,6 +28,8 @@ const GROUP = 'nvim-annotate';
 type Marks = Map<string | undefined, VirtualPlaced & { code: string; given?: Mark }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
 type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string }> | [];
+/** What a CALL's change is made with: true if it numbered the notes from 1 again. */
+type Made<T> = (result: T, marks?: Marks) => boolean | void;
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
@@ -130,10 +132,12 @@ export class Notes {
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
   /**
-   * Whether `last` is to be the last number drawn: an add or clear made during another (see
-   * `drawn`) may have come before or after its writes, and so been undone by them or not.
+   * Whether `last` is to be the last number drawn: an add or clear made during a replace or clear
+   * (see `drawn`) may have come before or after its writes, and so been undone by them or not.
    */
   private recount = false;
+  /** The CALLs made that numbered the notes from 1 again: replaces and clears. */
+  private afresh = new Set<string>();
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -145,7 +149,7 @@ export class Notes {
    * did): `made` once Neovim says it did, with its result. Notes one would remove are taken for
    * removed by whoever asked once they are gone, whenever that is.
    */
-  private pending: { token: string; fn: string; made: (result: any, marks?: Marks) => void; removing?: Removing }[] = [];
+  private pending: { token: string; fn: string; made: Made<any>; removing?: Removing }[] = [];
   /** The CALLs no longer asked about, for Neovim to forget with the next (see CALL). */
   private forget: string[] = [];
   /** What the notes are doing, each after the one before: see `queued`. */
@@ -230,13 +234,15 @@ export class Notes {
     for (const call of settled) {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
-      call.made(done[call.token].result, marks);
-      if (done[call.token].during && (call.fn === 'set' || call.fn === 'clear')) this.recount = true;
+      if (call.made(done[call.token].result, marks)) this.afresh.add(call.token);
+      // Its numbers given still, unless made during a replace or clear (see `recount`).
+      const during = done[call.token].during;
+      if (during && this.afresh.has(during) && (call.fn === 'set' || call.fn === 'clear')) this.recount = true;
     }
   }
 
   /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */
-  private async call<T>(fn: string, args: unknown[], made: (result: T, marks?: Marks) => void, removing?: Removing): Promise<T> {
+  private async call<T>(fn: string, args: unknown[], made: Made<T>, removing?: Removing): Promise<T> {
     const token = String(++this.calls);
     const forget = [...this.forget];
     const pending = this.pending.map(call => call.token);
@@ -257,7 +263,7 @@ export class Notes {
     this.forget = this.forget.filter(old => !forget.includes(old));
     this.settle(result[2]);
     this.forget.push(token);
-    made(result[1]);
+    if (made(result[1])) this.afresh.add(token);
     return result[1];
   }
 
@@ -299,6 +305,7 @@ export class Notes {
       this.notes = set;
       this.last = after + added.length;
       if (replace) this.at = 0;
+      return replace;
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
@@ -485,6 +492,7 @@ export class Notes {
       else this.drop(this.notes, by, marks);
       this.notes = [];
       this.at = this.last = 0;
+      return true;
     }, { notes: all, by, marks });
     return numbers;
   }

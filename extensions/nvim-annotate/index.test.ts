@@ -635,6 +635,34 @@ return call(unpack(args))`, [nested[1], args, fn]);
   await annotate({ action: 'update', note: 2, text: 'outer again' });
   assert.match(await annotate({ action: 'list' }), /^1\. .*\n2\. .*: outer again\n4\. .*: fourth$/);
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 70, text: 'sixth' }] }), /^Added note 6:/);
+  // A clear made during a replace, after its writes, both answers lost: numbered from 1 again.
+  let cleared!: [string, unknown[]];
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'clear') return real(code, args);
+    cleared = [code, args];
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'clear' }), /did not answer/);
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    nvim!.lua = real;
+    await real(`local function during(...) ${cleared[0]} end
+local function call(...) ${code} end
+local nested, args = ...
+local vt = remote.nvim_virtual_text
+local set = vt.set
+vt.set = function(...)
+  vt.set = set
+  local ids = set(...)
+  during(unpack(nested))
+  return ids
+end
+return call(unpack(args))`, [cleared[1], args]);
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'add', replace: true, notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `at ${line}` })) }), /did not answer/);
+  assert.equal(await annotate({ action: 'list' }), 'No notes');
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'first again' }] }), /^Added note 1:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

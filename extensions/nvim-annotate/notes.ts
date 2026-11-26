@@ -231,14 +231,17 @@ export class Notes {
     if (Array.isArray(done)) return;
     const settled = this.pending.filter(call => done[call.token]).sort((a, b) => done[a.token].made - done[b.token].made);
     this.pending = this.pending.filter(call => !done[call.token]);
+    const within: string[] = [];
     for (const call of settled) {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
       if (call.made(done[call.token].result, marks)) this.afresh.add(call.token);
-      // Its numbers given still, unless made during a replace or clear (see `recount`).
       const during = done[call.token].during;
-      if (during && this.afresh.has(during) && (call.fn === 'set' || call.fn === 'clear')) this.recount = true;
+      if (during && (call.fn === 'set' || call.fn === 'clear')) within.push(during);
     }
+    // Their numbers given still, unless made during a replace or clear (see `recount`): one
+    // settled here too, after them, as it finished after them.
+    if (within.some(token => this.afresh.has(token))) this.recount = true;
   }
 
   /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */

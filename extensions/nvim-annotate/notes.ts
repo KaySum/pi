@@ -28,7 +28,7 @@ const GROUP = 'nvim-annotate';
 type Marks = Map<string | undefined, VirtualPlaced & { code: string; given?: Mark }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
 type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string; writes: Writes }> | [];
-/** How many changes had been asked of the marks as a CALL started, and as it ended (see CALL). */
+/** How many changes had been asked of the group's marks as a CALL started, and as it ended (see CALL). */
 type Writes = { start: number; stop: number };
 /** The last number after an add or clear: `afresh` if it numbered them from 1 again, as a replace or clear does. */
 type Epoch = { last: number; afresh: boolean };
@@ -58,8 +58,8 @@ return { true, marks, done }`;
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
 // says (see MARKS); the tokens of those no longer asked about; and of those still asked about, to
 // say which ran before this one (one that ran during another, in an autocommand it set off, is
-// noted so, and the changes asked of the marks before and after each: see `numbered`). False if
-// it is not installed yet.
+// noted so, and the changes asked of the group's marks before and after each, not another
+// group's: see `numbered`). False if it is not installed yet.
 const CALL = `local vt, fn = remote.nvim_virtual_text, ...
 if not vt then return false end
 local args = { select(2, ...) }
@@ -72,16 +72,19 @@ end
 for _, token in ipairs(call.pending) do
   done[token] = calls[token]
 end
-local during, start = remote.nvim_annotate_running, vt.writes or 0
+local function writes()
+  return type(vt.writes) == 'table' and vt.writes[args[1]] or 0
+end
+local during, start = remote.nvim_annotate_running, writes()
 remote.nvim_annotate_running = call.token
 local ok, result = pcall(vt[fn], unpack(args))
 remote.nvim_annotate_running = during
 remote.nvim_annotate_made = (remote.nvim_annotate_made or 0) + 1
-local writes = { start = start, stop = vt.writes or 0 }
-calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made, during = during, writes = writes }
+local wrote = { start = start, stop = writes() }
+calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made, during = during, writes = wrote }
 if not ok then error(result, 0) end
 if result == nil then result = vim.NIL end
-return { true, result, done, writes }`;
+return { true, result, done, wrote }`;
 // Show the note whose mark has key `key` where it is, in its buffer however named now, both in
 // this one call: no other call comes between. Showing can move it all the same (a reload of its
 // file, the user's autocommands as its buffer is entered), so it is found again after, and shown

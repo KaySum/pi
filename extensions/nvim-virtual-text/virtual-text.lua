@@ -23,7 +23,8 @@ if not state then
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come; `unanchored`, those reloaded and not
-	-- yet reanchored. `writes`: by group, how many changes have been asked of its marks (see `wrote`).
+	-- yet reanchored. `writes`: by group, how many changes have been asked of its marks (see `wrote`);
+	-- `lost`: by group, the ids of marks gone unasked (see `lost`).
 	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {}, unanchored = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
@@ -132,9 +133,18 @@ if not state then
 end
 
 -- Forget `buf`'s marks and what is kept for them: it is wiped.
+-- The mark `id` gone unasked (its buffer wiped, its text gone on a reload, its ttl out), noted
+-- in `lost[group]`: for a caller to tell that from a removal of its own.
+local function lost(id, mark)
+	state.lost = state.lost or {}
+	state.lost[mark.group] = state.lost[mark.group] or {}
+	state.lost[mark.group][id] = true
+end
+
 function state.forget(buf)
 	for id, mark in pairs(state.marks) do
 		if mark.spec.buf == buf then
+			lost(id, mark)
 			state.marks[id] = nil
 		end
 	end
@@ -1033,6 +1043,7 @@ local function arm(id, mark)
 	if mark.spec.ttl then
 		vim.defer_fn(function()
 			if state.marks[id] and state.marks[id].generation == generation then
+				lost(id, state.marks[id])
 				remove(id)
 			end
 		end, mark.spec.ttl)
@@ -1440,6 +1451,7 @@ function state.reanchor(buf, late)
 			if not found then
 				-- Not found whole, nor on its lines, its text is gone.
 				if spec.invalidate then
+					lost(id, mark)
 					remove(id)
 				elseif gone then
 					install(id, mark.group, spec, false, true)

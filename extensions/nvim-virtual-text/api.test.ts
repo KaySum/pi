@@ -724,6 +724,22 @@ test('a mark set into another buffer leaves nothing in its old one, though the n
   assert.deepEqual([await shown(from), await shown(to)], [[], []]);
 });
 
+test('every change asked of the marks is counted, a set or clear that changes nothing too', async () => {
+  const path = await file();
+  const writes = () => lua(`return require('nvim_remote.v1').contexts[${remote.channel}].nvim_virtual_text.writes or 0`);
+  const mark = { key: 'one', path, line: 1, text: 'one' };
+  let before = await writes();
+  await text.set([mark]); // Made, and placed.
+  assert.equal(await writes(), before + 2);
+  before = await writes();
+  await text.set([mark]); // Made, all left be.
+  assert.equal(await writes(), before + 1);
+  await text.clear();
+  before = await writes();
+  await text.clear(); // None to remove.
+  assert.equal(await writes(), before + 1);
+});
+
 test('set makes a list the group\'s marks: the same left be, the changed redrawn, the rest placed or gone', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

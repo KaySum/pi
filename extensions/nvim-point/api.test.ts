@@ -762,6 +762,19 @@ test('a wait ends when it says: no later try moves the editor', async () => {
   assert.equal(calls, 2);
 });
 
+test('a wait ends when it is waited out, though the clock says a little less then', async () => {
+  // Busy once; a timer that ends before the clock reaches the wait's end must not try again.
+  const now = Date.now;
+  let behind = 0, calls = 0;
+  Date.now = () => now() - behind;
+  try {
+    // Behind once it is waiting, as if the timer ended early.
+    const fake = { lua: async () => (++calls === 1 ? (setImmediate(() => { behind = 5; }), { shown: false, busy: 'i' }) : { shown: true, win: 1, buf: 1, opened: false, scrolled: false }) };
+    assert.deepEqual(await point(fake as never, dir).show({ path: 'x.ts', line: 1 }, { wait: 10 }), { shown: false, busy: 'i' });
+    assert.equal(calls, 1);
+  } finally { Date.now = now; }
+});
+
 // --- What it resolves to ----------------------------------------------------------------------
 
 test('it resolves to the window, the buffer, and whether it opened a window or scrolled', async () => {

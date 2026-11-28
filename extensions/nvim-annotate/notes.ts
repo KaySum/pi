@@ -38,8 +38,10 @@ type Made<T> = (result: T, marks?: Marks) => Epoch | void;
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
 // CALL) so that a read that fails loses nothing; and the group's marks, each with the code on its
-// line and the mark as last given it (see `drawn`). False if nvim-virtual-text is not installed yet. All in one call: neither a change nor an
-// edit can come between what is done and where a mark is, and what is there.
+// line and the mark as last given it (see `drawn`); and the ids of the group's marks gone
+// unasked, by the editor (see `marks`). False if nvim-virtual-text is not installed yet. All in
+// one call: neither a change nor an edit can come between what is done and where a mark is, and
+// what is there.
 const MARKS = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
 for _, token in ipairs(...) do
   done[token] = calls[token]
@@ -52,7 +54,7 @@ for _, mark in ipairs(marks) do
   mark.code = ok and lines[1] or ''
   mark.given = vt.marks[mark.id] and vt.marks[mark.id].given
 end
-return { true, marks, done }`;
+return { true, marks, done, vim.tbl_keys(vt.lost and vt.lost[group] or {}) }`;
 // Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
 // { token, forget, pending }: the token under which to note that it has run, how, and when among
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
@@ -149,6 +151,8 @@ export class Notes {
   private within: (Epoch & Writes & { token: string; during: string })[] = [];
   /** The notes changes made late added, settled since the marks were last read (see `marks`). */
   private late: Note[] = [];
+  /** The id nvim-virtual-text gave each note added, as its add made it. */
+  private placed = new WeakMap<Note, number>();
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -191,14 +195,14 @@ export class Notes {
    * read again, is forgotten: it would otherwise be given again, and fail, with every add.
    */
   private async marks() {
-    type Read = [true, (VirtualPlaced & { code: string; given?: Mark })[], Done] | false;
+    type Read = [true, (VirtualPlaced & { code: string; given?: Mark })[], Done, number[]] | false;
     const read = (): Promise<Read> => this.remote.lua(MARKS, [this.pending.map(call => call.token), GROUP]);
     let result = await read();
     if (result === false) {
       await this.text.list();
       result = await read();
     }
-    const [, placed, done] = result || [true, [], {}];
+    const [, placed, done, lost]: Exclude<Read, false> = result || [true, [], {}, []];
     const marks: Marks = new Map(placed.map(mark => [mark.key, mark]));
     this.settle(done, marks);
     for (const { removing } of this.pending) {
@@ -206,9 +210,10 @@ export class Notes {
     }
     const gone = this.notes.filter(note => !marks.has(note.mark.key));
     this.notes = this.notes.filter(note => !gone.includes(note));
-    // One a change made late added that Neovim has not: undone there by a later change of Pi's
-    // before it was ever seen, and so not added at all.
-    this.changes.added = this.changes.added.filter(note => !gone.includes(note) || !this.late.includes(note));
+    // One a change made late added that Neovim has not, and did not lose unasked: undone there by
+    // a later change of Pi's before it was ever seen, and so not added at all.
+    const undone = (note: Note) => gone.includes(note) && this.late.includes(note) && !lost.includes(this.placed.get(note)!);
+    this.changes.added = this.changes.added.filter(note => !undone(note));
     this.late = [];
     this.numbered();
     this.drawn(placed);
@@ -334,7 +339,8 @@ export class Notes {
     // Its ids taken, made or not: one made late does not share those given meanwhile.
     this.ids += added.length;
     // Made, late too, the notes are those it set: any others there then it removed, as Pi.
-    const made = () => {
+    const made = (ids: number[]) => {
+      added.forEach((note, i) => this.placed.set(note, ids[kept.length + i]));
       for (const [note, was] of kept) Object.assign(note, was);
       const set = [...kept.map(([note]) => note), ...added];
       if (replace) this.retire(this.notes);

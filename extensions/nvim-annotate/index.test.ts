@@ -821,6 +821,14 @@ return call(unpack(args))`, [middle[1], inner[1], args]);
   assert.equal(await annotate({ action: 'list' }), 'No notes');
   assert.deepEqual(await between(), []);
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 60, text: 'one' }] }), /^Added note 1:/);
+  // A note an add made late drew, its buffer then wiped before Pi read it: gone, and said so.
+  const tail = await file();
+  const adding = delay('set');
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(tail), line: 10, text: 'tail' }] }), /did not answer/);
+  await adding();
+  await lua('vim.api.nvim_buf_delete(vim.fn.bufnr(...), { force = true })', tail);
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: one$/);
+  assert.match((await between()).join('\n'), new RegExp(`note 2 \\(${name(tail)}\\) is gone from the editor`));
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

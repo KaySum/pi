@@ -24,7 +24,7 @@ if not state then
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come; `unanchored`, those reloaded and not
 	-- yet reanchored. `writes`: by group, how many changes have been asked of its marks (see `wrote`);
-	-- `lost`: by group, the ids of marks gone unasked (see `lost`).
+	-- `lost`: for a group a caller follows so, the ids of its marks gone unasked (see `lost`).
 	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {}, unanchored = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
@@ -134,11 +134,13 @@ end
 
 -- Forget `buf`'s marks and what is kept for them: it is wiped.
 -- The mark `id` gone unasked (its buffer wiped, its text gone on a reload, its ttl out), noted
--- in `lost[group]`: for a caller to tell that from a removal of its own.
+-- in `lost[group]` if a caller made that, to tell such a loss from a removal of its own, and
+-- takes out those it has seen: none kept for a group whose losses nobody reads.
 local function lost(id, mark)
-	state.lost = state.lost or {}
-	state.lost[mark.group] = state.lost[mark.group] or {}
-	state.lost[mark.group][id] = true
+	local ids = state.lost and state.lost[mark.group]
+	if ids then
+		ids[id] = true
+	end
 end
 
 function state.forget(buf)

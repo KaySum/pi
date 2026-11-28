@@ -747,18 +747,23 @@ test('every change asked of a group\'s marks is counted, a set or clear that cha
   assert.equal(await writes(), before);
 });
 
-test('a mark gone unasked, its buffer wiped, is noted lost; one removed as asked is not', async () => {
+test('a mark gone unasked, its buffer wiped, is noted lost for a group followed so; one removed as asked is not', async () => {
   const [kept, wiped] = [await file(), await file()];
   await open(kept);
+  const state = `require('nvim_remote.v1').contexts[${remote.channel}].nvim_virtual_text`;
+  await lua(`local vt = ${state}; vt.lost = vt.lost or {}; vt.lost.test = {}`);
   const [removed, gone] = await text.set([{ key: 'one', path: kept, line: 1, text: 'one' }, { key: 'two', path: wiped, line: 1, text: 'two' }]);
-  const lost = () => lua(`local lost = require('nvim_remote.v1').contexts[${remote.channel}].nvim_virtual_text.lost
-    return vim.tbl_keys(lost and lost.test or {})`);
+  const other = virtualText(remote, 'other');
+  await other.place({ path: wiped, line: 2, text: 'theirs' });
+  const lost = (group: string) => lua(`local lost = ${state}.lost
+    return vim.tbl_keys(lost and lost[...] or {})`, group);
   await text.remove(removed);
   await lua('vim.api.nvim_buf_delete(vim.fn.bufnr(...), { force = true })', wiped);
   assert.deepEqual(await text.list(), []);
-  const ids = await lost();
+  const ids = await lost('test');
   assert.ok(ids.includes(gone));
   assert.ok(!ids.includes(removed));
+  assert.deepEqual(await lost('other'), []); // Not followed: none kept.
 });
 
 test('set makes a list the group\'s marks: the same left be, the changed redrawn, the rest placed or gone', async () => {

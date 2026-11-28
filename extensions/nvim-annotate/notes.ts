@@ -27,12 +27,11 @@ const GROUP = 'nvim-annotate';
 /** The group's marks by key, each with the code on its line (see MARKS). */
 type Marks = Map<string | undefined, VirtualPlaced & { code: string; given?: Mark }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
-type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string }> | [];
-/**
- * The notes an add or clear set, their marks as given, and the last number after: `afresh` if
- * it numbered them from 1 again, as a replace or clear does.
- */
-type Epoch = { marks: Mark[]; last: number; afresh: boolean };
+type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string; writes: Writes }> | [];
+/** How many changes had been asked of the marks as a CALL started, and as it ended (see CALL). */
+type Writes = { start: number; stop: number };
+/** The last number after an add or clear: `afresh` if it numbered them from 1 again, as a replace or clear does. */
+type Epoch = { last: number; afresh: boolean };
 /** What a CALL's change is made with; an add or clear says what it set. */
 type Made<T> = (result: T, marks?: Marks) => Epoch | void;
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
@@ -59,7 +58,8 @@ return { true, marks, done }`;
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
 // says (see MARKS); the tokens of those no longer asked about; and of those still asked about, to
 // say which ran before this one (one that ran during another, in an autocommand it set off, is
-// noted so: see `drawn`). False if it is not installed yet.
+// noted so, and the changes asked of the marks before and after each: see `numbered`). False if
+// it is not installed yet.
 const CALL = `local vt, fn = remote.nvim_virtual_text, ...
 if not vt then return false end
 local args = { select(2, ...) }
@@ -72,15 +72,16 @@ end
 for _, token in ipairs(call.pending) do
   done[token] = calls[token]
 end
-local during = remote.nvim_annotate_running
+local during, start = remote.nvim_annotate_running, vt.writes or 0
 remote.nvim_annotate_running = call.token
 local ok, result = pcall(vt[fn], unpack(args))
 remote.nvim_annotate_running = during
 remote.nvim_annotate_made = (remote.nvim_annotate_made or 0) + 1
-calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made, during = during }
+local writes = { start = start, stop = vt.writes or 0 }
+calls[call.token] = { ok = ok, result = ok and result or nil, made = remote.nvim_annotate_made, during = during, writes = writes }
 if not ok then error(result, 0) end
 if result == nil then result = vim.NIL end
-return { true, result, done }`;
+return { true, result, done, writes }`;
 // Show the note whose mark has key `key` where it is, in its buffer however named now, both in
 // this one call: no other call comes between. Showing can move it all the same (a reload of its
 // file, the user's autocommands as its buffer is entered), so it is found again after, and shown
@@ -137,12 +138,12 @@ export class Notes {
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
   /** The CALLs made that numbered the notes from 1 again, replaces and clears, by token. */
-  private afresh = new Map<string, Epoch>();
+  private afresh = new Map<string, Epoch & Writes>();
   /**
    * Adds and clears made during another CALL, by its token: one made during a replace or clear
    * may have come before or after its writes, and so been undone by them or not (see `numbered`).
    */
-  private within: { during: string; epoch: Epoch }[] = [];
+  private within: (Epoch & Writes & { during: string })[] = [];
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -199,22 +200,22 @@ export class Notes {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
     this.notes = this.notes.filter(note => marks.has(note.mark.key));
-    this.numbered(marks);
+    this.numbered();
     this.drawn(placed);
     return marks;
   }
 
   /**
    * The last number of an add or clear made during a replace or clear, once both are settled: of
-   * whichever has its notes drawn, as its writes came last; else of the one that set none.
+   * whichever made the last changes to the marks, as they are as it left them; the higher, so that
+   * none is given again, if the replace or clear changed them both before it and after.
    */
-  private numbered(marks: Marks) {
-    const drawn = (epoch: Epoch) => epoch.marks.some(mark => isDeepStrictEqual(marks.get(mark.key)?.given, mark));
-    this.within = this.within.filter(({ during, epoch }) => {
-      const reset = this.afresh.get(during);
-      if (!reset) return this.pending.some(call => call.token === during);
-      const last = drawn(reset) || !drawn(epoch) && !reset.marks.length ? reset : epoch;
-      this.last = last.last;
+  private numbered() {
+    this.within = this.within.filter(made => {
+      const reset = this.afresh.get(made.during);
+      if (!reset) return this.pending.some(call => call.token === made.during);
+      const before = made.start > reset.start, after = reset.stop > made.stop;
+      this.last = before && after ? Math.max(reset.last, made.last) : after ? reset.last : made.last;
       return false;
     });
     // None waiting, none can be made during these.
@@ -255,10 +256,10 @@ export class Notes {
     for (const call of settled) {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
-      const epoch = call.made(done[call.token].result, marks);
-      if (epoch?.afresh) this.afresh.set(call.token, epoch);
-      const during = done[call.token].during;
-      if (epoch && during) this.within.push({ during, epoch });
+      const { result, during, writes } = done[call.token];
+      const epoch = call.made(result, marks);
+      if (epoch?.afresh) this.afresh.set(call.token, { ...epoch, ...writes });
+      if (epoch && during) this.within.push({ ...epoch, ...writes, during });
     }
   }
 
@@ -268,14 +269,14 @@ export class Notes {
     const forget = [...this.forget];
     const pending = this.pending.map(call => call.token);
     // Through JSON, as undefined would reach Lua as vim.NIL.
-    const run = (): Promise<[true, T, Done] | false> =>
+    const run = (): Promise<[true, T, Done, Writes] | false> =>
       this.remote.lua(CALL, [fn, GROUP, ...JSON.parse(JSON.stringify(args)), { token, forget, pending }]);
-    let result: [true, T, Done] | false;
+    let result: [true, T, Done, Writes] | false;
     try {
       result = await run();
       if (result === false) {
         await this.text.list();
-        result = await run() as [true, T, Done];
+        result = await run() as [true, T, Done, Writes];
       }
     } catch (error) {
       this.pending.push({ token, made, removing });
@@ -285,7 +286,7 @@ export class Notes {
     this.settle(result[2]);
     this.forget.push(token);
     const epoch = made(result[1]);
-    if (epoch?.afresh) this.afresh.set(token, epoch);
+    if (epoch?.afresh) this.afresh.set(token, { ...epoch, ...result[3] });
     return result[1];
   }
 
@@ -327,7 +328,7 @@ export class Notes {
       this.notes = set;
       this.last = after + added.length;
       if (replace) this.at = 0;
-      return { marks: set.map(note => note.mark), last: this.last, afresh: replace };
+      return { last: this.last, afresh: replace };
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
@@ -514,7 +515,7 @@ export class Notes {
       else this.drop(this.notes, by, marks);
       this.notes = [];
       this.at = this.last = 0;
-      return { marks: [], last: 0, afresh: true };
+      return { last: 0, afresh: true };
     }, { notes: all, by, marks });
     return numbers;
   }

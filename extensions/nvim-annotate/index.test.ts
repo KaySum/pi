@@ -692,6 +692,66 @@ return call(unpack(args))`, [appended[1], args, elsewhere]);
   await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 60, text: 'replacing' }] });
   assert.match(await annotate({ action: 'list' }), /^1\. .*: first again$/);
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 70, text: 'third' }] }), /^Added note 3:/);
+  // So too when the replace has one of the add's notes just as it is: one alike tells neither.
+  const away = await file();
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    appended = [code, args];
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(away), line: 10, text: 'fourth' }] }), /did not answer/);
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    nvim!.lua = real;
+    return real(`local function during(...) ${appended[0]} end
+local function call(...) ${code} end
+local nested, args, wiped = ...
+local vt = remote.nvim_virtual_text
+local set = vt.set
+vt.set = function(...)
+  vt.set = set
+  local ids = set(...)
+  during(unpack(nested))
+  vim.api.nvim_buf_delete(vim.fn.bufnr(wiped), { force = true })
+  return ids
+end
+return call(unpack(args))`, [appended[1], args, away]);
+  }) as Remote['lua'];
+  await annotate({ action: 'add', replace: true, notes: [
+    { file: name(path), line: 40, text: 'first again' },
+    { file: name(path), line: 80, text: 'not kept' },
+  ] });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: first again\n3\. .*: third$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 90, text: 'fifth' }] }), /^Added note 5:/);
+  // And when the replace has all its notes just as they are: Neovim says which made its changes last.
+  await annotate({ action: 'add', replace: true, notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  const gone = await file();
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    appended = [code, args];
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(gone), line: 10, text: 'third' }] }), /did not answer/);
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    nvim!.lua = real;
+    return real(`local function during(...) ${appended[0]} end
+local function call(...) ${code} end
+local nested, args, wiped = ...
+local vt = remote.nvim_virtual_text
+local set = vt.set
+vt.set = function(...)
+  vt.set = set
+  local ids = set(...)
+  during(unpack(nested))
+  vim.api.nvim_buf_delete(vim.fn.bufnr(wiped), { force = true })
+  return ids
+end
+return call(unpack(args))`, [appended[1], args, gone]);
+  }) as Remote['lua'];
+  await annotate({ action: 'add', replace: true, notes: [10, 20].map(line => ({ file: name(path), line, text: `at ${line}` })) });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: at 10\n2\. .*: at 20$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 30, text: 'fourth' }] }), /^Added note 4:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

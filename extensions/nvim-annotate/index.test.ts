@@ -829,6 +829,17 @@ return call(unpack(args))`, [middle[1], inner[1], args]);
   await lua('vim.api.nvim_buf_delete(vim.fn.bufnr(...), { force = true })', tail);
   assert.match(await annotate({ action: 'list' }), /^1\. .*: one$/);
   assert.match((await between()).join('\n'), new RegExp(`note 2 \\(${name(tail)}\\) is gone from the editor`));
+  // Read again, the losses said are forgotten there: none kept.
+  await annotate({ action: 'list' });
+  assert.equal(await real('return vim.tbl_count(remote.nvim_virtual_text.lost["nvim-annotate"])', []), 0);
+  // A replace made during another, before its writes, in another file: the note lost is in the
+  // file the other put it in, not the one its own replace did.
+  const [retired, winner] = [await file(), await file()];
+  await during('set', annotate({ action: 'add', replace: true, notes: [{ file: name(retired), line: 30, text: 'late' }] }), 'set');
+  await annotate({ action: 'add', replace: true, notes: [{ file: name(winner), line: 60, text: 'winner' }] });
+  await lua('vim.api.nvim_buf_delete(vim.fn.bufnr(...), { force = true })', winner);
+  assert.equal(await annotate({ action: 'list' }), 'No notes');
+  assert.match((await between()).join('\n'), new RegExp(`note 1 \\(${name(winner)}\\) is gone from the editor`));
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

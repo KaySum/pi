@@ -39,22 +39,29 @@ type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
 // CALL) so that a read that fails loses nothing; and the group's marks, each with the code on its
 // line and the mark as last given it (see `drawn`); and the ids of the group's marks gone
-// unasked, by the editor (see `marks`). False if nvim-virtual-text is not installed yet. All in
+// unasked, by the editor (see `marks`), noted from the first read on and kept until given back
+// as `seen`, those the read before said. False if nvim-virtual-text is not installed yet. All in
 // one call: neither a change nor an edit can come between what is done and where a mark is, and
 // what is there.
 const MARKS = `local calls, done = remote.nvim_annotate_calls or {}, vim.empty_dict()
 for _, token in ipairs(...) do
   done[token] = calls[token]
 end
-local vt, group = remote.nvim_virtual_text, select(2, ...)
+local vt, group, seen = remote.nvim_virtual_text, select(2, ...)
 if not vt then return false end
+vt.lost = vt.lost or {}
+local lost = vt.lost[group] or {}
+vt.lost[group] = lost
+for _, id in ipairs(seen) do
+  lost[id] = nil
+end
 local marks = vt.list(group, {})
 for _, mark in ipairs(marks) do
   local ok, lines = pcall(vim.api.nvim_buf_get_lines, mark.buf, mark.line - 1, mark.line, false)
   mark.code = ok and lines[1] or ''
   mark.given = vt.marks[mark.id] and vt.marks[mark.id].given
 end
-return { true, marks, done, vim.tbl_keys(vt.lost and vt.lost[group] or {}) }`;
+return { true, marks, done, vim.tbl_keys(lost) }`;
 // Call nvim-virtual-text's `fn` with the arguments after it, as its own calls are made; the last,
 // { token, forget, pending }: the token under which to note that it has run, how, and when among
 // the others, so that one whose answer was lost (timed out) is known for done or not once Neovim
@@ -151,6 +158,8 @@ export class Notes {
   private within: (Epoch & Writes & { token: string; during: string })[] = [];
   /** The notes changes made late added, settled since the marks were last read (see `marks`). */
   private late: Note[] = [];
+  /** The ids of the marks gone unasked that the marks last read said, for Neovim to forget with the next. */
+  private seen: number[] = [];
   /** The id nvim-virtual-text gave each note added, as its add made it. */
   private placed = new WeakMap<Note, number>();
   /** The last id given. */
@@ -196,13 +205,14 @@ export class Notes {
    */
   private async marks() {
     type Read = [true, (VirtualPlaced & { code: string; given?: Mark })[], Done, number[]] | false;
-    const read = (): Promise<Read> => this.remote.lua(MARKS, [this.pending.map(call => call.token), GROUP]);
+    const read = (): Promise<Read> => this.remote.lua(MARKS, [this.pending.map(call => call.token), GROUP, this.seen]);
     let result = await read();
     if (result === false) {
       await this.text.list();
       result = await read();
     }
     const [, placed, done, lost]: Exclude<Read, false> = result || [true, [], {}, []];
+    this.seen = lost;
     const marks: Marks = new Map(placed.map(mark => [mark.key, mark]));
     this.settle(done, marks);
     for (const { removing } of this.pending) {
@@ -251,11 +261,11 @@ export class Notes {
       const kind = KINDS.find(kind => HL[kind] === given?.hl);
       if (!given || !number || !kind || typeof given.text !== 'string' || !given.text.startsWith(`${number}. `)) continue;
       // As given, its anchor too (a match, the lines it takes in): given so again, it stays as it is.
-      const as = { text: given.text.slice(`${number}. `.length), kind, mark: given };
+      const as = { path: given.path!, text: given.text.slice(`${number}. `.length), kind, mark: given };
       this.last = Math.max(this.last, number);
       const note = this.notes.find(note => note.mark.key === key);
       if (!note) {
-        const taken: Note = { id: ++this.ids, number, path: given.path!, ...as };
+        const taken: Note = { id: ++this.ids, number, ...as };
         this.notes.push(taken);
         this.changes.added.push(taken);
       } else if (!isDeepStrictEqual(note.mark, given)) Object.assign(note, as);

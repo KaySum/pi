@@ -711,6 +711,19 @@ test('an update whose match is not found leaves the mark as it was', async () =>
   assert.equal((await shown(path)).length, 1);
 });
 
+test('a mark set into another buffer leaves nothing in its old one, though the new extmarks have its old ids', async () => {
+  const [from, to] = [await file(), await file()];
+  await open(from);
+  const [id] = await text.set([{ key: 'one', path: from, line: 1, text: 'here' }, { key: 'two', path: from, line: 3, text: 'kept' }]);
+  // Both buffers new, the extmarks of each numbered from 1: drawn in `to` after the same trial
+  // drawings as in `from`, 'one' has the ids it had there.
+  assert.deepEqual(await text.set([{ key: 'one', path: to, line: 2, text: 'there' }]), [id]);
+  assert.deepEqual(await shown(from), []);
+  assert.equal((await shown(to)).length, 1);
+  await text.clear();
+  assert.deepEqual([await shown(from), await shown(to)], [[], []]);
+});
+
 test('set makes a list the group\'s marks: the same left be, the changed redrawn, the rest placed or gone', async () => {
   const path = await file('a\nb\nc\nd\n');
   await open(path);

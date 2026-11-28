@@ -975,8 +975,10 @@ local function draw(group, spec, resolve, old)
 		error(anchor, 0)
 	end
 	if old then
+		-- Ids are a buffer's own: one in another buffer is another extmark, though the same number.
+		local same = old.spec.buf == buf and old.ns == ns
 		delete(old.spec.buf, old.ns, vim.tbl_filter(function(extmark)
-			return not vim.tbl_contains(vim.tbl_values(extmarks), extmark)
+			return not (same and vim.tbl_contains(vim.tbl_values(extmarks), extmark))
 		end, vim.tbl_values(old.extmarks)))
 	end
 	return ns, extmarks, anchor

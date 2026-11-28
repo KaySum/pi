@@ -146,7 +146,9 @@ export class Notes {
    * Adds and clears made during another CALL, by its token: one made during a replace or clear
    * may have come before or after its writes, and so been undone by them or not (see `numbered`).
    */
-  private within: (Epoch & Writes & { during: string })[] = [];
+  private within: (Epoch & Writes & { token: string; during: string })[] = [];
+  /** The notes changes made late added, settled since the marks were last read (see `marks`). */
+  private late: Note[] = [];
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -202,7 +204,12 @@ export class Notes {
     for (const { removing } of this.pending) {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
-    this.notes = this.notes.filter(note => marks.has(note.mark.key));
+    const gone = this.notes.filter(note => !marks.has(note.mark.key));
+    this.notes = this.notes.filter(note => !gone.includes(note));
+    // One a change made late added that Neovim has not: undone there by a later change of Pi's
+    // before it was ever seen, and so not added at all.
+    this.changes.added = this.changes.added.filter(note => !gone.includes(note) || !this.late.includes(note));
+    this.late = [];
     this.numbered();
     this.drawn(placed);
     return marks;
@@ -219,6 +226,9 @@ export class Notes {
       if (!reset) return this.pending.some(call => call.token === made.during);
       const before = made.start > reset.start, after = reset.stop > made.stop;
       this.last = before && after ? Math.max(reset.last, made.last) : after ? reset.last : made.last;
+      // The replace or clear ends so, as one made during another in turn, settled after this.
+      reset.last = this.last;
+      for (const outer of this.within) if (outer.token === made.during) outer.last = this.last;
       return false;
     });
     // None waiting, none can be made during these.
@@ -260,9 +270,11 @@ export class Notes {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
       const { result, during, writes } = done[call.token];
+      const added = this.changes.added.length;
       const epoch = call.made(result, marks);
+      this.late.push(...this.changes.added.slice(added));
       if (epoch?.afresh) this.afresh.set(call.token, { ...epoch, ...writes });
-      if (epoch && during) this.within.push({ ...epoch, ...writes, during });
+      if (epoch && during) this.within.push({ ...epoch, ...writes, token: call.token, during });
     }
   }
 

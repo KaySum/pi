@@ -663,6 +663,35 @@ return call(unpack(args))`, [cleared[1], args]);
   await assert.rejects(annotate({ action: 'add', replace: true, notes: [10, 20, 30].map(line => ({ file: name(path), line, text: `at ${line}` })) }), /did not answer/);
   assert.equal(await annotate({ action: 'list' }), 'No notes');
   assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 40, text: 'first again' }] }), /^Added note 1:/);
+  // An add made during a replace, after its writes, its note's buffer then wiped: its numbers stand.
+  const elsewhere = await file();
+  let appended!: [string, unknown[]];
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    appended = [code, args];
+    throw new Error('Neovim did not answer within 150 ms; whatever was asked may still finish there');
+  }) as Remote['lua'];
+  await assert.rejects(annotate({ action: 'add', notes: [{ file: name(elsewhere), line: 10, text: 'second' }] }), /did not answer/);
+  nvim!.lua = (async (code: string, args?: unknown[]) => {
+    if (args?.[0] !== 'set') return real(code, args);
+    nvim!.lua = real;
+    return real(`local function during(...) ${appended[0]} end
+local function call(...) ${code} end
+local nested, args, wiped = ...
+local vt = remote.nvim_virtual_text
+local set = vt.set
+vt.set = function(...)
+  vt.set = set
+  local ids = set(...)
+  during(unpack(nested))
+  vim.api.nvim_buf_delete(vim.fn.bufnr(wiped), { force = true })
+  return ids
+end
+return call(unpack(args))`, [appended[1], args, elsewhere]);
+  }) as Remote['lua'];
+  await annotate({ action: 'add', replace: true, notes: [{ file: name(path), line: 60, text: 'replacing' }] });
+  assert.match(await annotate({ action: 'list' }), /^1\. .*: first again$/);
+  assert.match(await annotate({ action: 'add', notes: [{ file: name(path), line: 70, text: 'third' }] }), /^Added note 3:/);
 });
 
 test('a replace refused leaves the notes as they were, though its notes have their texts', async () => {

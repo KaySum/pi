@@ -28,8 +28,13 @@ const GROUP = 'nvim-annotate';
 type Marks = Map<string | undefined, VirtualPlaced & { code: string; given?: Mark }>;
 /** Of the CALLs asked about, those that have run: how, and when among the others (see CALL). */
 type Done = Record<string, { ok: boolean; result?: unknown; made: number; during?: string }> | [];
-/** What a CALL's change is made with: true if it numbered the notes from 1 again. */
-type Made<T> = (result: T, marks?: Marks) => boolean | void;
+/**
+ * The notes an add or clear set, their marks as given, and the last number after: `afresh` if
+ * it numbered them from 1 again, as a replace or clear does.
+ */
+type Epoch = { marks: Mark[]; last: number; afresh: boolean };
+/** What a CALL's change is made with; an add or clear says what it set. */
+type Made<T> = (result: T, marks?: Marks) => Epoch | void;
 /** Notes a CALL is to remove, `by` the user or Pi, their files as `marks` had them. */
 type Removing = { notes: Note[]; by: By; marks: Marks };
 // Of the CALLs whose tokens are given, those that have run, and how, kept until forgotten (see
@@ -131,13 +136,13 @@ export class Notes {
   private at = 0;
   /** The last number given: one removed is not given again, until all are cleared or replaced. */
   private last = 0;
+  /** The CALLs made that numbered the notes from 1 again, replaces and clears, by token. */
+  private afresh = new Map<string, Epoch>();
   /**
-   * Whether `last` is to be the last number drawn: an add or clear made during a replace or clear
-   * (see `drawn`) may have come before or after its writes, and so been undone by them or not.
+   * Adds and clears made during another CALL, by its token: one made during a replace or clear
+   * may have come before or after its writes, and so been undone by them or not (see `numbered`).
    */
-  private recount = false;
-  /** The CALLs made that numbered the notes from 1 again: replaces and clears. */
-  private afresh = new Set<string>();
+  private within: { during: string; epoch: Epoch }[] = [];
   /** The last id given. */
   private ids = 0;
   /** What happened to the notes since `observe` last said, in order. */
@@ -149,7 +154,7 @@ export class Notes {
    * did): `made` once Neovim says it did, with its result. Notes one would remove are taken for
    * removed by whoever asked once they are gone, whenever that is.
    */
-  private pending: { token: string; fn: string; made: Made<any>; removing?: Removing }[] = [];
+  private pending: { token: string; made: Made<any>; removing?: Removing }[] = [];
   /** The CALLs no longer asked about, for Neovim to forget with the next (see CALL). */
   private forget: string[] = [];
   /** What the notes are doing, each after the one before: see `queued`. */
@@ -194,8 +199,26 @@ export class Notes {
       if (removing) this.drop(removing.notes.filter(note => !marks.has(note.mark.key)), removing.by, removing.marks);
     }
     this.notes = this.notes.filter(note => marks.has(note.mark.key));
+    this.numbered(marks);
     this.drawn(placed);
     return marks;
+  }
+
+  /**
+   * The last number of an add or clear made during a replace or clear, once both are settled: of
+   * whichever has its notes drawn, as its writes came last; else of the one that set none.
+   */
+  private numbered(marks: Marks) {
+    const drawn = (epoch: Epoch) => epoch.marks.some(mark => isDeepStrictEqual(marks.get(mark.key)?.given, mark));
+    this.within = this.within.filter(({ during, epoch }) => {
+      const reset = this.afresh.get(during);
+      if (!reset) return this.pending.some(call => call.token === during);
+      const last = drawn(reset) || !drawn(epoch) && !reset.marks.length ? reset : epoch;
+      this.last = last.last;
+      return false;
+    });
+    // None waiting, none can be made during these.
+    if (!this.pending.length) this.afresh.clear();
   }
 
   /**
@@ -219,8 +242,6 @@ export class Notes {
       } else if (!isDeepStrictEqual(note.mark, given)) Object.assign(note, as);
     }
     this.notes.sort((a, b) => a.number - b.number);
-    if (this.recount) this.last = Math.max(0, ...this.notes.map(note => note.number));
-    this.recount = false;
   }
 
   /**
@@ -231,17 +252,14 @@ export class Notes {
     if (Array.isArray(done)) return;
     const settled = this.pending.filter(call => done[call.token]).sort((a, b) => done[a.token].made - done[b.token].made);
     this.pending = this.pending.filter(call => !done[call.token]);
-    const within: string[] = [];
     for (const call of settled) {
       this.forget.push(call.token);
       if (!done[call.token].ok) continue;
-      if (call.made(done[call.token].result, marks)) this.afresh.add(call.token);
+      const epoch = call.made(done[call.token].result, marks);
+      if (epoch?.afresh) this.afresh.set(call.token, epoch);
       const during = done[call.token].during;
-      if (during && (call.fn === 'set' || call.fn === 'clear')) within.push(during);
+      if (epoch && during) this.within.push({ during, epoch });
     }
-    // Their numbers given still, unless made during a replace or clear (see `recount`): one
-    // settled here too, after them, as it finished after them.
-    if (within.some(token => this.afresh.has(token))) this.recount = true;
   }
 
   /** Call nvim-virtual-text's `fn` (see CALL), then `made`; or once Neovim says it did, if the call failed. */
@@ -260,13 +278,14 @@ export class Notes {
         result = await run() as [true, T, Done];
       }
     } catch (error) {
-      this.pending.push({ token, fn, made, removing });
+      this.pending.push({ token, made, removing });
       throw error;
     }
     this.forget = this.forget.filter(old => !forget.includes(old));
     this.settle(result[2]);
     this.forget.push(token);
-    if (made(result[1])) this.afresh.add(token);
+    const epoch = made(result[1]);
+    if (epoch?.afresh) this.afresh.set(token, epoch);
     return result[1];
   }
 
@@ -308,7 +327,7 @@ export class Notes {
       this.notes = set;
       this.last = after + added.length;
       if (replace) this.at = 0;
-      return replace;
+      return { marks: set.map(note => note.mark), last: this.last, afresh: replace };
     };
     // All of them, those kept as they were: the call is checked whole before anything changes.
     try {
@@ -495,7 +514,7 @@ export class Notes {
       else this.drop(this.notes, by, marks);
       this.notes = [];
       this.at = this.last = 0;
-      return true;
+      return { marks: [], last: 0, afresh: true };
     }, { notes: all, by, marks });
     return numbers;
   }

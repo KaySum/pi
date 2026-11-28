@@ -23,7 +23,7 @@ if not state then
 	-- changed while hidden by a deletion, drawn as it was.
 	-- `styles` are the groups made from style tables; `watched`, the buffers whose changes
 	-- are followed, and `queued` those with a sync to come; `unanchored`, those reloaded and not
-	-- yet reanchored. `writes`: how many changes have been asked of the marks (see `wrote`).
+	-- yet reanchored. `writes`: by group, how many changes have been asked of its marks (see `wrote`).
 	state = { namespaces = {}, marks = {}, styles = {}, next = 0, watched = {}, queued = {}, saved = {}, windowed = {}, unanchored = {} }
 	remote.nvim_virtual_text = state
 	remote.on_detach(function()
@@ -1124,11 +1124,15 @@ local function install(id, group, spec, resolve, moved)
 	end
 end
 
--- One more change asked of the marks (placed, updated, set, removed; a set or clear made, too),
--- counted in `writes`: for a caller to tell what came before or after what, as one can run
--- during another.
-local function wrote()
-	state.writes = (state.writes or 0) + 1
+-- One more change asked of `group`'s marks (placed, updated, set, removed; a set or clear made,
+-- too), counted in `writes[group]`: for a caller to tell what came before or after what, as one
+-- can run during another, each group's apart from the others'.
+local function wrote(group)
+	if not group then
+		return
+	end
+	state.writes = type(state.writes) == "table" and state.writes or {}
+	state.writes[group] = (state.writes[group] or 0) + 1
 end
 
 --- Place `marks` in `group`; returns their ids, in order. One that cannot be placed fails the
@@ -1140,7 +1144,7 @@ function state.place(group, marks)
 		local given = vim.deepcopy(spec)
 		state.next = state.next + 1
 		install(state.next, group, spec, true)
-		wrote()
+		wrote(group)
 		state.marks[state.next].given = given
 		table.insert(ids, state.next)
 	end
@@ -1186,12 +1190,12 @@ function state.update(group, id, patch)
 		delete(trial.buf, ns, extmarks)
 		mark.spec, mark.given, mark.stale = spec, given, true
 		arm(id, mark)
-		wrote()
+		wrote(group)
 		return true
 	end
 	-- Placed anew, a mark with a `match` looks for it; otherwise it keeps to its lines.
 	install(id, group, spec, moves)
-	wrote()
+	wrote(group)
 	state.marks[id].given = given
 	return true
 end
@@ -1226,7 +1230,7 @@ function state.set(group, marks)
 		plan[i] = { id = id, same = same }
 	end
 	-- Made from here: counted though nothing changes, all given just as they are.
-	wrote()
+	wrote(group)
 	local ids, kept = {}, {}
 	for i, spec in ipairs(marks) do
 		local id = plan[i].id
@@ -1237,7 +1241,7 @@ function state.set(group, marks)
 		if not plan[i].same then
 			local given = vim.deepcopy(spec)
 			install(id, group, spec, true)
-			wrote()
+			wrote(group)
 			state.marks[id].given = given
 		end
 		ids[i], kept[id] = id, true
@@ -1245,7 +1249,7 @@ function state.set(group, marks)
 	for id, mark in pairs(state.marks) do
 		if mark.group == group and not kept[id] then
 			remove(id)
-			wrote()
+			wrote(group)
 		end
 	end
 	return ids
@@ -1496,8 +1500,8 @@ function state.remove(group, ids)
 	local removed = {}
 	for _, id in ipairs(ids) do
 		if state.marks[id] and (not group or state.marks[id].group == group) then
+			wrote(state.marks[id].group)
 			remove(id)
-			wrote()
 			table.insert(removed, id)
 		end
 	end
@@ -1550,11 +1554,12 @@ end
 --- Remove the marks `list` would give. Returns how many went.
 function state.clear(group, filter)
 	state.prune()
-	wrote() -- Counted though there is none to remove.
+	group = group ~= vim.NIL and group or nil
+	wrote(group) -- Counted though there is none to remove.
 	local removed = 0
-	for id in pairs(matching(group ~= vim.NIL and group or nil, filter)) do
+	for id in pairs(matching(group, filter)) do
+		wrote(state.marks[id].group)
 		remove(id)
-		wrote()
 		removed = removed + 1
 	end
 	return removed
